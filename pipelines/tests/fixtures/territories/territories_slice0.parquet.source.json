@@ -1,0 +1,8 @@
+{
+  "source_object": "retail_service_territories.parquet",
+  "source_sha256": "d9748b71e57247ab9dc18136058d6ddd0f822535aac70f880faf5e216a428a0f",
+  "note": "Not a contiguous byte range: the source is zstd-compressed columnar Parquet (row groups + dictionary-encoded pages), so no single byte span isolates whole rows. This fixture is a real row-filtered extract (pyarrow read + filter, no synthetic values) keeping only ID/NAME/STATE/geometry for ID in ('1015','8901') — Austin Energy and CenterPoint Energy, the two real HIFLD polygons the acceptance tests check against. byte_start/byte_end below span the whole fixture file (its own size), per no_mock_check.py check 4's mechanical requirement, not an offset into the source file.",
+  "row_filter": "ID in ('1015', '8901')",
+  "byte_start": 0,
+  "byte_end": 387435
+}
