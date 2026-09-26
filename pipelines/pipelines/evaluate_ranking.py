@@ -63,6 +63,13 @@ SINGLE_SIGNAL_KEYS = (
     "owner_65",
     "electric_heat",
     "empower",
+    # M2-P10: added terms only -- static/neighborhood (block-group)
+    # signals, evaluated the same way as age65/electric_heat/empower/
+    # home_value (current core.mv_home_signals-adjacent value for every
+    # home; no per-home history in our sources to compute an as-of-cutoff
+    # version, same simplification already made for those four).
+    "income_100k",
+    "age_35_64",
 )
 
 # Combined-score feature sets: (label, {signal_key: weight}).
@@ -130,8 +137,13 @@ def _load_population(conn, *, cutoff: date) -> list[dict]:
                 select s.prop_id, s.geo_id, s.block_group_geoid,
                        s.age65_term as age65, s.electric_heat_term as electric_heat, s.empower_term as empower,
                        s.outage_term as outage, s.home_value_term as home_value,
-                       case when s.owner_65 is null then null else s.owner_65::int::numeric end as owner_65
+                       case when s.owner_65 is null then null else s.owner_65::int::numeric end as owner_65,
+                       least(1, ia.income_100k_share / nullif(anc_inc.anchor_value, 0)) as income_100k,
+                       least(1, ia.age_35_64_share / nullif(anc_age.anchor_value, 0)) as age_35_64
                 from core.mv_home_signals s
+                left join core.acs_income_age_bg ia on ia.geoid = s.block_group_geoid
+                left join core.signal_anchors anc_inc on anc_inc.signal_key = 'income_100k'
+                left join core.signal_anchors anc_age on anc_age.signal_key = 'age_35_64'
                 where s.gate_reason is null
                   and s.permit_null_reason is null
                   and not exists (
@@ -193,6 +205,7 @@ def _load_population(conn, *, cutoff: date) -> list[dict]:
                 e.prop_id,
                 e.age65, e.electric_heat, e.empower, e.outage,
                 e.home_value, e.owner_65,
+                e.income_100k, e.age_35_64,
                 coalesce(oa.home_permits_asof, false)::int::numeric as home_permits_asof,
                 case
                     when bhc.homes_gated - 1 <= 0 then null
