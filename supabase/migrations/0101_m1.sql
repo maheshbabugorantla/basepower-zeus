@@ -539,27 +539,62 @@ claude_labels as (
     from core.permit_labels
     where labeller = 'claude'
 ),
--- Denominator is only the permits Claude actually hand-labelled (the ~100
--- in ops.label_queue), not every rules-positive permit — precision must
--- read null-with-reason, not 0, before M1-H1 runs.
-matched as (
-    select
-        rl.label       as rules_label,
-        cl.label       as claude_label,
-        rl.source_id   as rules_source_id,
-        cl.source_id   as claude_source_id
-    from rules_labels rl
-    join claude_labels cl on cl.permit_number = rl.permit_number
+claude_labelled_permits as (
+    -- Distinct permits Claude hand-labelled at all (any label), one row
+    -- per permit regardless of how many labels Claude gave it.
+    select distinct permit_number, source_id
+    from claude_labels
 ),
-per_label as (
+-- Precision: per-permit basis, one row per rules-positive permit that is
+-- also Claude-labelled. Denominator is a COUNT(DISTINCT permit_number), so
+-- a permit Claude gave several labels (e.g. battery+solar) is counted once,
+-- not once per Claude label row.
+precision_base as (
     select
-        rules_label as label,
-        count(*) as claude_labelled_count,
-        count(*) filter (where claude_label = rules_label) as true_positive_count,
+        rl.label,
+        rl.permit_number,
+        rl.source_id       as rules_source_id,
+        clp.source_id      as claude_source_id,
+        exists (
+            select 1 from claude_labels cl
+            where cl.permit_number = rl.permit_number and cl.label = rl.label
+        ) as is_true_positive
+    from rules_labels rl
+    join claude_labelled_permits clp on clp.permit_number = rl.permit_number
+),
+precision_per_label as (
+    select
+        label,
+        count(distinct permit_number) as claude_labelled_count,
+        count(distinct permit_number) filter (where is_true_positive) as true_positive_count,
         array_agg(distinct rules_source_id) filter (where rules_source_id is not null) as rules_source_ids,
         array_agg(distinct claude_source_id) filter (where claude_source_id is not null) as claude_source_ids
-    from matched
-    group by rules_label
+    from precision_base
+    group by label
+),
+-- Recall: per-permit basis, one row per permit Claude gave label L.
+-- Denominator is the Claude-labelled permits for L; numerator is those that
+-- also have a rules label L.
+recall_base as (
+    select
+        cl.label,
+        cl.permit_number,
+        cl.source_id as claude_source_id,
+        exists (
+            select 1 from rules_labels rl
+            where rl.permit_number = cl.permit_number and rl.label = cl.label
+        ) as has_rules_label
+    from claude_labels cl
+    where cl.label in ('battery', 'generator')
+),
+recall_per_label as (
+    select
+        label,
+        count(distinct permit_number) as claude_label_count,
+        count(distinct permit_number) filter (where has_rules_label) as recall_true_positive_count,
+        array_agg(distinct claude_source_id) filter (where claude_source_id is not null) as claude_label_source_ids
+    from recall_base
+    group by label
 )
 select
     l.label,
@@ -575,18 +610,35 @@ select
     end as precision_null_reason,
     array(
         select distinct s from unnest(
-            coalesce(pl.rules_source_ids, array[]::uuid[]) || coalesce(pl.claude_source_ids, array[]::uuid[])
+            coalesce(pl.rules_source_ids, array[]::uuid[])
+            || coalesce(pl.claude_source_ids, array[]::uuid[])
+            || coalesce(rcl.claude_label_source_ids, array[]::uuid[])
         ) s where s is not null
-    ) as source_ids
+    ) as source_ids,
+    rcl.claude_label_count,
+    rcl.recall_true_positive_count,
+    case
+        when rcl.claude_label_count is null or rcl.claude_label_count = 0 then null
+        else rcl.recall_true_positive_count::numeric / rcl.claude_label_count
+    end as recall,
+    case
+        when rcl.claude_label_count is null or rcl.claude_label_count = 0 then 'no_claude_labels_yet'
+        else null
+    end as recall_null_reason
 from (values ('battery'), ('generator')) as l(label)
-left join per_label pl on pl.label = l.label;
+left join precision_per_label pl on pl.label = l.label
+left join recall_per_label rcl on rcl.label = l.label;
 
 comment on view api.classifier_precision is
-    'Rules-classifier precision for battery and generator labels, measured '
-    'only against the permits Claude actually hand-labelled (checks/M1-H1.md '
+    'Rules-classifier precision and recall for battery and generator '
+    'labels, measured per-permit (a permit Claude gave several labels, '
+    'e.g. battery+solar, counts once, not once per Claude label row) '
+    'against the permits Claude actually hand-labelled (checks/M1-H1.md '
     '— the ~100-permit ops.label_queue sample, not every rules-positive '
-    'permit). Always one row per label; precision is null with reason '
-    'no_claude_labels_yet until M1-H1 runs.';
+    'permit). Precision denominator: distinct permits with a rules label L '
+    'that are Claude-labelled (any label). Recall denominator: distinct '
+    'permits with a Claude label L. Always one row per label; precision/ '
+    'recall are null with reason no_claude_labels_yet until M1-H1 runs.';
 
 -- ---------------------------------------------------------------------------
 -- Grants: service_role only. Re-assert (idempotent) on top of the M0
