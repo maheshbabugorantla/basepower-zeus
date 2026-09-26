@@ -1,10 +1,11 @@
 "use client";
 
-import type { ReactNode } from "react";
+import type { MouseEvent as ReactMouseEvent, ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
 import { BlockGroupMap, type MapDot } from "../../components/BlockGroupMap";
 import { TopHomesTable, TopHomesPagination, type TopHomeRow } from "../../components/TopHomesTable";
 import { WeightSliders, equalWeights } from "../../components/WeightSliders";
+import { ScoreExplainer } from "../../components/ScoreExplainer";
 import { Panel } from "../../components/ui/Panel";
 import { MissingState } from "../../components/ui/MissingState";
 import type { SignalKey } from "../api/top-homes/route";
@@ -115,6 +116,23 @@ export function RankingBoard({
   const [hoveredPropId, setHoveredPropId] = useState<string | null>(null);
   const [hoveredGeoid, setHoveredGeoid] = useState<string | null>(null);
   const [scrollToPropId, setScrollToPropId] = useState<string | null>(null);
+
+  // M2-W5: which home's score breakdown is expanded below the table.
+  // Toggled by clicking a row anywhere except its address link (which
+  // still navigates to the home page as before) — TopHomesTable.tsx
+  // itself is owned by a different ticket, so this reads its existing
+  // data-prop-id row attribute via delegation instead of adding a new
+  // prop there.
+  const [explainPropId, setExplainPropId] = useState<string | null>(null);
+
+  function handleTableClick(event: ReactMouseEvent<HTMLDivElement>) {
+    const target = event.target as HTMLElement;
+    if (target.closest("a")) return; // let the address link navigate normally
+    const rowEl = target.closest<HTMLElement>("[data-prop-id]");
+    const propId = rowEl?.getAttribute("data-prop-id");
+    if (!propId) return;
+    setExplainPropId((current) => (current === propId ? null : propId));
+  }
 
   const prevRankRef = useRef<Map<string, number>>(buildRankMap(initialRows));
   const isFirstRun = useRef(true);
@@ -246,6 +264,7 @@ export function RankingBoard({
   const rangeStart = pageIndex * DEFAULT_PAGE_SIZE + 1;
 
   return (
+    <div style={{ display: "grid", gap: "var(--space-6)" }}>
     <div className="ranking-board">
       <div className="ranking-board__rail">
         {leftRail}
@@ -302,6 +321,9 @@ export function RankingBoard({
               {loading ? "Re-ranking…" : ""}
             </span>
           </div>
+          <p style={{ margin: "var(--space-1) 0 0 0", fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)" }}>
+            Click a home to see the full score breakdown below.
+          </p>
           {selectedGeoid ? (
             <div
               data-testid="selected-blockgroup-chip"
@@ -333,7 +355,7 @@ export function RankingBoard({
             <MissingState variant="not-loaded" reason={error} />
           </div>
         ) : null}
-        <div style={{ flex: "1 1 auto", minHeight: 0, overflow: "auto" }}>
+        <div style={{ flex: "1 1 auto", minHeight: 0, overflow: "auto" }} onClick={handleTableClick}>
           <TopHomesTable
             rows={rows}
             rangeStart={rangeStart}
@@ -353,6 +375,34 @@ export function RankingBoard({
           onNext={handleNext}
         />
       </Panel>
+    </div>
+
+    {explainPropId ? (
+      <Panel data-testid="score-explainer-panel">
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "var(--space-4)", marginBottom: "var(--space-3)" }}>
+          <h2
+            style={{
+              fontFamily: "var(--type-heading-font-family)",
+              fontSize: "var(--type-heading-font-size)",
+              fontWeight: "var(--type-heading-font-weight)",
+              margin: 0,
+            }}
+          >
+            Why this home
+          </h2>
+          <button
+            type="button"
+            className="btn btn--secondary"
+            onClick={() => setExplainPropId(null)}
+            aria-label="Close the score breakdown"
+            data-testid="close-score-explainer"
+          >
+            Close
+          </button>
+        </div>
+        <ScoreExplainer propId={explainPropId} weights={weights} />
+      </Panel>
+    ) : null}
     </div>
   );
 }
