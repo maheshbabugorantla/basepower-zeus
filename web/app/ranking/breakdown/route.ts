@@ -26,6 +26,9 @@ interface BreakdownDbRow {
   contribution: string | number | null;
   available: boolean;
   null_reason: string | null;
+  term: string | number | null;
+  anchor_value: string | number | null;
+  anchor_basis: string | null;
 }
 
 export interface BreakdownSignal {
@@ -38,6 +41,9 @@ export interface BreakdownSignal {
   contribution: number | null;
   available: boolean;
   nullReason: string | null;
+  term: number | null;
+  anchorValue: number | null;
+  anchorBasis: string | null;
 }
 
 function toNumberOrNull(value: string | number | null | undefined): number | null {
@@ -56,7 +62,32 @@ function mapBreakdownRow(row: BreakdownDbRow): BreakdownSignal {
     contribution: toNumberOrNull(row.contribution),
     available: row.available,
     nullReason: row.null_reason,
+    term: toNumberOrNull(row.term),
+    anchorValue: toNumberOrNull(row.anchor_value),
+    anchorBasis: row.anchor_basis,
   };
+}
+
+interface OutageBasisRow {
+  outage_basis: string | null;
+  distributor_name: string | null;
+}
+
+/** M2-P8: api.home_score_breakdown's generic per-signal shape has no room
+ * for the outage row's own basis (distributor SAIDI vs the EAGLE-I county
+ * proxy) — a single primary-key lookup on core.mv_home_signals adds it,
+ * same pattern the home-detail page already uses for this same mv. */
+async function getOutageBasis(propId: string): Promise<OutageBasisRow | null> {
+  try {
+    const rows = await query<OutageBasisRow>(
+      `select outage_basis, distributor_name from core.mv_home_signals where prop_id = $1`,
+      [propId]
+    );
+    return rows[0] ?? null;
+  } catch (err) {
+    console.error("ranking/breakdown: failed to load outage basis", err);
+    return null;
+  }
 }
 
 interface BreakdownRequestBody {
@@ -79,14 +110,23 @@ export async function POST(request: Request) {
 
   const weights = sanitizeWeights(body.weights);
 
-  const rows = await query<BreakdownDbRow>(
-    `select key, label, raw_value, raw_unit, percentile, weight, contribution, available, null_reason
-     from api.home_score_breakdown($1, $2::jsonb)`,
-    [propId, JSON.stringify(weights)]
-  );
+  const [rows, outageBasisRow] = await Promise.all([
+    query<BreakdownDbRow>(
+      `select key, label, raw_value, raw_unit, percentile, weight, contribution, available, null_reason,
+              term, anchor_value, anchor_basis
+       from api.home_score_breakdown($1, $2::jsonb)`,
+      [propId, JSON.stringify(weights)]
+    ),
+    getOutageBasis(propId),
+  ]);
 
   return NextResponse.json(
-    { propId, signals: rows.map(mapBreakdownRow) },
+    {
+      propId,
+      signals: rows.map(mapBreakdownRow),
+      outageBasis: outageBasisRow?.outage_basis ?? null,
+      outageDistributorName: outageBasisRow?.distributor_name ?? null,
+    },
     { headers: { "Cache-Control": "no-store" } }
   );
 }

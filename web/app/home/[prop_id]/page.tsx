@@ -120,6 +120,25 @@ interface HomeSignalsRow {
   backup_intent_rate: string | number | null;
   backup_intent_null_reason: string | null;
   source_ids: string[] | null;
+  // M2-P8: home-level signals + the fixed outage basis.
+  owner_65: boolean | null;
+  owner_65_null_reason: string | null;
+  home_solar: boolean | null;
+  home_ev: boolean | null;
+  home_generator: boolean | null;
+  home_panel_upgrade: boolean | null;
+  home_battery: boolean | null;
+  battery_permit_date: string | Date | null;
+  permit_null_reason: string | null;
+  yr_built: number | null;
+  yr_built_null_reason: string | null;
+  installability_term: string | number | null;
+  installability_null_reason: string | null;
+  outage_minutes: string | number | null;
+  outage_year: number | null;
+  outage_basis: string | null;
+  outage_null_reason: string | null;
+  outage_source_ids: string[] | null;
 }
 
 const GATE_REASON_LABEL: Record<string, string> = {
@@ -169,7 +188,13 @@ async function getHomeSignals(propId: string): Promise<HomeSignalsRow | null> {
               acs_pct_65_plus, acs_65_null_reason,
               acs_pct_electric_heat, acs_heat_null_reason,
               backup_intent_rate, backup_intent_null_reason,
-              source_ids
+              source_ids,
+              owner_65, owner_65_null_reason,
+              home_solar, home_ev, home_generator, home_panel_upgrade, home_battery,
+              battery_permit_date, permit_null_reason,
+              yr_built, yr_built_null_reason,
+              installability_term, installability_null_reason,
+              outage_minutes, outage_year, outage_basis, outage_null_reason, outage_source_ids
        from core.mv_home_signals
        where prop_id = $1`,
       [propId]

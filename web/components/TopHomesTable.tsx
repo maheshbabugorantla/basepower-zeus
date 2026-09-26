@@ -51,6 +51,25 @@ export interface TopHomeRow {
   /** Parcel centroid (core.parcel_geoms) — null when no geometry has loaded. */
   lon: number | null;
   lat: number | null;
+  /** M2-P8 home-level signals — null (with permitNullReason) outside the
+   * City of Austin permit area, never false. */
+  ownerIs65: boolean | null;
+  homeSolar: boolean | null;
+  homeEv: boolean | null;
+  homeGenerator: boolean | null;
+  homePanelUpgrade: boolean | null;
+  homeBattery: boolean | null;
+  homeBatteryPermitDate: string | null;
+  permitNullReason: string | null;
+  yrBuilt: number | null;
+  livingArea: number | null;
+  outageMinutes: number | null;
+  outageYear: number | null;
+  /** 'distributor_saidi' or 'county_eaglei_proxy' — which basis outageMinutes came from. */
+  outageBasis: string | null;
+  outageSourceIds: string[];
+  homeValueTerm: number | null;
+  installabilityTerm: number | null;
 }
 
 /** api.homes_ranked_weighted's reason keys -> a short label + DESIGN.md signal
@@ -61,14 +80,24 @@ export interface TopHomeRow {
  * table) -> install (deep blue), not outage red. empower/age65/
  * electric_heat are household-need signals -> household (sky).
  * backup_intent (a demonstrated interest in battery/generator backup) ->
- * install (deep blue) too. */
+ * install (deep blue) too. M2-P8 adds four home-level signals: owner_65
+ * (a household characteristic -> household), home_permits/installability
+ * (the home's own hardware/eligibility -> install), and home_value (the
+ * "grid value" signal category from PRODUCT.md's four signals -> grid,
+ * gold — its first use). flood is never returned in `reasons` (the SQL
+ * function excludes it from "top signal" candidates), but keeps an entry
+ * here so ScoreExplainer's stacked bar can still color its segment.*/
 export const REASON_META: Record<string, { label: string; signal: SignalName }> = {
   outage: { label: "Outage exposure", signal: "outage" },
   flood: { label: "Outside flood zone", signal: "install" },
   empower: { label: "Medical need", signal: "household" },
   age65: { label: "Age 65+", signal: "household" },
   electric_heat: { label: "Electric heat", signal: "household" },
-  backup_intent: { label: "Backup intent", signal: "install" },
+  backup_intent: { label: "Neighbors installing backup", signal: "install" },
+  owner_65: { label: "Homeowner 65+", signal: "household" },
+  home_permits: { label: "Own solar/EV/generator permit", signal: "install" },
+  installability: { label: "Installability", signal: "install" },
+  home_value: { label: "Home value", signal: "grid" },
 };
 
 function formatAddressLine(row: TopHomeRow): string {

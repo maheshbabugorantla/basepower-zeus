@@ -4,7 +4,7 @@ import { QualityPanel, type QualityPanelData, type ClassifierPrecisionRow } from
 import { EligibilityFunnel, type FunnelStep } from "../../components/EligibilityFunnel";
 import { GateCounts, type GateCountRow } from "../../components/GateCounts";
 import type { TopHomeRow } from "../../components/TopHomesTable";
-import { fetchRankedHomes } from "../api/top-homes/route";
+import { fetchRankedHomes, SIGNAL_KEYS, type SignalKey } from "../api/top-homes/route";
 
 // M1-W1: MapLibre choropleth of Travis block groups (api.blockgroup_scores,
 // via the app/ranking/blockgroups route handler) + top-50 table
@@ -17,17 +17,39 @@ export const dynamic = "force-dynamic";
 
 const TRAVIS_COUNTY_FIPS = "48453";
 
-// Equal weights across every signal api.top_homes_weighted supports — the
-// same starting point WeightSliders' equalWeights() uses client-side, so
-// the server-rendered first paint matches what "Reset to equal" produces.
-const EQUAL_WEIGHTS = {
-  outage: 1,
-  flood: 1,
-  empower: 1,
-  age65: 1,
-  electric_heat: 1,
-  backup_intent: 1,
-};
+// Equal-weight fallback across every signal api.top_homes_weighted
+// supports, used only if api.default_weights can't be read (M2-P8: the
+// evidence-based defaults are the real starting point now).
+const EQUAL_WEIGHTS_FALLBACK = 5;
+
+interface DefaultWeightRow {
+  signal_key: string;
+  weight: string | number;
+  basis: string;
+}
+
+/** api.default_weights (M2-P8, core.default_weights — a 2026-09-26
+ * time-split study on real Austin permits; see checks/M2-P8-ranking-
+ * evidence.md). Read server-side so the first paint already ranks by the
+ * team's evidence-based defaults, not equal weights. Falls back to
+ * equal=5 for every key only if the view can't be read at all. */
+async function getDefaultWeights(): Promise<Record<SignalKey, number>> {
+  const fallback = {} as Record<SignalKey, number>;
+  for (const key of SIGNAL_KEYS) fallback[key] = EQUAL_WEIGHTS_FALLBACK;
+  try {
+    const rows = await query<DefaultWeightRow>(`select signal_key, weight, basis from api.default_weights`);
+    const out = { ...fallback };
+    for (const row of rows) {
+      if ((SIGNAL_KEYS as readonly string[]).includes(row.signal_key)) {
+        out[row.signal_key as SignalKey] = Number(row.weight);
+      }
+    }
+    return out;
+  } catch (err) {
+    console.error("ranking: failed to load api.default_weights, falling back to equal weights", err);
+    return fallback;
+  }
+}
 
 interface JoinRateRow {
   permits_with_tcad_id: string | number;
@@ -98,15 +120,15 @@ async function getFunnelSteps(): Promise<FunnelStep[]> {
   return values.map((v) => ({ ...v, ratio: v.value / total }));
 }
 
-async function getTopHomes(): Promise<{ rows: TopHomeRow[]; total: number }> {
-  // M2-W1: score v1 (api.homes_ranked_weighted, 0201/0204/0205_*.sql)
-  // replaces the v0 api.top_homes view. Server-rendered with equal
-  // weights, page 1, no block-group selection, so the first paint (no
-  // JS, or before hydration) matches WeightSliders'/RankingBoard's
-  // default state; every re-rank/page/selection change after that goes
-  // through /api/top-homes.
+async function getTopHomes(weights: Record<SignalKey, number>): Promise<{ rows: TopHomeRow[]; total: number }> {
+  // M2-W1/M2-P8: score v2 (api.homes_ranked_weighted, 0212*.sql).
+  // Server-rendered with the evidence-based default weights, page 1, no
+  // block-group selection, so the first paint (no JS, or before
+  // hydration) matches WeightSliders'/RankingBoard's default state;
+  // every re-rank/page/selection change after that goes through
+  // /api/top-homes.
   const { rows, total } = await fetchRankedHomes({
-    weights: EQUAL_WEIGHTS,
+    weights,
     countyFips: TRAVIS_COUNTY_FIPS,
     withTotal: true,
   });
@@ -170,8 +192,9 @@ async function getQualityPanelData(): Promise<QualityPanelData> {
 }
 
 export default async function RankingPage() {
+  const defaultWeights = await getDefaultWeights();
   const [topHomes, qualityData, funnelSteps, gateCounts] = await Promise.all([
-    getTopHomes(),
+    getTopHomes(defaultWeights),
     getQualityPanelData(),
     getFunnelSteps(),
     getGateCounts(),
@@ -204,7 +227,12 @@ export default async function RankingPage() {
           exposure, grid value, installability and household fit.
         </p>
       </div>
-      <RankingBoard rows={topHomeRows} initialTotal={topHomesTotal} leftRail={leftRail} />
+      <RankingBoard
+        rows={topHomeRows}
+        initialTotal={topHomesTotal}
+        leftRail={leftRail}
+        defaultWeights={defaultWeights}
+      />
     </div>
   );
 }

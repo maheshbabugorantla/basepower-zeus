@@ -63,6 +63,12 @@ export interface BreakdownSignal {
   contribution: number | null;
   available: boolean;
   nullReason: string | null;
+  /** M2-P8: the 0–1 anchored term itself (real value / anchor, capped at
+   * 1) and its anchor's real value + plain-language basis — replaces the
+   * discarded percentile as the score's actual input. */
+  term: number | null;
+  anchorValue: number | null;
+  anchorBasis: string | null;
 }
 
 type SummaryStatus = "loading" | "loaded" | "template";
@@ -99,6 +105,8 @@ export function buildTemplateSentence(signals: BreakdownSignal[]): string {
 
 export function ScoreExplainer({ propId, weights }: ScoreExplainerProps) {
   const [signals, setSignals] = useState<BreakdownSignal[] | null>(null);
+  const [outageBasis, setOutageBasis] = useState<string | null>(null);
+  const [outageDistributorName, setOutageDistributorName] = useState<string | null>(null);
   const [breakdownError, setBreakdownError] = useState<string | null>(null);
   const [summary, setSummary] = useState<SummaryState>({
     status: "loading",
@@ -121,9 +129,15 @@ export function ScoreExplainer({ propId, weights }: ScoreExplainerProps) {
           body: JSON.stringify({ propId, weights }),
         });
         if (!response.ok) throw new Error(`Breakdown request failed (HTTP ${response.status})`);
-        const data: { signals: BreakdownSignal[] } = await response.json();
+        const data: {
+          signals: BreakdownSignal[];
+          outageBasis?: string | null;
+          outageDistributorName?: string | null;
+        } = await response.json();
         if (mySeq !== requestSeq.current) return;
         setSignals(data.signals);
+        setOutageBasis(data.outageBasis ?? null);
+        setOutageDistributorName(data.outageDistributorName ?? null);
         setBreakdownError(null);
       } catch (err) {
         if (mySeq !== requestSeq.current) return;
@@ -259,7 +273,7 @@ export function ScoreExplainer({ propId, weights }: ScoreExplainerProps) {
           <DataTableRow>
             <DataTableHeaderCell>Signal</DataTableHeaderCell>
             <DataTableHeaderCell>This home</DataTableHeaderCell>
-            <DataTableHeaderCell>Percentile in Travis</DataTableHeaderCell>
+            <DataTableHeaderCell>Score term (real value ÷ anchor, capped at 1)</DataTableHeaderCell>
             <DataTableHeaderCell>Adds to score</DataTableHeaderCell>
           </DataTableRow>
         </DataTableHead>
@@ -282,11 +296,30 @@ export function ScoreExplainer({ propId, weights }: ScoreExplainerProps) {
                 ) : (
                   <MissingState variant="not-loaded" reason={s.nullReason ?? "Not loaded"} />
                 )}
+                {s.key === "outage" && s.available ? (
+                  <div style={{ marginTop: "var(--space-1)", fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)" }}>
+                    {outageBasis === "county_eaglei_proxy"
+                      ? `Travis County average (EAGLE-I), used because ${outageDistributorName ?? "this home's utility"} doesn't report to EIA`
+                      : outageBasis === "distributor_saidi"
+                        ? `${outageDistributorName ?? "This distributor"}'s own reported SAIDI (EIA-861)`
+                        : null}
+                  </div>
+                ) : null}
               </DataTableCell>
               <DataTableCell>
-                {s.available && s.percentile !== null ? (
-                  <span style={{ fontFamily: "var(--type-data-font-family)" }}>
-                    {(s.percentile * 100).toFixed(0)}th
+                {s.available && s.term !== null ? (
+                  <span>
+                    <span style={{ fontFamily: "var(--type-data-font-family)" }}>{s.term.toFixed(3)}</span>
+                    {s.anchorValue !== null ? (
+                      <span style={{ display: "block", fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)" }}>
+                        of anchor {formatNumber(s.anchorValue, 1)}
+                        {s.anchorBasis ? ` (${s.anchorBasis})` : ""}
+                      </span>
+                    ) : s.anchorBasis ? (
+                      <span style={{ display: "block", fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)" }}>
+                        {s.anchorBasis}
+                      </span>
+                    ) : null}
                   </span>
                 ) : (
                   <span style={{ color: "var(--theme-ink-muted)" }}>No data</span>
