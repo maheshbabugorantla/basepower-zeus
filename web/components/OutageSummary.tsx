@@ -38,6 +38,46 @@ export function OutageSummary({ data }: { data: OutageSummaryData | null }) {
   if (countyHoursOut === null) {
     const reason = data?.nullReason ?? DEFAULT_NOT_LOADED_REASON;
     return (
+      <>
+        <p
+          style={{
+            fontFamily: "var(--type-body-font-family)",
+            fontSize: "var(--type-body-font-size)",
+            fontWeight: "var(--type-body-font-weight)",
+            lineHeight: "var(--type-body-line-height)",
+            color: "var(--theme-ink)",
+            maxWidth: "70ch",
+          }}
+        >
+          Across all of Travis County's electric customers, EAGLE-I recorded{" "}
+          <MissingState variant="not-loaded" reason={reason} /> customer-hours
+          without power in 2025. This is a county-level total, not a
+          per-home figure.
+        </p>
+        <p
+          style={{
+            fontFamily: "var(--type-body-font-family)",
+            fontSize: "var(--type-body-font-size)",
+            fontWeight: "var(--type-body-font-weight)",
+            lineHeight: "var(--type-body-line-height)",
+            color: "var(--theme-ink-muted)",
+            maxWidth: "70ch",
+          }}
+        >
+          Per-home outage exposure will come from each home's own
+          distributor's reliability (minutes without power per customer per
+          year, EIA-861), arriving in M2.
+        </p>
+      </>
+    );
+  }
+
+  const figure = (
+    <Figure value={countyHoursOut.toLocaleString()} unit="customer-hours without power" />
+  );
+
+  return (
+    <>
       <p
         style={{
           fontFamily: "var(--type-body-font-family)",
@@ -48,50 +88,42 @@ export function OutageSummary({ data }: { data: OutageSummaryData | null }) {
           maxWidth: "70ch",
         }}
       >
-        Travis County (FIPS 48453) 2025 customer-hours without power:{" "}
-        <MissingState variant="not-loaded" reason={reason} />. EAGLE-I outage
-        data is county-level — this figure covers all of Travis County, not
-        individual homes.
+        Across all of Travis County's electric customers, EAGLE-I recorded{" "}
+        {data?.source ? (
+          <ProvenancePopover
+            id={`travis-2025-outage-${data.source.sha256.slice(0, 12)}`}
+            dataset={data.source.dataset}
+            url={data.source.url}
+            retrievedAt={data.source.retrievedAt}
+            sha256={data.source.sha256}
+            runId={data.source.runId}
+            runner={data.source.runner}
+            rowsIn={data.source.rowsIn}
+            rowsLoaded={data.source.rowsLoaded}
+            rawFileHref={data.source.rawFileHref}
+          >
+            {figure}
+          </ProvenancePopover>
+        ) : (
+          figure
+        )}{" "}
+        without power in 2025. This is a county-level total across every
+        customer in Travis County, not a per-home figure.
       </p>
-    );
-  }
-
-  const figure = (
-    <Figure value={countyHoursOut.toLocaleString()} unit="customer-hours without power" />
-  );
-
-  return (
-    <p
-      style={{
-        fontFamily: "var(--type-body-font-family)",
-        fontSize: "var(--type-body-font-size)",
-        fontWeight: "var(--type-body-font-weight)",
-        lineHeight: "var(--type-body-line-height)",
-        color: "var(--theme-ink)",
-        maxWidth: "70ch",
-      }}
-    >
-      Travis County (FIPS 48453) recorded{" "}
-      {data?.source ? (
-        <ProvenancePopover
-          id={`travis-2025-outage-${data.source.sha256.slice(0, 12)}`}
-          dataset={data.source.dataset}
-          url={data.source.url}
-          retrievedAt={data.source.retrievedAt}
-          sha256={data.source.sha256}
-          runId={data.source.runId}
-          runner={data.source.runner}
-          rowsIn={data.source.rowsIn}
-          rowsLoaded={data.source.rowsLoaded}
-          rawFileHref={data.source.rawFileHref}
-        >
-          {figure}
-        </ProvenancePopover>
-      ) : (
-        figure
-      )}{" "}
-      in 2025. EAGLE-I outage data is county-level — this figure covers all of
-      Travis County, not individual homes.
-    </p>
+      <p
+        style={{
+          fontFamily: "var(--type-body-font-family)",
+          fontSize: "var(--type-body-font-size)",
+          fontWeight: "var(--type-body-font-weight)",
+          lineHeight: "var(--type-body-line-height)",
+          color: "var(--theme-ink-muted)",
+          maxWidth: "70ch",
+        }}
+      >
+        Per-home outage exposure will come from each home's own
+        distributor's reliability (minutes without power per customer per
+        year, EIA-861), arriving in M2.
+      </p>
+    </>
   );
 }
