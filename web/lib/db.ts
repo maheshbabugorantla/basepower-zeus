@@ -40,9 +40,19 @@ export function getPool(): Pool {
     );
   }
 
+  // Serverless-safe limits: every Vercel instance gets its own pool, and the
+  // Supabase pooler has a small shared slot budget. Keep few connections per
+  // instance, release idle ones quickly, and cap waits and queries so one
+  // slow statement can never pin the pooler for everyone.
   pool = new Pool({
     connectionString,
     ssl: { rejectUnauthorized: false },
+    max: 3,
+    idleTimeoutMillis: 10_000,
+    connectionTimeoutMillis: 8_000,
+    statement_timeout: 15_000,
+    query_timeout: 20_000,
+    allowExitOnIdle: true,
   });
   return pool;
 }
