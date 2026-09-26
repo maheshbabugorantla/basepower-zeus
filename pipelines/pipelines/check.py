@@ -512,6 +512,23 @@ def _base_tables(conn: psycopg.Connection, exclude: set[str]) -> dict[str, int]:
     return counts
 
 
+def cmd_ranking() -> int:
+    """M2-P8: run pipelines/pipelines/evaluate_ranking.py's time-split
+    evaluation against the live core.mv_home_signals and print the
+    typed report (AUC + top-decile lift per single signal, plus equal
+    weights and core.default_weights)."""
+    from . import evaluate_ranking
+
+    with db.connect(pooled=False) as conn:
+        ev = evaluate_ranking.evaluate(conn)
+    evaluate_ranking._print_report(ev)
+    if ev.population_n == 0:
+        print("FAIL: empty as-of-cutoff population -- nothing to evaluate")
+        return 1
+    print(f"PASS: evaluated {ev.population_n} homes, {ev.adopters_n} adopters")
+    return 0
+
+
 def cmd_untouched(except_tables: Iterable[str], *, save: Path | None, compare: Path | None) -> int:
     exclude = set(except_tables)
     with db.connect() as conn:
@@ -565,6 +582,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_reconcile = sub.add_parser("reconcile", help="verify rows_loaded = rows_in - filter_drops")
     p_reconcile.add_argument("--source", required=True)
 
+    sub.add_parser(
+        "ranking",
+        help="M2-P8: time-split evaluation of the ranking score against real battery/generator adoption",
+    )
+
     p_untouched = sub.add_parser("untouched", help="verify other tables' row counts are unchanged")
     p_untouched.add_argument("--except", dest="except_tables", required=True, help="comma-separated SCHEMA.TABLE list")
     group = p_untouched.add_mutually_exclusive_group(required=True)
@@ -586,6 +608,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_provenance()
     if args.command == "reconcile":
         return cmd_reconcile(args.source)
+    if args.command == "ranking":
+        return cmd_ranking()
     if args.command == "untouched":
         except_tables = [t.strip() for t in args.except_tables.split(",") if t.strip()]
         return cmd_untouched(except_tables, save=args.save, compare=args.compare)

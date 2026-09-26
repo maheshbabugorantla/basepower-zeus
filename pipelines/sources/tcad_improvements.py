@@ -204,7 +204,7 @@ def _process_with_fallback(f, *, target_prop_ids: set[str]) -> tuple[dict[str, d
         area_raw = extract_stripped(text, "imprv_det_area")
         area = float(area_raw) if area_raw else 0.0
         yr_built_raw = extract_stripped(text, "yr_built")
-        yr_built = int(yr_built_raw) if yr_built_raw and yr_built_raw != "0" else None
+        yr_built = int(yr_built_raw) if yr_built_raw and int(yr_built_raw) != 0 else None
 
         imp = by_prop.setdefault(prop_id, {}).setdefault(
             imprv_id, {"total_area": 0.0, "first_floor_yr_built": None, "largest_area": -1.0, "largest_area_yr_built": None}

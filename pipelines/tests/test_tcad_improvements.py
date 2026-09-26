@@ -46,7 +46,7 @@ def test_process_with_fallback_matches_independent_recompute_on_fixture():
         area_raw = text[93:108].strip()
         area = float(area_raw) if area_raw else 0.0
         yr_built_raw = text[85:89].strip()
-        yr_built = int(yr_built_raw) if yr_built_raw and yr_built_raw != "0" else None
+        yr_built = int(yr_built_raw) if yr_built_raw and int(yr_built_raw) != 0 else None
 
         if prop_id != "100008":
             continue
