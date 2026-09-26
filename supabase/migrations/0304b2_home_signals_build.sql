@@ -280,10 +280,7 @@ owner65 as (
         case when b.ov65_exempt is null then 'exemption_data_missing' else null end as owner_65_null_reason
     from base b
 ),
--- NOT MATERIALIZED: raw is read 5 times (4 anchors + the final select). Materialized, Postgres
--- spools every wide row (source_ids arrays included) to temp files, several GB at 1.2M homes,
--- which filled the 8 GB disk. Inlined, each anchor reads only the columns it needs.
-raw as not materialized (
+raw as (
     select
         b.prop_id, b.geo_id, b.block_group_geoid, b.county_fips, b.situs_zip, b.market_value,
         b.gate_reason, b.territory_eia_id, b.territory_null_reason, b.territory_basis,
