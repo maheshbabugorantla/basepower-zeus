@@ -1,0 +1,6 @@
+{
+  "source_object": "austin_energy_service_area.json",
+  "byte_start": 0,
+  "byte_end": 74302,
+  "note": "Socrata w5fd-ctq4 export holds exactly one record (a single citywide MultiPolygon), so this fixture is the whole raw file, not a partial slice -- there is no smaller real slice to take. sha256 matches data/raw/austin_energy_service_area/SHA256SUMS verbatim."
+}
