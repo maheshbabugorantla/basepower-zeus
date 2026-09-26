@@ -8,11 +8,10 @@ import { WeightSliders, equalWeights } from "../../components/WeightSliders";
 import { ScoreExplainer } from "../../components/ScoreExplainer";
 import { Panel } from "../../components/ui/Panel";
 import { MissingState } from "../../components/ui/MissingState";
-import { DataTable, DataTableBody, DataTableCell, DataTableHead, DataTableHeaderCell, DataTableRow } from "../../components/ui/DataTable";
 import type { SignalKey, PredictedHomeRow } from "../api/top-homes/route";
 import { PredictedHomesTable } from "./PredictedHomesTable";
 import { PredictionProof, type ModelCardData } from "../../components/PredictionProof";
-import { bucketBy, filterRows, countyTotals, type GeoRollupRow, type GeoBucket } from "../../lib/geoRollup";
+import { bucketBy, filterRows, countyTotals, type GeoRollupRow } from "../../lib/geoRollup";
 
 // M4-W2: predicted (api.home_propensity.p_install_12m) is the ranking
 // DEFAULT; "Team-weighted score" is the alternative, unchanged (M2-W1's)
@@ -612,6 +611,39 @@ export function RankingBoard({
 
   const countyTop10 = countyTotals(geoRollup).top10Count;
 
+  // M-drilldown (item 3, revised): shared drill-down state for the three
+  // <select>s, the "Top areas" bucket strip, and the map's fitToGeoids --
+  // computed once per render (geoRollup is small: one row per city/ZIP/
+  // block-group tuple) rather than three separate inline computations.
+  const rowsForCity = selectedCity !== null ? filterRows(geoRollup, { city: selectedCity }) : geoRollup;
+  const rowsForZip = selectedZip !== null ? filterRows(rowsForCity, { zip: selectedZip }) : rowsForCity;
+  const cityBuckets = bucketBy(geoRollup, (r) => r.situsCity ?? "");
+  const zipBuckets = bucketBy(rowsForCity, (r) => r.situsZip ?? "");
+  const bgBuckets = bucketBy(rowsForZip, (r) => r.blockGroupGeoid);
+  // "Top areas" strip: the next drill level down from wherever the visitor
+  // currently is, ranked by top10Count (count of the county's top-10%
+  // homes in that area) rather than plain home count, per the
+  // coordinator's revised spec -- capped at 5 so it reads as a strip, not
+  // another table.
+  const topAreasLevel: "city" | "zip" | "blockGroup" | null =
+    selectedGeoid !== null ? null : selectedZip !== null ? "blockGroup" : selectedCity !== null ? "zip" : "city";
+  const topAreasBuckets = (
+    topAreasLevel === "city" ? cityBuckets : topAreasLevel === "zip" ? zipBuckets : topAreasLevel === "blockGroup" ? bgBuckets : []
+  )
+    .slice()
+    .sort((a, b) => b.top10Count - a.top10Count)
+    .slice(0, 5);
+  // Map follow (coordinator's revised spec): fit to the selected area's
+  // block groups, not only a single block-group selection -- the rollup
+  // (already filtered to the current city/ZIP) IS that set of block
+  // groups; a specific neighborhood pick narrows it to just the one.
+  const fitToGeoids: string[] | null =
+    selectedGeoid !== null
+      ? [selectedGeoid]
+      : selectedCity !== null || selectedZip !== null
+        ? Array.from(new Set(rowsForZip.map((r) => r.blockGroupGeoid)))
+        : null;
+
   const rangeStart = pageIndex * DEFAULT_PAGE_SIZE + 1;
   const predictedRangeStart = predictedPageIndex * DEFAULT_PAGE_SIZE + 1;
 
@@ -760,6 +792,7 @@ export function RankingBoard({
             dots={dots}
             hoveredPropId={hoveredPropId}
             onDotHover={handleDotHover}
+            fitToGeoids={fitToGeoids}
           />
         </div>
       </Panel>
@@ -791,69 +824,104 @@ export function RankingBoard({
               : "Ranked by the model's predicted 12-month likelihood."}
           </p>
 
-          {(() => {
-            const rowsForCity = selectedCity !== null ? filterRows(geoRollup, { city: selectedCity }) : geoRollup;
-            const rowsForZip = selectedZip !== null ? filterRows(rowsForCity, { zip: selectedZip }) : rowsForCity;
-            const cityBuckets = bucketBy(geoRollup, (r) => r.situsCity ?? "");
-            const zipBuckets = bucketBy(rowsForCity, (r) => r.situsZip ?? "");
-            const bgBuckets = bucketBy(rowsForZip, (r) => r.blockGroupGeoid);
-            return (
-              <div
-                data-testid="geo-drilldown"
-                style={{ display: "flex", flexWrap: "wrap", gap: "var(--space-3)", marginTop: "var(--space-2)" }}
+          <div
+            data-testid="geo-drilldown"
+            style={{ display: "flex", flexWrap: "wrap", gap: "var(--space-3)", marginTop: "var(--space-2)" }}
+          >
+            <label style={{ display: "flex", flexDirection: "column", gap: "2px", fontSize: "var(--type-label-font-size)" }}>
+              City
+              <select
+                data-testid="drilldown-city"
+                value={selectedCity ?? ALL_VALUE}
+                onChange={(e) => handleSelectCity(fromSelectValue(e.target.value))}
               >
-                <label style={{ display: "flex", flexDirection: "column", gap: "2px", fontSize: "var(--type-label-font-size)" }}>
-                  City
-                  <select
-                    data-testid="drilldown-city"
-                    value={selectedCity ?? ALL_VALUE}
-                    onChange={(e) => handleSelectCity(fromSelectValue(e.target.value))}
-                  >
-                    <option value={ALL_VALUE}>All ({geoRollup.reduce((s, r) => s + r.homeCount, 0).toLocaleString()} homes)</option>
-                    {cityBuckets.map((b) => (
-                      <option key={b.key || NULL_BUCKET_VALUE} value={toSelectValue(b.key)}>
-                        {(b.key || "No city on file")} ({b.homeCount.toLocaleString()} homes)
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label style={{ display: "flex", flexDirection: "column", gap: "2px", fontSize: "var(--type-label-font-size)" }}>
-                  ZIP
-                  <select
-                    data-testid="drilldown-zip"
-                    value={selectedZip ?? ALL_VALUE}
-                    onChange={(e) => handleSelectZip(fromSelectValue(e.target.value))}
-                  >
-                    <option value={ALL_VALUE}>All ({rowsForCity.reduce((s, r) => s + r.homeCount, 0).toLocaleString()} homes)</option>
-                    {zipBuckets.map((b) => (
-                      <option key={b.key || NULL_BUCKET_VALUE} value={toSelectValue(b.key)}>
-                        {(b.key || "No ZIP on file")} ({b.homeCount.toLocaleString()} homes)
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label style={{ display: "flex", flexDirection: "column", gap: "2px", fontSize: "var(--type-label-font-size)" }}>
-                  Neighborhood
-                  <select
-                    data-testid="drilldown-blockgroup"
-                    value={selectedGeoid ?? ALL_VALUE}
-                    onChange={(e) => handleSelectGeoid(fromSelectValue(e.target.value))}
-                  >
-                    <option value={ALL_VALUE}>All ({rowsForZip.reduce((s, r) => s + r.homeCount, 0).toLocaleString()} homes)</option>
-                    {bgBuckets.map((b) => (
-                      <option key={b.key} value={b.key}>
-                        {blockGroupLabel(b.key)} ({b.homeCount.toLocaleString()} homes)
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              </div>
-            );
-          })()}
+                <option value={ALL_VALUE}>All ({geoRollup.reduce((s, r) => s + r.homeCount, 0).toLocaleString()} homes)</option>
+                {cityBuckets.map((b) => (
+                  <option key={b.key || NULL_BUCKET_VALUE} value={toSelectValue(b.key)}>
+                    {(b.key || "No city on file")} ({b.homeCount.toLocaleString()} homes)
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label style={{ display: "flex", flexDirection: "column", gap: "2px", fontSize: "var(--type-label-font-size)" }}>
+              ZIP
+              <select
+                data-testid="drilldown-zip"
+                value={selectedZip ?? ALL_VALUE}
+                onChange={(e) => handleSelectZip(fromSelectValue(e.target.value))}
+              >
+                <option value={ALL_VALUE}>All ({rowsForCity.reduce((s, r) => s + r.homeCount, 0).toLocaleString()} homes)</option>
+                {zipBuckets.map((b) => (
+                  <option key={b.key || NULL_BUCKET_VALUE} value={toSelectValue(b.key)}>
+                    {(b.key || "No ZIP on file")} ({b.homeCount.toLocaleString()} homes)
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label style={{ display: "flex", flexDirection: "column", gap: "2px", fontSize: "var(--type-label-font-size)" }}>
+              Neighborhood
+              <select
+                data-testid="drilldown-blockgroup"
+                value={selectedGeoid ?? ALL_VALUE}
+                onChange={(e) => handleSelectGeoid(fromSelectValue(e.target.value))}
+              >
+                <option value={ALL_VALUE}>All ({rowsForZip.reduce((s, r) => s + r.homeCount, 0).toLocaleString()} homes)</option>
+                {bgBuckets.map((b) => (
+                  <option key={b.key} value={b.key}>
+                    {blockGroupLabel(b.key)} ({b.homeCount.toLocaleString()} homes)
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
           <p style={{ margin: "var(--space-1) 0 0 0", fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)" }}>
             Dropdown counts include homes that already have backup, so they won&rsquo;t match the list total when
             &ldquo;Hide homes that already have backup&rdquo; is on.
           </p>
+
+          {topAreasLevel !== null && topAreasBuckets.length > 0 ? (
+            // Coordinator's revised spec: first paint keeps the ranked
+            // HOMES list front and center; this strip is a compact
+            // shortcut into it, not a replacement -- top ~5 areas by
+            // count of the county's top-10% homes, clickable to drill
+            // down exactly like the <select>s above. Predicted-mode-only
+            // averages (avg/best likelihood) would need a live per-request
+            // computation in weighted mode, so weighted mode's strip shows
+            // counts only.
+            <div style={{ marginTop: "var(--space-3)" }} data-testid="top-areas-strip">
+              <h3
+                style={{
+                  fontFamily: "var(--type-label-font-family)",
+                  fontSize: "var(--type-label-font-size)",
+                  fontWeight: "var(--type-label-font-weight)",
+                  color: "var(--theme-ink-muted)",
+                  margin: "0 0 var(--space-1) 0",
+                }}
+              >
+                Top areas by share of the county&rsquo;s top 10%
+              </h3>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--space-2)" }}>
+                {topAreasBuckets.map((b) => {
+                  const label =
+                    topAreasLevel === "blockGroup" ? blockGroupLabel(b.key) : b.key || (topAreasLevel === "city" ? "No city on file" : "No ZIP on file");
+                  const onPick = () =>
+                    topAreasLevel === "city" ? handleSelectCity(b.key) : topAreasLevel === "zip" ? handleSelectZip(b.key) : handleSelectGeoid(b.key);
+                  return (
+                    <button
+                      key={b.key || NULL_BUCKET_VALUE}
+                      type="button"
+                      className="chip"
+                      onClick={onPick}
+                      data-testid="top-area-chip"
+                      style={{ cursor: "pointer", border: "none" }}
+                    >
+                      {label} &mdash; {mode === "predicted" && countyTop10 > 0 ? `${((b.top10Count / countyTop10) * 100).toFixed(1)}% of top 10%` : `${b.homeCount.toLocaleString()} homes`}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ) : null}
 
           {selectedCity !== null || selectedZip !== null || selectedGeoid !== null ? (
             <div
@@ -888,67 +956,7 @@ export function RankingBoard({
             <MissingState variant="not-loaded" reason={(mode === "weighted" ? error : predictedError) ?? ""} />
           </div>
         ) : null}
-        {mode === "predicted" && selectedGeoid === null ? (
-          // M-drilldown (item 3): until a single neighborhood is chosen,
-          // the list shows a bucket row per city (or per ZIP, once a city
-          // is chosen) instead of individual homes -- clicking a row
-          // drills down exactly like picking it from the select above.
-          // Bucket averages/likelihoods are predicted-mode-only: a
-          // weighted score is a live per-request computation, so there is
-          // no per-bucket average to show in weighted mode (the dropdowns
-          // above still filter the homes list there instead).
-          (() => {
-            const level: "city" | "zip" | "blockGroup" = selectedCity === null ? "city" : selectedZip === null ? "zip" : "blockGroup";
-            const rowsForCity = selectedCity !== null ? filterRows(geoRollup, { city: selectedCity }) : geoRollup;
-            const rowsForZip = selectedZip !== null ? filterRows(rowsForCity, { zip: selectedZip }) : rowsForCity;
-            const buckets: GeoBucket[] =
-              level === "city"
-                ? bucketBy(geoRollup, (r) => r.situsCity ?? "")
-                : level === "zip"
-                  ? bucketBy(rowsForCity, (r) => r.situsZip ?? "")
-                  : bucketBy(rowsForZip, (r) => r.blockGroupGeoid);
-            const labelFor = (key: string) =>
-              level === "blockGroup" ? blockGroupLabel(key) : key || (level === "city" ? "No city on file" : "No ZIP on file");
-            const onPick = (key: string) =>
-              level === "city" ? handleSelectCity(key) : level === "zip" ? handleSelectZip(key) : handleSelectGeoid(key);
-
-            if (buckets.length === 0) {
-              return <MissingState variant="not-loaded" reason="No homes to rank yet" />;
-            }
-            return (
-              <div style={{ flex: "1 1 auto", minHeight: 0, overflow: "auto" }} data-testid="geo-bucket-table">
-                <DataTable>
-                  <DataTableHead>
-                    <DataTableRow>
-                      <DataTableHeaderCell>{level === "city" ? "City" : level === "zip" ? "ZIP" : "Neighborhood"}</DataTableHeaderCell>
-                      <DataTableHeaderCell>Homes</DataTableHeaderCell>
-                      <DataTableHeaderCell>Avg. likelihood</DataTableHeaderCell>
-                      <DataTableHeaderCell>Best likelihood</DataTableHeaderCell>
-                      <DataTableHeaderCell>Share of county&rsquo;s top 10%</DataTableHeaderCell>
-                    </DataTableRow>
-                  </DataTableHead>
-                  <DataTableBody>
-                    {buckets.map((b) => (
-                      <DataTableRow
-                        key={b.key || NULL_BUCKET_VALUE}
-                        className="data-table__row--hoverable"
-                        onClick={() => onPick(b.key)}
-                        style={{ cursor: "pointer" }}
-                        data-testid="geo-bucket-row"
-                      >
-                        <DataTableCell>{labelFor(b.key)}</DataTableCell>
-                        <DataTableCell>{b.homeCount.toLocaleString()}</DataTableCell>
-                        <DataTableCell>{b.avgP === null ? <MissingState variant="not-loaded" reason="Not scored" /> : `${(b.avgP * 100).toFixed(1)}%`}</DataTableCell>
-                        <DataTableCell>{b.maxP === null ? <MissingState variant="not-loaded" reason="Not scored" /> : `${(b.maxP * 100).toFixed(1)}%`}</DataTableCell>
-                        <DataTableCell>{countyTop10 > 0 ? `${((b.top10Count / countyTop10) * 100).toFixed(1)}%` : <MissingState variant="not-loaded" reason="Not scored" />}</DataTableCell>
-                      </DataTableRow>
-                    ))}
-                  </DataTableBody>
-                </DataTable>
-              </div>
-            );
-          })()
-        ) : mode === "predicted" ? (
+        {mode === "predicted" ? (
           <>
             <div style={{ flex: "1 1 auto", minHeight: 0, overflow: "auto" }}>
               <PredictedHomesTable
