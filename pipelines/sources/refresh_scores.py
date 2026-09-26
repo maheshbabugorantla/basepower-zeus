@@ -43,15 +43,23 @@ from pipelines.core import config, runs
 
 SOURCE = "refresh_scores"
 
-# Dependency order: mv_home_block_group has no mv dependency; the other
-# two both read it (directly or transitively), so it must refresh first.
+# The refresh order lives in ONE place: core.refresh_all_scores() in the
+# database (0201, extended by 0203). This step just calls it and reports
+# row counts, so a new materialized view can't be forgotten here again.
 MATERIALIZED_VIEWS = (
     "core.mv_home_block_group",
+    "core.mv_home_signals",
+    "core.mv_join_rate",
     "core.mv_blockgroup_scores",
     "core.mv_top_homes",
+    "core.mv_gate_counts",
+    "core.mv_parcel_gate_counts",
+    "core.mv_blockgroup_geojson",
 )
 
-STATEMENT_TIMEOUT = "15min"
+# mv_home_signals alone takes ~10 min on Supabase Small (spatial joins over
+# ~217k homes x territories x flood zones). CLI-only: never fits a Vercel call.
+STATEMENT_TIMEOUT = "45min"
 
 Runner = Literal["cron", "cli"]
 
@@ -68,13 +76,13 @@ def _connect_autocommit() -> psycopg.Connection:
 
 def refresh_all(conn: psycopg.Connection) -> dict[str, int]:
     """REFRESH MATERIALIZED VIEW CONCURRENTLY for each mv, in dependency
-    order, under a 15-minute statement_timeout. Returns each mv's row
+    order, under a 45-minute statement_timeout. Returns each mv's row
     count after refresh."""
     row_counts: dict[str, int] = {}
     with conn.cursor() as cur:
         cur.execute(f"set statement_timeout = '{STATEMENT_TIMEOUT}'")
+        cur.execute("select core.refresh_all_scores()")
         for mv in MATERIALIZED_VIEWS:
-            cur.execute(f"refresh materialized view concurrently {mv}")
             cur.execute(f"select count(*) from {mv}")
             row = cur.fetchone()
             assert row is not None
