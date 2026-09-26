@@ -21,12 +21,15 @@ import {
 // code, homestead, situs, market value) and its permits, each with a
 // provenance popover, plus (M1-W3 fix #4, HomeDetail.dc.html): score,
 // rank, block group, a "Why this home" reasoning section, a mini parcel
-// map, and a breadcrumb back to Ranking. Product rule (explicit,
-// non-negotiable for M1): no outage figure appears on this page. The
-// county EAGLE-I total customer-hours (api.county_outage) is a
-// *county-level* number and does not apply to a single home; a
-// per-distributor outage signal for homes arrives in a later milestone.
-// Do not add one here.
+// map, and a breadcrumb back to Ranking.
+//
+// M1 rule (superseded by M2-P8, kept for history): the county-level
+// EAGLE-I total customer-hours (api.county_outage) never applied to a
+// single home, so no outage figure appeared here. M2-P8 adds the real
+// per-home figure — core.mv_home_signals.outage_minutes, sourced from the
+// home's own distributor's EIA-861 SAIDI when reported, else the
+// EAGLE-I county proxy on the same minutes-per-customer scale
+// (outage_basis) — never the county total customer-hours figure.
 
 export const dynamic = "force-dynamic";
 
@@ -120,6 +123,25 @@ interface HomeSignalsRow {
   backup_intent_rate: string | number | null;
   backup_intent_null_reason: string | null;
   source_ids: string[] | null;
+  // M2-P8: home-level signals + the fixed outage basis.
+  owner_65: boolean | null;
+  owner_65_null_reason: string | null;
+  home_solar: boolean | null;
+  home_ev: boolean | null;
+  home_generator: boolean | null;
+  home_panel_upgrade: boolean | null;
+  home_battery: boolean | null;
+  battery_permit_date: string | Date | null;
+  permit_null_reason: string | null;
+  yr_built: number | null;
+  yr_built_null_reason: string | null;
+  installability_term: string | number | null;
+  installability_null_reason: string | null;
+  outage_minutes: string | number | null;
+  outage_year: number | null;
+  outage_basis: string | null;
+  outage_null_reason: string | null;
+  outage_source_ids: string[] | null;
 }
 
 const GATE_REASON_LABEL: Record<string, string> = {
@@ -169,7 +191,13 @@ async function getHomeSignals(propId: string): Promise<HomeSignalsRow | null> {
               acs_pct_65_plus, acs_65_null_reason,
               acs_pct_electric_heat, acs_heat_null_reason,
               backup_intent_rate, backup_intent_null_reason,
-              source_ids
+              source_ids,
+              owner_65, owner_65_null_reason,
+              home_solar, home_ev, home_generator, home_panel_upgrade, home_battery,
+              battery_permit_date, permit_null_reason,
+              yr_built, yr_built_null_reason,
+              installability_term, installability_null_reason,
+              outage_minutes, outage_year, outage_basis, outage_null_reason, outage_source_ids
        from core.mv_home_signals
        where prop_id = $1`,
       [propId]
@@ -285,7 +313,7 @@ async function getTopHomeRank(propId: string): Promise<TopHomeRankRow | null> {
                 row_number() over () as rank,
                 count(*) over () as total
          from api.top_homes_weighted(
-           '{"outage":1,"flood":1,"empower":1,"age65":1,"electric_heat":1,"backup_intent":1}'::jsonb,
+           '{"outage":1,"home_value":1,"backup_intent":1,"age65":1,"home_permits":1,"electric_heat":1,"empower":1,"owner_65":1,"installability":1,"flood":1}'::jsonb,
            (select county_fips from core.mv_home_signals where prop_id = $1)
          )
        )
@@ -365,7 +393,53 @@ function NotRecorded() {
 
 // Same as WeightSliders' equalWeights() (a client module, so not callable
 // here): every signal at the mid-point of the 0–10 scale.
-const EQUAL_WEIGHTS = { outage: 5, flood: 5, empower: 5, age65: 5, electric_heat: 5, backup_intent: 5 };
+const EQUAL_WEIGHTS = {
+  outage: 5,
+  home_value: 5,
+  backup_intent: 5,
+  age65: 5,
+  home_permits: 5,
+  electric_heat: 5,
+  empower: 5,
+  owner_65: 5,
+  installability: 5,
+  flood: 5,
+};
+
+// M2-P8: base article cited as the source for the "150-200A main breaker"
+// installability rule (a Base help article, not a Base internal number —
+// used here as provenance for a plain-language installability note).
+const BASE_PANEL_ARTICLE_URL = "https://help.basepowercompany.com/en/articles/10280705";
+
+interface TexasOutagePercentileRow {
+  saidi: string | number;
+}
+
+/**
+ * "fewer outage minutes than N% of Texas utilities" (M2-P8 acceptance:
+ * a real percentile against every Texas distributor reporting to
+ * EIA-861 for the same year outage_minutes came from — not against
+ * homes, which is the bug this ticket fixes). Applies identically
+ * whether outage_minutes came from the home's own distributor's SAIDI or
+ * the EAGLE-I county proxy (outage_basis) — both are the same unit.
+ * core.utility_reliability is a small (tens of rows) table, so this full
+ * scan for one year stays well under the 1s budget without an index.
+ */
+async function getTexasOutagePercentile(outageMinutes: number, outageYear: number): Promise<number | null> {
+  try {
+    const rows = await query<TexasOutagePercentileRow>(
+      `select saidi_incl_major as saidi from core.utility_reliability
+       where year = $1 and saidi_incl_major is not null`,
+      [outageYear]
+    );
+    if (rows.length === 0) return null;
+    const better = rows.filter((r) => Number(r.saidi) > outageMinutes).length;
+    return Math.round((better / rows.length) * 100);
+  } catch (err) {
+    console.error("home-detail: failed to compute the Texas outage percentile", err);
+    return null;
+  }
+}
 
 export default async function HomeDetailPage({
   params,
@@ -414,12 +488,15 @@ export default async function HomeDetailPage({
     ])
   );
 
-  const [sourcesById, scoreContext, topHomeRank, parcelGeojson, rulesHaveRun] = await Promise.all([
+  const [sourcesById, scoreContext, topHomeRank, parcelGeojson, rulesHaveRun, texasOutagePercentile] = await Promise.all([
     getSourcesByIds(allSourceIds),
     getScoreContext(home.prop_id),
     getTopHomeRank(home.prop_id),
     getParcelGeojson(home.prop_id),
     classifierHasRun(),
+    homeSignals?.outage_minutes !== null && homeSignals?.outage_minutes !== undefined && homeSignals?.outage_year
+      ? getTexasOutagePercentile(Number(homeSignals.outage_minutes), homeSignals.outage_year)
+      : Promise.resolve(null),
   ]);
 
   const address = [home.situs_num, home.situs_street].filter(Boolean).join(" ");
@@ -532,10 +609,11 @@ export default async function HomeDetailPage({
             <div>
               <dt style={{ color: "var(--theme-ink-muted)", fontSize: "var(--type-label-font-size)" }}>Outage exposure</dt>
               <dd style={{ margin: "var(--space-1) 0 0 0" }}>
-                {homeSignals.distributor_saidi === null ? (
+                {homeSignals.outage_minutes === null ? (
                   distributorSaidiRealNullReason ? (
                     // A real EIA-861 distributor is matched (e.g. Oncor
-                    // 44372) but EIA itself reports no figure for it —
+                    // 44372) but EIA itself reports no figure for it, and
+                    // this county has no EAGLE-I proxy either yet —
                     // "not available", not "not loaded": the pipeline has
                     // run and this is EIA's own stated reason (e.g.
                     // "not_reported"), never a made-up one.
@@ -543,26 +621,52 @@ export default async function HomeDetailPage({
                   ) : (
                     <MissingState
                       variant="not-loaded"
-                      reason={homeSignals.distributor_saidi_null_reason ?? "No distributor SAIDI figure"}
+                      reason={homeSignals.outage_null_reason ?? "No outage figure for this home yet"}
                     />
                   )
                 ) : (
                   <>
                     <ProvenanceFor
-                      sourceRow={findSourceByName(sourcesById, homeSignals.source_ids, ["eia861", "eia-861", "reliability"])}
+                      sourceRow={findSourceByName(
+                        sourcesById,
+                        homeSignals.outage_source_ids ?? homeSignals.source_ids,
+                        homeSignals.outage_basis === "county_eaglei_proxy"
+                          ? ["eaglei", "eagle-i", "outage"]
+                          : ["eia861", "eia-861", "reliability"]
+                      )}
                       id={`${home.prop_id}-outage`}
                     >
                       <span>
-                        {homeSignals.distributor_name ?? "This distributor"}'s customers averaged{" "}
-                        <span style={{ fontFamily: "var(--type-data-font-family)", fontWeight: 600 }}>
-                          {Number(homeSignals.distributor_saidi).toLocaleString(undefined, { maximumFractionDigits: 2 })}
-                        </span>{" "}
-                        minutes without power in {homeSignals.distributor_saidi_year} (SAIDI, incl. major events)
+                        {homeSignals.outage_basis === "county_eaglei_proxy" ? (
+                          <>
+                            Travis County averaged{" "}
+                            <span style={{ fontFamily: "var(--type-data-font-family)", fontWeight: 600 }}>
+                              {Number(homeSignals.outage_minutes).toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                            </span>{" "}
+                            minutes without power per customer in {homeSignals.outage_year} (EAGLE-I county proxy, used
+                            because {homeSignals.distributor_name ?? "this home's utility"} doesn&rsquo;t report to EIA)
+                          </>
+                        ) : (
+                          <>
+                            {homeSignals.distributor_name ?? "This distributor"}'s customers averaged{" "}
+                            <span style={{ fontFamily: "var(--type-data-font-family)", fontWeight: 600 }}>
+                              {Number(homeSignals.outage_minutes).toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                            </span>{" "}
+                            minutes without power in {homeSignals.outage_year} (SAIDI, incl. major events)
+                          </>
+                        )}
                       </span>
                     </ProvenanceFor>
                     {homeSignals.distributor_saidi_early_release ? (
                       <div style={{ fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)" }}>
                         Early release, not fully edited (EIA-861)
+                      </div>
+                    ) : null}
+                    {texasOutagePercentile !== null ? (
+                      <div style={{ fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)" }}>
+                        Fewer outage minutes than{" "}
+                        <span style={{ fontFamily: "var(--type-data-font-family)" }}>{texasOutagePercentile}%</span> of
+                        Texas utilities reporting to EIA-861 in {homeSignals.outage_year}
                       </div>
                     ) : null}
                   </>
@@ -716,6 +820,67 @@ export default async function HomeDetailPage({
                     </span>{" "}
                     battery or generator permits per 1,000 owner-occupied homes in this neighborhood (36 months, same for all homes in block group)
                   </span>
+                )}
+              </dd>
+            </div>
+
+            <div>
+              <dt style={{ color: "var(--theme-ink-muted)", fontSize: "var(--type-label-font-size)" }}>Homeowner 65+</dt>
+              <dd style={{ margin: "var(--space-1) 0 0 0" }}>
+                {homeSignals.owner_65 === null ? (
+                  <MissingState variant="not-loaded" reason={homeSignals.owner_65_null_reason ?? "Not loaded"} />
+                ) : (
+                  <span>{homeSignals.owner_65 ? "Yes — has the TCAD over-65 homestead exemption" : "No"}</span>
+                )}
+              </dd>
+            </div>
+
+            <div>
+              <dt style={{ color: "var(--theme-ink-muted)", fontSize: "var(--type-label-font-size)" }}>This home&rsquo;s own permits</dt>
+              <dd style={{ margin: "var(--space-1) 0 0 0" }}>
+                {homeSignals.permit_null_reason ? (
+                  <MissingState variant="not-available" reason={homeSignals.permit_null_reason} />
+                ) : homeSignals.home_battery ? (
+                  <span>
+                    Already has a home battery
+                    {homeSignals.battery_permit_date ? ` (permit ${String(homeSignals.battery_permit_date).slice(0, 10)})` : ""}
+                  </span>
+                ) : (
+                  (() => {
+                    const facts = [
+                      homeSignals.home_solar ? "solar" : null,
+                      homeSignals.home_ev ? "an EV charger" : null,
+                      homeSignals.home_generator ? "a generator" : null,
+                      homeSignals.home_panel_upgrade ? "a panel upgrade" : null,
+                    ].filter((s): s is string => s !== null);
+                    return facts.length > 0 ? (
+                      <span>Own permit on file for {facts.join(", ")}</span>
+                    ) : (
+                      <span style={{ color: "var(--theme-ink-muted)" }}>No solar, EV, generator, or panel permit on file for this home</span>
+                    );
+                  })()
+                )}
+              </dd>
+            </div>
+
+            <div>
+              <dt style={{ color: "var(--theme-ink-muted)", fontSize: "var(--type-label-font-size)" }}>Built</dt>
+              <dd style={{ margin: "var(--space-1) 0 0 0" }}>
+                {homeSignals.yr_built === null ? (
+                  <MissingState variant="not-loaded" reason={homeSignals.yr_built_null_reason ?? "Year built not loaded"} />
+                ) : (
+                  <>
+                    <span>Built {homeSignals.yr_built}</span>
+                    {homeSignals.yr_built < 2000 && !homeSignals.home_panel_upgrade ? (
+                      <div style={{ fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)", marginTop: "var(--space-1)" }}>
+                        Older home:{" "}
+                        <a href={BASE_PANEL_ARTICLE_URL} target="_blank" rel="noreferrer">
+                          Base needs a 150–200A main breaker in Austin
+                        </a>
+                        ; check the panel.
+                      </div>
+                    ) : null}
+                  </>
                 )}
               </dd>
             </div>

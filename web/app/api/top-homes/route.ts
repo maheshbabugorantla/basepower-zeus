@@ -24,23 +24,32 @@ import type { TopHomeRow } from "../../../components/TopHomesTable";
 
 export const dynamic = "force-dynamic";
 
-// The exact keys api.homes_ranked_weighted(weights jsonb, ...) reads (see
-// 0201_m2.sql's api.top_homes_weighted function comment — same keys). A
-// key not present in the object falls through to a CASE ... ELSE 0 in
-// the SQL function, so a request need not supply every key.
+// M2-P8b: the 10 weight keys api.homes_ranked_weighted / api.top_homes_weighted
+// / api.blockgroup_scores_weighted / api.home_score_breakdown all read
+// (0212_home_signals_build.sql / 0212b_home_signals_swap.sql /
+// 0212c_home_signals_perf.sql). A key not present in the object falls
+// through to a CASE ... ELSE 0 in the SQL function, so a request need not
+// supply every key.
 export const SIGNAL_KEYS = [
   "outage",
-  "flood",
-  "empower",
-  "age65",
-  "electric_heat",
+  "home_value",
   "backup_intent",
+  "age65",
+  "home_permits",
+  "electric_heat",
+  "empower",
+  "owner_65",
+  "installability",
+  "flood",
 ] as const;
 
 export type SignalKey = (typeof SIGNAL_KEYS)[number];
 
 export const TRAVIS_COUNTY_FIPS = "48453";
 export const PAGE_SIZE = 50;
+// M2-P8: "Hide homes built before 2000" (team choice, not a Base rule) —
+// same cutoff the installability term itself uses.
+export const HIDE_OLD_HOMES_CUTOFF_YEAR = 2000;
 
 interface HomesRankedWeightedDbRow {
   prop_id: string;
@@ -67,6 +76,22 @@ interface HomesRankedWeightedDbRow {
   source_ids: string[] | null;
   lon: string | number | null;
   lat: string | number | null;
+  owner_65: boolean | null;
+  home_solar: boolean | null;
+  home_ev: boolean | null;
+  home_generator: boolean | null;
+  home_panel_upgrade: boolean | null;
+  home_battery: boolean | null;
+  home_battery_permit_date: string | Date | null;
+  permit_null_reason: string | null;
+  yr_built: number | null;
+  living_area: string | number | null;
+  outage_minutes: string | number | null;
+  outage_year: number | null;
+  outage_basis: string | null;
+  outage_source_ids: string[] | null;
+  home_value_term: string | number | null;
+  installability_term: string | number | null;
 }
 
 function toNumberOrNull(value: string | number | null | undefined): number | null {
@@ -97,6 +122,22 @@ export function mapWeightedRow(row: HomesRankedWeightedDbRow): TopHomeRow {
     backupIntentRate: toNumberOrNull(row.backup_intent_rate),
     lon: toNumberOrNull(row.lon),
     lat: toNumberOrNull(row.lat),
+    ownerIs65: row.owner_65,
+    homeSolar: row.home_solar,
+    homeEv: row.home_ev,
+    homeGenerator: row.home_generator,
+    homePanelUpgrade: row.home_panel_upgrade,
+    homeBattery: row.home_battery,
+    homeBatteryPermitDate: row.home_battery_permit_date ? String(row.home_battery_permit_date) : null,
+    permitNullReason: row.permit_null_reason,
+    yrBuilt: row.yr_built,
+    livingArea: toNumberOrNull(row.living_area),
+    outageMinutes: toNumberOrNull(row.outage_minutes),
+    outageYear: row.outage_year,
+    outageBasis: row.outage_basis,
+    outageSourceIds: row.outage_source_ids ?? [],
+    homeValueTerm: toNumberOrNull(row.home_value_term),
+    installabilityTerm: toNumberOrNull(row.installability_term),
   };
 }
 
@@ -121,11 +162,21 @@ interface RankedRequestBody {
   afterScore?: unknown;
   afterPropId?: unknown;
   pageSize?: unknown;
+  hideOldHomes?: unknown;
 }
 
 /**
  * Shared by the route handler and app/ranking/page.tsx's server-render
  * first paint, so both go through exactly one query shape.
+ *
+ * `hideOldHomes` (M2-P8, "Hide homes built before 2000" — a team choice,
+ * not a Base rule) is applied here on `yr_built`, a column
+ * api.homes_ranked_weighted already returns on every row — never a
+ * second, request-time query against core.parcels or any other table.
+ * A home with yr_built unknown is kept (unproven old, not hidden). Since
+ * the filter runs after the SQL function's own LIMIT, a filtered page can
+ * come back short; the total row count is reported as unknown (null)
+ * whenever the filter is active, rather than the unfiltered figure.
  */
 export async function fetchRankedHomes(params: {
   weights: Record<SignalKey, number>;
@@ -137,6 +188,7 @@ export async function fetchRankedHomes(params: {
   /** Also fetch the total row count for this filter (page 1 only, per the
    * M2-W3 scope note — never once per page). */
   withTotal?: boolean;
+  hideOldHomes?: boolean;
 }): Promise<{ rows: TopHomeRow[]; total: number | null }> {
   const {
     weights,
@@ -146,6 +198,7 @@ export async function fetchRankedHomes(params: {
     afterPropId = null,
     pageSize = PAGE_SIZE,
     withTotal = false,
+    hideOldHomes = false,
   } = params;
 
   const weightsJson = JSON.stringify(weights);
@@ -163,9 +216,14 @@ export async function fetchRankedHomes(params: {
       : Promise.resolve(null),
   ]);
 
+  let mapped = rows.map(mapWeightedRow);
+  if (hideOldHomes) {
+    mapped = mapped.filter((r) => r.yrBuilt === null || r.yrBuilt >= HIDE_OLD_HOMES_CUTOFF_YEAR);
+  }
+
   return {
-    rows: rows.map(mapWeightedRow),
-    total: totalRows ? Number(totalRows[0].total) : null,
+    rows: mapped,
+    total: hideOldHomes ? null : totalRows ? Number(totalRows[0].total) : null,
   };
 }
 
@@ -193,6 +251,7 @@ export async function POST(request: Request) {
   const pageSize = typeof body.pageSize === "number" && Number.isFinite(body.pageSize) && body.pageSize > 0
     ? Math.floor(body.pageSize)
     : PAGE_SIZE;
+  const hideOldHomes = body.hideOldHomes === true;
   // Page 1 (no keyset cursor yet) also returns the total row count for
   // this filter — the route recomputes it whenever weights/selection
   // change (a fresh page-1 request), never on Next/Previous.
@@ -206,6 +265,7 @@ export async function POST(request: Request) {
     afterPropId,
     pageSize,
     withTotal,
+    hideOldHomes,
   });
 
   return NextResponse.json(

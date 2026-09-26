@@ -55,6 +55,7 @@ async function fetchPage(params: {
   cursor: Cursor;
   pageSize?: number;
   withTotal: boolean;
+  hideOldHomes?: boolean;
 }): Promise<{ rows: TopHomeRow[]; total: number | null }> {
   const response = await fetch("/api/top-homes", {
     method: "POST",
@@ -67,6 +68,7 @@ async function fetchPage(params: {
       afterScore: params.cursor.afterScore,
       afterPropId: params.cursor.afterPropId,
       pageSize: params.pageSize ?? DEFAULT_PAGE_SIZE,
+      hideOldHomes: params.hideOldHomes ?? false,
     }),
   });
   if (!response.ok) throw new Error(`Ranking request failed (HTTP ${response.status})`);
@@ -88,14 +90,22 @@ export function RankingBoard({
   rows: initialRows,
   initialTotal,
   leftRail,
+  defaultWeights = null,
 }: {
   rows: TopHomeRow[];
   /** Real gate-passed county home count (api.homes_ranked_weighted_count), server-rendered. */
   initialTotal: number;
   /** Server-rendered gate funnel + Quality panel (left column, above the sliders). */
   leftRail: ReactNode;
+  /** api.default_weights, read server-side (M2-P8); null falls back to equal=5. */
+  defaultWeights?: Record<SignalKey, number> | null;
 }) {
-  const [weights, setWeights] = useState<Record<SignalKey, number>>(equalWeights());
+  const [weights, setWeights] = useState<Record<SignalKey, number>>(defaultWeights ?? equalWeights());
+  // M2-P8: "Hide homes built before 2000" — a team choice, not a Base
+  // rule, default OFF. Filtered in the /api/top-homes route on yr_built
+  // (a column the ranking function already returns on every row), never
+  // a second request-time scan of core.parcels.
+  const [hideOldHomes, setHideOldHomes] = useState(false);
 
   // County-wide vs. block-group-scoped ranking.
   const [selectedGeoid, setSelectedGeoid] = useState<string | null>(null);
@@ -159,7 +169,7 @@ export function RankingBoard({
       setError(null);
       try {
         const [page, dotsPage] = await Promise.all([
-          fetchPage({ weights, blockGroupGeoid: selectedGeoid, cursor: FIRST_CURSOR, withTotal: true }),
+          fetchPage({ weights, blockGroupGeoid: selectedGeoid, cursor: FIRST_CURSOR, withTotal: true, hideOldHomes }),
           selectedGeoid
             ? fetchPage({
                 weights,
@@ -167,6 +177,7 @@ export function RankingBoard({
                 cursor: FIRST_CURSOR,
                 pageSize: DOTS_PAGE_SIZE,
                 withTotal: false,
+                hideOldHomes,
               })
             : Promise.resolve({ rows: [] as TopHomeRow[], total: null }),
         ]);
@@ -199,7 +210,7 @@ export function RankingBoard({
 
     return () => clearTimeout(debounceTimer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [weights, selectedGeoid]);
+  }, [weights, selectedGeoid, hideOldHomes]);
 
   useEffect(() => {
     return () => {
@@ -212,7 +223,7 @@ export function RankingBoard({
     setLoading(true);
     setError(null);
     try {
-      const page = await fetchPage({ weights, blockGroupGeoid: selectedGeoid, cursor, withTotal: false });
+      const page = await fetchPage({ weights, blockGroupGeoid: selectedGeoid, cursor, withTotal: false, hideOldHomes });
       if (mySeq !== requestSeqRef.current) return;
       setRows(page.rows);
       setPageIndex(nextIndex);
@@ -268,7 +279,26 @@ export function RankingBoard({
     <div className="ranking-board">
       <div className="ranking-board__rail">
         {leftRail}
-        <WeightSliders weights={weights} onChange={setWeights} onReset={() => setWeights(equalWeights())} />
+        <WeightSliders
+          weights={weights}
+          onChange={setWeights}
+          onReset={() => setWeights(equalWeights())}
+          defaultWeights={defaultWeights}
+        />
+        <Panel>
+          <label style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", fontSize: "var(--type-body-font-size)" }}>
+            <input
+              type="checkbox"
+              checked={hideOldHomes}
+              onChange={(e) => setHideOldHomes(e.target.checked)}
+              data-testid="hide-old-homes-toggle"
+            />
+            Hide homes built before 2000
+          </label>
+          <p style={{ margin: "var(--space-1) 0 0 0", fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)" }}>
+            A team choice, not a Base rule.
+          </p>
+        </Panel>
       </div>
 
       <Panel style={{ display: "flex", flexDirection: "column", minHeight: 0, height: "100%" }}>

@@ -56,7 +56,11 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints, Validation
 from pipelines.core import config, db, runs
 
 SOURCE = "home_summaries"
-PROMPT_VERSION = 4
+# M2-P8b: the breakdown's shape changed (term/anchor_value/anchor_basis
+# columns, 4 new home-level signals) and every fact line was rewritten to
+# use the anchored term instead of the discarded percentile — a prompt
+# version bump so no stale prompt-v4 row is mistaken for current.
+PROMPT_VERSION = 5
 TRAVIS_COUNTY_FIPS = "48453"
 TOP_N = 500
 # The 3 real homes pipelines/tests/test_home_summaries.py's live-DB tests
@@ -70,8 +74,13 @@ GEMINI_TIMEOUT_S = 8.0
 GEMINI_MAX_RETRIES = 3
 CONCURRENCY = 5
 
+# M2-P8b: the 10 weight keys api.top_homes_weighted/api.home_score_breakdown
+# read (0212_home_signals_build.sql / 0212b_home_signals_swap.sql /
+# 0212c_home_signals_perf.sql) — same set web/app/api/top-homes/route.ts's
+# SIGNAL_KEYS lists.
 EQUAL_WEIGHTS: dict[str, float] = {
-    "outage": 1, "flood": 1, "empower": 1, "age65": 1, "electric_heat": 1, "backup_intent": 1,
+    "outage": 1, "home_value": 1, "backup_intent": 1, "age65": 1, "home_permits": 1,
+    "electric_heat": 1, "empower": 1, "owner_65": 1, "installability": 1, "flood": 1,
 }
 EQUAL_WEIGHTS_JSON = json.dumps(EQUAL_WEIGHTS)
 
@@ -104,11 +113,13 @@ def brief_model() -> str:
 
 
 def select_target_prop_ids(conn: psycopg.Connection, *, backfill: bool) -> list[str]:
-    """Gate-passed Travis homes to (re)generate a summary for. Same scoring
-    terms/weight normalisation as api.top_homes_weighted (0201_m2.sql),
-    computed inline against core.mv_home_signals rather than through that
-    function (which hard-limits to 50 rows) — equal weights, no LIMIT for a
-    backfill, LIMIT TOP_N otherwise, always unioned with TEST_PROP_IDS."""
+    """Gate-passed Travis homes to (re)generate a summary for. Same
+    anchored-term scoring as api.top_homes_weighted (0212_home_signals_
+    build.sql / 0212b/0212c) — the discarded home-based percentiles this
+    query used before M2-P8 are gone — computed inline against
+    core.mv_home_signals rather than through that function (which
+    hard-limits to 50 rows) — equal weights, no LIMIT for a backfill,
+    LIMIT TOP_N otherwise, always unioned with TEST_PROP_IDS."""
     limit_clause = "" if backfill else f"limit {TOP_N}"
     with conn.cursor() as cur:
         cur.execute(
@@ -116,8 +127,11 @@ def select_target_prop_ids(conn: psycopg.Connection, *, backfill: bool) -> list[
             with narrow as (
                 select
                     prop_id,
-                    distributor_saidi_pctile, flood_pctile, empower_pctile,
-                    acs_65_pctile, acs_heat_pctile, backup_intent_pctile
+                    outage_term, flood_term, empower_term, age65_term, electric_heat_term,
+                    backup_intent_term,
+                    owner_65::int::numeric as owner65_term,
+                    home_permits_flag::int::numeric as permits_term,
+                    installability_term, home_value_term
                 from core.mv_home_signals
                 where gate_reason is null and county_fips = %(county)s
             ),
@@ -125,20 +139,28 @@ def select_target_prop_ids(conn: psycopg.Connection, *, backfill: bool) -> list[
                 select
                     prop_id,
                     (
-                        case when distributor_saidi_pctile is not null then distributor_saidi_pctile else 0 end
-                        + case when flood_pctile is not null then 1 - flood_pctile else 0 end
-                        + case when empower_pctile is not null then empower_pctile else 0 end
-                        + case when acs_65_pctile is not null then acs_65_pctile else 0 end
-                        + case when acs_heat_pctile is not null then acs_heat_pctile else 0 end
-                        + case when backup_intent_pctile is not null then backup_intent_pctile else 0 end
+                        case when outage_term is null then 0 else outage_term end
+                        + case when flood_term is null then 0 else flood_term end
+                        + case when empower_term is null then 0 else empower_term end
+                        + case when age65_term is null then 0 else age65_term end
+                        + case when electric_heat_term is null then 0 else electric_heat_term end
+                        + case when backup_intent_term is null then 0 else backup_intent_term end
+                        + case when owner65_term is null then 0 else owner65_term end
+                        + case when permits_term is null then 0 else permits_term end
+                        + case when installability_term is null then 0 else installability_term end
+                        + case when home_value_term is null then 0 else home_value_term end
                     ) as weighted_sum,
                     (
-                        case when distributor_saidi_pctile is not null then 1 else 0 end
-                        + case when flood_pctile is not null then 1 else 0 end
-                        + case when empower_pctile is not null then 1 else 0 end
-                        + case when acs_65_pctile is not null then 1 else 0 end
-                        + case when acs_heat_pctile is not null then 1 else 0 end
-                        + case when backup_intent_pctile is not null then 1 else 0 end
+                        (case when outage_term is not null then 1 else 0 end)
+                        + (case when flood_term is not null then 1 else 0 end)
+                        + (case when empower_term is not null then 1 else 0 end)
+                        + (case when age65_term is not null then 1 else 0 end)
+                        + (case when electric_heat_term is not null then 1 else 0 end)
+                        + (case when backup_intent_term is not null then 1 else 0 end)
+                        + (case when owner65_term is not null then 1 else 0 end)
+                        + (case when permits_term is not null then 1 else 0 end)
+                        + (case when installability_term is not null then 1 else 0 end)
+                        + (case when home_value_term is not null then 1 else 0 end)
                     ) as weight_sum
                 from narrow
             ),
@@ -163,17 +185,27 @@ def select_target_prop_ids(conn: psycopg.Connection, *, backfill: bool) -> list[
 
 
 class BreakdownRow:
-    __slots__ = ("key", "label", "raw_value", "raw_unit", "percentile", "contribution", "available", "null_reason")
+    """One row from api.home_score_breakdown (0212b_home_signals_swap.sql):
+    key/label/raw_value/raw_unit/percentile/weight/contribution/available/
+    null_reason, plus M2-P8's term/anchor_value/anchor_basis — the
+    anchored 0-1 score input that replaced the discarded percentile."""
+
+    __slots__ = (
+        "key", "label", "raw_value", "raw_unit", "percentile", "contribution", "available", "null_reason",
+        "term", "anchor_value", "anchor_basis",
+    )
 
     def __init__(self, row: tuple[Any, ...]) -> None:
         (self.key, self.label, self.raw_value, self.raw_unit, self.percentile,
-         _weight, self.contribution, self.available, self.null_reason) = row
+         _weight, self.contribution, self.available, self.null_reason,
+         self.term, self.anchor_value, self.anchor_basis) = row
 
 
 def fetch_breakdown(conn: psycopg.Connection, prop_id: str) -> list[BreakdownRow]:
     with conn.cursor() as cur:
         cur.execute(
-            "select key, label, raw_value, raw_unit, percentile, weight, contribution, available, null_reason "
+            "select key, label, raw_value, raw_unit, percentile, weight, contribution, available, null_reason, "
+            "term, anchor_value, anchor_basis "
             "from api.home_score_breakdown(%s, %s::jsonb)",
             (prop_id, EQUAL_WEIGHTS_JSON),
         )
@@ -181,11 +213,22 @@ def fetch_breakdown(conn: psycopg.Connection, prop_id: str) -> list[BreakdownRow
 
 
 class HomeContext:
-    __slots__ = ("prop_id", "distributor_name", "distributor_saidi_year", "block_group_geoid", "source_ids")
+    """M2-P8b adds outage_minutes/outage_year/outage_basis: the outage
+    fact line uses these (never home_score_breakdown's raw_value, which is
+    literally distributor_saidi and is null for an EAGLE-I-proxied home
+    even though its outage_term is available) — the same fix
+    web/app/home/[prop_id]/page.tsx and web/app/ranking/breakdown/route.ts
+    apply on the web side."""
+
+    __slots__ = (
+        "prop_id", "distributor_name", "distributor_saidi_year", "block_group_geoid", "source_ids",
+        "outage_minutes", "outage_year", "outage_basis",
+    )
 
     def __init__(self, row: tuple[Any, ...]) -> None:
         (self.prop_id, self.distributor_name, self.distributor_saidi_year,
-         self.block_group_geoid, self.source_ids) = row
+         self.block_group_geoid, self.source_ids,
+         self.outage_minutes, self.outage_year, self.outage_basis) = row
 
 
 def fetch_context(conn: psycopg.Connection, prop_id: str) -> HomeContext | None:
@@ -193,7 +236,8 @@ def fetch_context(conn: psycopg.Connection, prop_id: str) -> HomeContext | None:
         cur.execute(
             """
             select prop_id, distributor_name, distributor_saidi_year,
-                   block_group_geoid, source_ids
+                   block_group_geoid, source_ids,
+                   outage_minutes, outage_year, outage_basis
             from core.mv_home_signals
             where prop_id = %s
             """,
@@ -207,16 +251,15 @@ def _fmt(value: Any, decimals: int) -> str:
     return f"{float(value):.{decimals}f}"
 
 
-def _ordinal(n: int) -> str:
-    if 10 <= n % 100 <= 20:
-        suffix = "th"
-    else:
-        suffix = {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
-    return f"{n}{suffix}"
-
-
-def _percentile_label(pctile: Any) -> str:
-    return f"{_ordinal(round(float(pctile) * 100))} percentile"
+def _anchor_note(row: BreakdownRow) -> str:
+    """M2-P8: the score term is real value / anchor (capped at 1), not a
+    percentile — no score term is a percentile (that was the bug: every
+    Austin Energy home's percentile against other Austin Energy homes was
+    0). A signal with no anchor (flood, electric_heat, and every 1/0 flag)
+    returns "" — nothing to note beyond the fact itself."""
+    if row.term is None or row.anchor_value is None:
+        return ""
+    return f" Scored {_fmt(row.term, 2)} of an anchor of {_fmt(row.anchor_value, 1)} ({row.anchor_basis})."
 
 
 def build_fact_line(row: BreakdownRow, ctx: HomeContext) -> str | None:
@@ -225,44 +268,64 @@ def build_fact_line(row: BreakdownRow, ctx: HomeContext) -> str | None:
     the home page (web/app/home/[prop_id]/page.tsx) and the ranking table,
     so a rep reading the summary never sees a number phrased differently
     from the rest of the app. Returns None for an unavailable signal —
-    never a placeholder line."""
+    never a placeholder line. M2-P8: every 1/0 flag signal (owner_65,
+    home_permits, installability, and flood before it) is phrased in
+    words, never as a bare "1.0"/"0.0" number."""
+    if row.key == "outage":
+        if not row.available or ctx.outage_minutes is None:
+            return None
+        if ctx.outage_basis == "county_eaglei_proxy":
+            basis = (
+                f"Travis County average, EAGLE-I proxy, used because "
+                f"{ctx.distributor_name or 'this home’s utility'} doesn't report to EIA"
+            )
+        else:
+            basis = f"{ctx.distributor_name or 'this distributor'}'s own reported SAIDI, EIA-861"
+        year = f" in {ctx.outage_year}" if ctx.outage_year else ""
+        return (
+            f"Outage exposure: {_fmt(ctx.outage_minutes, 1)} minutes without power per customer{year} "
+            f"({basis}).{_anchor_note(row)}"
+        )
     if not row.available or row.raw_value is None:
         return None
-    if row.key == "outage":
-        distributor = ctx.distributor_name or "This distributor"
-        year = f" in {ctx.distributor_saidi_year}" if ctx.distributor_saidi_year else ""
-        return (
-            f"Outage exposure: {distributor}'s customers averaged {_fmt(row.raw_value, 1)} "
-            f"minutes without power{year} (SAIDI, incl. major events); {_percentile_label(row.percentile)} "
-            f"among scored Travis homes."
-        )
     if row.key == "flood":
         inside = "Inside" if float(row.raw_value) == 1 else "Outside"
-        return (
-            f"Installability: {inside} a FEMA Special Flood Hazard Area; "
-            f"{_percentile_label(row.percentile)} for being outside a flood zone."
-        )
+        return f"Installability: {inside} a FEMA Special Flood Hazard Area."
     if row.key == "empower":
         return (
             f"Medical need: {_fmt(row.raw_value, 1)} power-dependent Medicare devices per 1,000 "
-            f"Medicare beneficiaries in this ZIP; {_percentile_label(row.percentile)}."
+            f"Medicare beneficiaries in this ZIP.{_anchor_note(row)}"
         )
     if row.key == "age65":
         return (
             f"Age 65+: {_fmt(row.raw_value, 1)}% of this block group's population is 65+ "
-            f"(ACS, same for every home in the block group); {_percentile_label(row.percentile)}."
+            f"(ACS, same for every home in the block group).{_anchor_note(row)}"
         )
     if row.key == "electric_heat":
         return (
             f"Electric heat: {_fmt(row.raw_value, 1)}% of housing units in this block group heat "
-            f"with electricity (ACS, same for every home in the block group); {_percentile_label(row.percentile)}."
+            f"with electricity (ACS, same for every home in the block group)."
         )
     if row.key == "backup_intent":
         return (
-            f"Backup intent: {_fmt(row.raw_value, 2)} battery/generator permits per 1,000 gated "
-            f"homes in this block group (36 months, same for every home in the block group); "
-            f"{_percentile_label(row.percentile)}."
+            f"Neighbors installing backup: {_fmt(row.raw_value, 2)} battery/generator permits per 1,000 "
+            f"other gated homes in this block group (36 months, this home's own permits excluded)."
+            f"{_anchor_note(row)}"
         )
+    if row.key == "owner_65":
+        yes = float(row.raw_value) == 1
+        return f"Homeowner 65+: {'Yes' if yes else 'No'} (TCAD over-65 homestead exemption)."
+    if row.key == "home_permits":
+        yes = float(row.raw_value) == 1
+        return f"Home permits: {'Has' if yes else 'Has no'} own solar, EV, or generator permit on file."
+    if row.key == "installability":
+        yes = float(row.raw_value) == 1
+        return (
+            f"Installability: {'Likely' if yes else 'Not yet'} panel-ready "
+            f"(built 2000 or later, or has its own panel-upgrade permit)."
+        )
+    if row.key == "home_value":
+        return f"Home value: ${_fmt(row.raw_value, 0)} (TCAD market value).{_anchor_note(row)}"
     return None
 
 
