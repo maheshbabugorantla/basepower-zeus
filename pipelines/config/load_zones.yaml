@@ -1,0 +1,20 @@
+# ERCOT load zones pulled by pipelines/sources/ercot_spp.py (NP6-905-CD
+# spp_node_zone_hub, settlementPointType=LZ). Adding a zone (e.g. M4's
+# LZ_NORTH for Oncor) is a config change only -- no code change --
+# per M3-P1's acceptance criterion.
+#
+# All 8 real ERCOT load zones (confirmed live against the API by
+# checks/M3-H1.md and cross-checked against ERCOT's own load-zone map)
+# are listed here per the M3 task's explicit instruction, so
+# core.grid_value_lz's anchor (90th percentile across the 8 zones,
+# M3-S1) is computed from real data in all 8 zones, not a subset
+# pretending to be 8.
+load_zones:
+  - LZ_AEN
+  - LZ_CPS
+  - LZ_HOUSTON
+  - LZ_LCRA
+  - LZ_NORTH
+  - LZ_RAYBN
+  - LZ_SOUTH
+  - LZ_WEST
