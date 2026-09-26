@@ -78,7 +78,9 @@ and `web/components/ui/`; do not invent new ones.
   format), `SUPABASE_PUBLISHABLE_KEY` (never for data), `POSTGRES_URL`,
   `POSTGRES_URL_NON_POOLING`, `CRON_SECRET`, `ERCOT_USERNAME`,
   `ERCOT_PASSWORD`, `ERCOT_SUBSCRIPTION_KEY`, `CENSUS_API_KEY`,
-  `GOOGLE_MAPS_API_KEY`.
+  `GOOGLE_MAPS_API_KEY`, `GEMINI_API_KEY` + `BRIEF_MODEL` (server-only
+  "why this home" summaries), `TYPESAFE_AI_JEV_API_KEY` (labeling model
+  for classifier spot checks, like the M1 permit labels).
 - **Pooler URLs.** `POSTGRES_URL` is the transaction pooler (port 6543) —
   psycopg must use `prepare_threshold=None`. `POSTGRES_URL_NON_POOLING`
   is the session pooler (port 5432) — use it for migrations and long CLI
