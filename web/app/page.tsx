@@ -487,7 +487,7 @@ export default async function HomePage() {
             label="Source files loaded"
             value={sourcesLoadedCount}
             unit="files"
-            missingReason="api.sources could not be read"
+            missingReason="Source list not available right now"
             linkHref="/sources"
             linkLabel="Full manifest"
           />

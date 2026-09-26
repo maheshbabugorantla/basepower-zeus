@@ -72,6 +72,17 @@ async function fetchPage(params: {
   return response.json();
 }
 
+/**
+ * A block group GEOID (state 2 + county 3 + tract 6 + block group 1, e.g.
+ * 484530329001) as people read it on a census map: "Tract 329, block group 1".
+ */
+function blockGroupLabel(geoid: string): string {
+  if (!/^\d{12}$/.test(geoid)) return `Block group ${geoid}`;
+  const tractRaw = geoid.slice(5, 11);
+  const tract = `${Number(tractRaw.slice(0, 4))}${tractRaw.slice(4) === "00" ? "" : `.${tractRaw.slice(4)}`}`;
+  return `Tract ${tract}, block group ${geoid.slice(11)}`;
+}
+
 export function RankingBoard({
   rows: initialRows,
   initialTotal,
@@ -271,34 +282,51 @@ export function RankingBoard({
       </Panel>
 
       <Panel style={{ display: "flex", flexDirection: "column", minHeight: 0, height: "100%" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: "var(--space-2)", gap: "var(--space-2)" }}>
-          <h2
-            style={{
-              fontFamily: "var(--type-heading-font-family)",
-              fontSize: "var(--type-heading-font-size)",
-              fontWeight: "var(--type-heading-font-weight)",
-              margin: 0,
-            }}
-          >
-            {selectedGeoid ? "Homes in this block group" : "Homes ranked county-wide"}
-          </h2>
+        <div style={{ marginBottom: "var(--space-2)" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: "var(--space-3)" }}>
+            <h2
+              style={{
+                fontFamily: "var(--type-heading-font-family)",
+                fontSize: "var(--type-heading-font-size)",
+                fontWeight: "var(--type-heading-font-weight)",
+                margin: 0,
+                textWrap: "balance",
+              }}
+            >
+              {selectedGeoid ? "Homes in this block group" : "Homes ranked county-wide"}
+            </h2>
+            <span
+              aria-live="polite"
+              style={{ fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)", whiteSpace: "nowrap" }}
+            >
+              {loading ? "Re-ranking…" : ""}
+            </span>
+          </div>
           {selectedGeoid ? (
-            <span className="chip" data-testid="selected-blockgroup-chip" style={{ display: "inline-flex", alignItems: "center", gap: "var(--space-2)" }}>
-              Block group {selectedGeoid}
+            <div
+              data-testid="selected-blockgroup-chip"
+              style={{
+                display: "flex",
+                alignItems: "center",
+                flexWrap: "wrap",
+                gap: "var(--space-2)",
+                marginTop: "var(--space-2)",
+                fontSize: "var(--type-label-font-size)",
+              }}
+            >
+              <span className="chip">{blockGroupLabel(selectedGeoid)}</span>
               <button
                 type="button"
                 className="btn btn--secondary"
                 onClick={() => handleSelectGeoid(null)}
-                aria-label="Clear block group selection"
+                aria-label="Clear block group selection and show all homes"
                 data-testid="clear-blockgroup"
+                style={{ whiteSpace: "nowrap" }}
               >
-                × clear
+                Show all homes
               </button>
-            </span>
+            </div>
           ) : null}
-          <span style={{ fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)" }}>
-            from api.homes_ranked_weighted{loading ? " · re-ranking…" : ""}
-          </span>
         </div>
         {error ? (
           <div style={{ marginBottom: "var(--space-2)" }}>

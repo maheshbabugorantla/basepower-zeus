@@ -413,12 +413,17 @@
   vertical-align: top;
 }
 
+/* Street addresses wrap (up to two lines) instead of truncating to
+ * "2201 …" in a narrow column — the street name is what a rep reads. */
 .top-homes-address {
-  display: block;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
   max-width: 100%;
+  min-width: 12ch;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: break-word;
 }
 
 .top-homes-zip {

@@ -56,3 +56,23 @@ describe("web app is read-only against Postgres", () => {
     20000
   );
 });
+
+describe("no database object names in visible copy", () => {
+  it("JSX text and string props in app/ and components/ never show schema.table names", () => {
+    const root = join(__dirname, "..", "..");
+    // Strip comments, template literals and quoted select/with strings (SQL), and console.* calls, then look for api./core./ops. names.
+    const offenders: string[] = [];
+    for (const f of ["app", "components"].flatMap((d) => sourceFiles(join(root, d)))) {
+      if (!f.endsWith(".tsx")) continue;
+      const src = readFileSync(f, "utf8")
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .replace(/\/\/.*$/gm, "")
+        .replace(/`[\s\S]*?`/g, "``")
+        .replace(/(["'])\s*(select|with)\b[^"']*\1/gi, '""')
+        .replace(/console\.\w+\([^)]*\)/g, "");
+      const m = src.match(/\b(api|core|ops)\.[a-z_]{3,}\b/g);
+      if (m) offenders.push(`${f}: ${[...new Set(m)].join(", ")}`);
+    }
+    expect(offenders).toEqual([]);
+  });
+});
