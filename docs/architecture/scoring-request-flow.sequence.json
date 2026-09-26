@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "Base Power Zeus - Scoring Request Flow",
+    "output": "scoring-request-flow.html",
+    "viewBox": [1000, 800],
+    "column_fit": "spread",
+    "quality_profile": "showcase",
+    "views": [
+      { "id": "table-rerank", "label": "Table re-rank", "focus": ["user", "ranking_ui", "top_homes_route", "db"], "note": "A slider change debounces then re-ranks the keyset-paginated home table." },
+      { "id": "map-sync", "label": "Map sync", "focus": ["ranking_ui", "bg_route", "db"], "note": "The same weights recolor the block-group choropleth via feature-state, no page reload." },
+      { "id": "breakdown", "label": "Score breakdown", "focus": ["user", "ranking_ui", "breakdown_route", "db"], "note": "Selecting a home fetches its per-signal terms at the current weights." }
+    ]
+  },
+  "participants": [
+    { "id": "user", "type": "external", "label": "Analyst", "sublabel": "sliders" },
+    { "id": "ranking_ui", "type": "frontend", "label": "RankingBoard", "sublabel": "web/app/ranking" },
+    { "id": "top_homes_route", "type": "backend", "label": "/api/top-homes", "sublabel": "route.ts" },
+    { "id": "bg_route", "type": "backend", "label": "/api/bg-scores", "sublabel": "route.ts" },
+    { "id": "breakdown_route", "type": "backend", "label": "/ranking/breakdown", "sublabel": "route.ts" },
+    { "id": "db", "type": "database", "label": "Supabase Postgres", "sublabel": "zeus_web_ro, api schema" }
+  ],
+  "segments": [
+    { "from": 165, "to": 370, "label": "Table re-rank" },
+    { "from": 380, "to": 550, "label": "Map sync" },
+    { "from": 560, "to": 750, "label": "Score breakdown" }
+  ],
+  "messages": [
+    { "id": "drag-slider", "from": "user", "to": "ranking_ui", "y": 180, "label": "adjust weight slider (debounced 250ms)", "variant": "default" },
+    { "id": "post-top-homes", "from": "ranking_ui", "to": "top_homes_route", "y": 215, "label": "POST weights + cursor", "variant": "emphasis" },
+    { "id": "call-ranked", "from": "top_homes_route", "to": "db", "y": 250, "label": "select api.homes_ranked_weighted(...)", "variant": "emphasis" },
+    { "id": "ranked-rows", "from": "db", "to": "top_homes_route", "y": 285, "label": "keyset page, live over mv_home_signals", "variant": "return" },
+    { "id": "top-homes-json", "from": "top_homes_route", "to": "ranking_ui", "y": 320, "label": "rows + next cursor", "variant": "return" },
+    { "id": "post-bg-scores", "from": "ranking_ui", "to": "bg_route", "y": 390, "label": "POST weights + countyFips", "variant": "emphasis" },
+    { "id": "call-bg", "from": "bg_route", "to": "db", "y": 425, "label": "select api.blockgroup_scores_weighted(...)", "variant": "emphasis" },
+    { "id": "bg-rows", "from": "db", "to": "bg_route", "y": 460, "label": "block_group_geoid, score, homes_scored", "variant": "return" },
+    { "id": "bg-json", "from": "bg_route", "to": "ranking_ui", "y": 495, "label": "scores, applied via maplibre feature-state", "variant": "return" },
+    { "id": "select-home", "from": "user", "to": "ranking_ui", "y": 570, "label": "click a home row", "variant": "default" },
+    { "id": "get-breakdown", "from": "ranking_ui", "to": "breakdown_route", "y": 605, "label": "GET prop_id + weights", "variant": "emphasis" },
+    { "id": "call-breakdown", "from": "breakdown_route", "to": "db", "y": 640, "label": "select api.home_score_breakdown(prop_id, weights)", "variant": "emphasis" },
+    { "id": "breakdown-rows", "from": "db", "to": "breakdown_route", "y": 675, "label": "per-signal terms, weight * pct / sum(weight)", "variant": "return" },
+    { "id": "breakdown-json", "from": "breakdown_route", "to": "ranking_ui", "y": 710, "label": "ScoreExplainer renders", "variant": "return" }
+  ],
+  "activations": [
+    { "participant": "ranking_ui", "from": 175, "to": 715, "type": "frontend" },
+    { "participant": "top_homes_route", "from": 215, "to": 321, "type": "backend" },
+    { "participant": "bg_route", "from": 390, "to": 496, "type": "backend" },
+    { "participant": "breakdown_route", "from": 605, "to": 711, "type": "backend" },
+    { "participant": "db", "from": 250, "to": 678, "type": "database" }
+  ],
+  "cards": [
+    { "dot": "emerald", "title": "Nothing is precomputed at the weight level", "items": ["mv_home_signals is refreshed on a schedule by core.refresh_all_scores(); it holds raw signal values and per-signal percentiles/anchors, not a weighted score", "api.homes_ranked_weighted / blockgroup_scores_weighted / home_score_breakdown compute the weighted sum live, at request time, over that already-refreshed table", "This is a deliberate M2 decision: cheap to recompute per request, but never a stale weighted score"] },
+    { "dot": "cyan", "title": "Read-only role, bounded latency", "items": ["Every query runs as zeus_web_ro: SELECT/EXECUTE only, default_transaction_read_only=on, 15s role-level statement_timeout", "web/lib/db.ts additionally caps the pg Pool at statement_timeout 15s, query_timeout 20s, max 3 connections per instance", "All three routes set force-dynamic + Cache-Control: no-store; every request reflects the live database state"] },
+    { "dot": "rose", "title": "Keyset pagination", "items": ["/api/top-homes pages by (score, prop_id) cursor, 50 rows/page, not offset paging", "With a block group selected the same function filters to just that block group's gate-passed homes", "Page 1 additionally calls api.homes_ranked_weighted_count once for the 'Showing 1-50 of N' total"] }
+  ]
+}

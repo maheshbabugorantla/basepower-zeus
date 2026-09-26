@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Base Power Zeus - System Design",
+    "output": "system-design.html",
+    "quality_profile": "showcase",
+    "views": [
+      { "id": "read-path", "label": "Web read path", "focus": ["users", "web", "web_ro_role", "db", "storage"], "note": "Users hit Vercel web, which reads api.* through the read-only Postgres role and signs raw-file links through Storage." },
+      { "id": "pipeline-write-path", "label": "Pipeline write path", "focus": ["pipelines", "owner_role", "db", "sources", "storage"], "note": "Cron and CLI backfills download external sources, write raw files to Storage, and load core/ops tables through the owner role." },
+      { "id": "offline-briefing", "label": "Offline briefing", "focus": ["pipelines", "gemini", "jev", "db"], "note": "Gemini and the TypeSafe Jev judge run only inside the pipelines project, never on the web path." }
+    ]
+  },
+  "components": [
+    { "id": "sources", "type": "external", "label": "External sources", "sublabel": "TCAD, HCAD, permits, EAGLE-I, ERCOT, Census, ...", "pos": [40, 40], "size": [200, 70] },
+    { "id": "pipelines", "type": "backend", "label": "Vercel pipelines", "sublabel": "FastAPI crons + CLI backfills", "pos": [300, 40], "size": [190, 70] },
+    { "id": "gemini", "type": "external", "label": "Gemini briefings", "sublabel": "offline, GEMINI_API_KEY + BRIEF_MODEL", "pos": [650, 40], "size": [190, 64] },
+    { "id": "owner_role", "type": "security", "label": "owner role", "sublabel": "write access, pipelines only", "pos": [300, 220], "size": [190, 62] },
+    { "id": "jev", "type": "external", "label": "TypeSafe Jev", "sublabel": "labeling judge, M1 permit spot-checks", "pos": [650, 220], "size": [190, 64] },
+    { "id": "db", "type": "database", "label": "Supabase Postgres", "sublabel": "PostGIS, schemas ops/core/api", "pos": [400, 400], "size": [190, 70] },
+    { "id": "storage", "type": "cloud", "label": "Supabase Storage", "sublabel": "raw bucket, signed links", "pos": [700, 400], "size": [190, 64] },
+    { "id": "web_ro_role", "type": "security", "label": "zeus_web_ro", "sublabel": "SELECT/EXECUTE only, api schema", "pos": [300, 600], "size": [190, 62] },
+    { "id": "web", "type": "frontend", "label": "Vercel web", "sublabel": "Next.js 16, server components + routes", "pos": [300, 730], "size": [190, 70] },
+    { "id": "users", "type": "external", "label": "GTM analyst / demo room", "sublabel": "browser", "pos": [40, 730], "size": [160, 64] }
+  ],
+  "boundaries": [
+    { "kind": "security-group", "label": "no write credentials, no Gemini on web", "wraps": ["web", "web_ro_role"] },
+    { "kind": "security-group", "label": "owner credentials, offline only", "wraps": ["pipelines", "owner_role"] }
+  ],
+  "connections": [
+    { "id": "users-to-web", "from": "users", "to": "web", "label": "HTTPS", "variant": "emphasis" },
+    { "id": "web-to-role", "from": "web", "to": "web_ro_role", "label": "POSTGRES_URL_READONLY", "variant": "security", "fromSide": "top", "toSide": "bottom" },
+    { "id": "role-to-db", "from": "web_ro_role", "to": "db", "label": "SELECT api.*, EXECUTE api.*()", "variant": "default", "fromSide": "top", "toSide": "bottom" },
+    { "id": "web-to-storage", "from": "web", "to": "storage", "label": "sign link, publishable key", "variant": "default", "fromSide": "right", "toSide": "bottom" },
+    { "id": "sources-to-pipelines", "from": "sources", "to": "pipelines", "label": "download + SHA-256", "variant": "default", "labelAt": [270, 124] },
+    { "id": "pipelines-to-storage", "from": "pipelines", "to": "storage", "label": "raw file upload, manifested", "variant": "default", "labelAt": [595, 298] },
+    { "id": "pipelines-to-role", "from": "pipelines", "to": "owner_role", "label": "POSTGRES_URL_NON_POOLING", "variant": "security", "fromSide": "bottom", "toSide": "top", "labelAt": [388, 124] },
+    { "id": "role-to-db-write", "from": "owner_role", "to": "db", "label": "load ops/core, refresh_all_scores()", "variant": "default", "fromSide": "bottom", "toSide": "top" },
+    { "id": "pipelines-to-gemini", "from": "pipelines", "to": "gemini", "label": "home_summaries.py, CLI/cron only", "variant": "dashed" },
+    { "id": "pipelines-to-jev", "from": "pipelines", "to": "jev", "label": "classifier spot-check judge, M1", "variant": "dashed", "fromSide": "right", "toSide": "top", "labelAt": [700, 195] }
+  ],
+  "cards": [
+    { "dot": "emerald", "title": "Web read path", "items": ["Vercel web never holds a write credential or the Gemini key", "All data reads go through api schema views/functions via zeus_web_ro", "Raw source files are served by signed Storage links, never by the service-role key"] },
+    { "dot": "cyan", "title": "Pipeline write path", "items": ["Only pipelines holds the owner role and write credentials", "Every loaded row traces to an ops.source_manifest entry (URL, retrieved_at, SHA-256)", "core.refresh_all_scores() recomputes materialized views and anchors after a load"] },
+    { "dot": "rose", "title": "Offline-only boundary", "items": ["Gemini briefings run only in pipelines/sources/home_summaries.py, CLI/cron, never on a public route", "TypeSafe Jev judges labeling spot-checks (M1 permit labels), also offline", "This split keeps the public web app from ever triggering an LLM call"] }
+  ]
+}
