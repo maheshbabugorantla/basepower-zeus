@@ -197,7 +197,7 @@ def _load_population(conn, *, cutoff: date) -> list[dict]:
                 case
                     when bhc.homes_gated - 1 <= 0 then null
                     when bb.backup_permits_asof is null then null
-                    else (greatest(0, bb.backup_permits_asof - coalesce(ob.own_backup_asof, 0))::numeric
+                    else (greatest(0, bb.backup_permits_asof - (case when ob.own_backup_asof is null then 0 else ob.own_backup_asof end))::numeric
                           / (bhc.homes_gated - 1)) * 1000
                 end as backup_intent_asof_raw,
                 coalesce(o.adopted, false) as adopted
