@@ -88,6 +88,7 @@ interface ScoreContextRow {
 interface TopHomeRankRow {
   rank: string | number;
   total: string | number;
+  score: string | number;
 }
 
 // M2-W1: core.mv_home_signals (0201_m2.sql) — every M2 per-home gate +
@@ -244,13 +245,18 @@ async function getScoreContext(propId: string): Promise<ScoreContextRow | null> 
 async function getTopHomeRank(propId: string): Promise<TopHomeRankRow | null> {
   try {
     const rows = await query<TopHomeRankRow>(
+      // Same ranking the /ranking page shows by default (equal weights),
+      // so the header can never disagree with the table.
       `with ranked as (
-         select prop_id,
-                row_number() over (order by score desc, market_value desc nulls last) as rank,
+         select prop_id, score,
+                row_number() over () as rank,
                 count(*) over () as total
-         from api.top_homes
+         from api.top_homes_weighted(
+           '{"outage":1,"flood":1,"empower":1,"age65":1,"electric_heat":1,"backup_intent":1}'::jsonb,
+           (select county_fips from core.mv_home_signals where prop_id = $1)
+         )
        )
-       select rank, total from ranked where prop_id = $1`,
+       select rank, total, score from ranked where prop_id = $1`,
       [propId]
     );
     return rows[0] ?? null;
@@ -409,32 +415,27 @@ export default async function HomeDetailPage({
             </div>
           </div>
           <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "var(--space-1)" }}>
-            <span style={{ fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)" }}>Score</span>
-            {score === null ? (
-              <MissingState
-                variant="not-loaded"
-                reason={scoreContext?.score_null_reason ?? "This home's block group has no score yet"}
-              />
+            <span style={{ fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)" }}>Score (equal weights)</span>
+            {topHomeRank ? (
+              <>
+                <span
+                  style={{
+                    fontFamily: "var(--type-figure-font-family)",
+                    fontSize: "var(--type-figure-font-size)",
+                    fontWeight: "var(--type-figure-font-weight)",
+                  }}
+                >
+                  {Number(topHomeRank.score).toFixed(3)}
+                </span>
+                <span style={{ fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)" }}>
+                  Rank {Number(topHomeRank.rank)} of {Number(topHomeRank.total)} in top homes
+                </span>
+              </>
             ) : (
-              <span
-                style={{
-                  fontFamily: "var(--type-figure-font-family)",
-                  fontSize: "var(--type-figure-font-size)",
-                  fontWeight: "var(--type-figure-font-weight)",
-                }}
-              >
-                {score.toFixed(3)}
+              <span style={{ fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)", maxWidth: "220px", textAlign: "right" }}>
+                Not in the current top 50 at equal weights
               </span>
             )}
-            {topHomeRank ? (
-              <span style={{ fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)" }}>
-                Rank {Number(topHomeRank.rank)} of {Number(topHomeRank.total)} in top homes
-              </span>
-            ) : scoreContext?.bg_rank ? (
-              <span style={{ fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)" }}>
-                Block group ranks {Number(scoreContext.bg_rank)} of {Number(scoreContext.bg_scored_count)} scored
-              </span>
-            ) : null}
           </div>
         </div>
 

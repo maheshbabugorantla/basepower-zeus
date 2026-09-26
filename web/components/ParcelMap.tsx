@@ -2,7 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import type { Map as MapLibreMap } from "maplibre-gl";
-import * as maplibregl from "maplibre-gl";
+import { maplibregl } from "../lib/maplibre";
 import "maplibre-gl/dist/maplibre-gl.css";
 
 // M1-W3 fix #4 (Home detail): HomeDetail.dc.html's "Parcel" mini map,

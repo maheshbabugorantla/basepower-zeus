@@ -2,7 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import type { Map as MapLibreMap, ExpressionSpecification, MapLayerMouseEvent } from "maplibre-gl";
-import * as maplibregl from "maplibre-gl";
+import { maplibregl } from "../lib/maplibre";
 import "maplibre-gl/dist/maplibre-gl.css";
 
 // DESIGN.md §2 score ramp (light theme; the map basemap is light Positron,

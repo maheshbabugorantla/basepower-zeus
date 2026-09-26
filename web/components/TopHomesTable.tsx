@@ -1,5 +1,7 @@
 "use client";
 
+import { useState } from "react";
+
 import Link from "next/link";
 import {
   DataTable,
@@ -72,7 +74,11 @@ export interface TopHomesTableProps {
   rankDeltas?: Map<string, number>;
 }
 
-export function TopHomesTable({ rows, hoveredGeoid = null, onHoverRow, rankDeltas }: TopHomesTableProps) {
+export function TopHomesTable({ rows, onHoverRow, rankDeltas }: TopHomesTableProps) {
+  // Highlight only the row under the cursor. Highlighting every row in the
+  // hovered row's block group painted most of the list (the top homes share
+  // a few block groups); the map already shows the block group.
+  const [hoveredPropId, setHoveredPropId] = useState<string | null>(null);
   if (rows.length === 0) {
     return (
       <MissingState
@@ -106,9 +112,10 @@ export function TopHomesTable({ rows, hoveredGeoid = null, onHoverRow, rankDelta
           return (
             <DataTableRow
               key={row.propId}
-              selected={hoveredGeoid === row.blockGroupGeoid}
-              onMouseEnter={() => onHoverRow?.(row.blockGroupGeoid)}
-              onMouseLeave={() => onHoverRow?.(null)}
+              className="data-table__row--hoverable"
+              data-hovered={hoveredPropId === row.propId || undefined}
+              onMouseEnter={() => { setHoveredPropId(row.propId); onHoverRow?.(row.blockGroupGeoid); }}
+              onMouseLeave={() => { setHoveredPropId(null); onHoverRow?.(null); }}
             >
               <DataTableCell>
                 <span style={{ display: "inline-flex", alignItems: "center", gap: "var(--space-1)" }}>

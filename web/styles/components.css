@@ -728,3 +728,8 @@
 .figure__value {
   overflow-wrap: anywhere;
 }
+
+/* Top-homes row hover: one quiet row tint, not the selected-state lime. */
+.data-table__row--hoverable[data-hovered] {
+  background: var(--theme-surface-sunken, var(--color-surface-sunken));
+}
