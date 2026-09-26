@@ -19,3 +19,7 @@ __pycache__/
 
 # agent worktrees
 .claude/worktrees/
+
+# local python build artifacts
+pipelines/uv.lock
+*.egg-info/
