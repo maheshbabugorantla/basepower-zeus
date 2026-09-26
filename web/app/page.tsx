@@ -9,6 +9,7 @@ import {
   type OutageSummaryData,
 } from "../components/OutageSummary";
 import { StatRow, StatList } from "../components/ui/StatRow";
+import { PermitTimelinePanel, type PermitQuarterRow } from "../components/PermitTimelinePanel";
 
 // M0-W1: server component. `force-dynamic` is required, not decorative —
 // this page must query api.county_outage at request time (the EAGLE-I
@@ -357,6 +358,55 @@ async function getTopHomesCount(): Promise<number | null> {
   }
 }
 
+interface PermitQuarterDbRow {
+  period: string;
+  is_base_power: boolean;
+  n: string | number;
+  median_days: string | number | null;
+  p90_days: string | number | null;
+}
+
+/** M2-P9: "Time to permit a home battery in Austin" -- api.permit_path_stats,
+ * period_type='quarter', jurisdiction='ALL', label='battery'. Pivots the
+ * two is_base_power rows per quarter into one row per quarter (Other
+ * installers / Base Power side by side). */
+async function getPermitTimelineByQuarter(): Promise<PermitQuarterRow[]> {
+  try {
+    const rows = await query<PermitQuarterDbRow>(
+      `select period, is_base_power, n, median_days, p90_days
+       from api.permit_path_stats
+       where jurisdiction = 'ALL' and label = 'battery' and period_type = 'quarter'
+       order by period`
+    );
+    const byPeriod = new Map<string, PermitQuarterRow>();
+    for (const row of rows) {
+      const existing = byPeriod.get(row.period) ?? {
+        period: row.period,
+        otherMedianDays: null,
+        otherP90Days: null,
+        otherN: 0,
+        baseMedianDays: null,
+        baseP90Days: null,
+        baseN: 0,
+      };
+      if (row.is_base_power) {
+        existing.baseMedianDays = row.median_days === null ? null : Number(row.median_days);
+        existing.baseP90Days = row.p90_days === null ? null : Number(row.p90_days);
+        existing.baseN = Number(row.n);
+      } else {
+        existing.otherMedianDays = row.median_days === null ? null : Number(row.median_days);
+        existing.otherP90Days = row.p90_days === null ? null : Number(row.p90_days);
+        existing.otherN = Number(row.n);
+      }
+      byPeriod.set(row.period, existing);
+    }
+    return Array.from(byPeriod.values()).sort((a, b) => a.period.localeCompare(b.period));
+  } catch (err) {
+    console.error("page: failed to load api.permit_path_stats", err);
+    return [];
+  }
+}
+
 async function getSourcesLoadedCount(): Promise<number | null> {
   try {
     const rows = await query<{ n: string | number }>(`select count(*) as n from api.sources`);
@@ -368,13 +418,14 @@ async function getSourcesLoadedCount(): Promise<number | null> {
 }
 
 export default async function HomePage() {
-  const [distributors, countyContext, gateCounts, topHomesCount, sourcesLoadedCount] =
+  const [distributors, countyContext, gateCounts, topHomesCount, sourcesLoadedCount, permitTimeline] =
     await Promise.all([
       getDistributorReliability(),
       getCountyOutageContext(),
       getGateCounts(),
       getTopHomesCount(),
       getSourcesLoadedCount(),
+      getPermitTimelineByQuarter(),
     ]);
 
   const outageData: OutageSummaryData = { distributors, countyContext };
@@ -468,6 +519,24 @@ export default async function HomePage() {
             />
           </StatList>
         )}
+      </Panel>
+
+      <Panel>
+        <h2
+          style={{
+            fontFamily: "var(--type-heading-font-family)",
+            fontSize: "var(--type-heading-font-size)",
+            fontWeight: "var(--type-heading-font-weight)",
+            marginTop: 0,
+          }}
+        >
+          Time to permit a home battery in Austin
+        </h2>
+        <p style={{ margin: "0 0 var(--space-3) 0", color: "var(--theme-ink-muted)", maxWidth: "70ch" }}>
+          Days from application to issue for a City of Austin (Austin Energy) battery permit, by quarter --
+          other installers vs. Base Power&rsquo;s own permits.
+        </p>
+        <PermitTimelinePanel rows={permitTimeline} />
       </Panel>
 
       <Panel>

@@ -41,6 +41,11 @@ export const SIGNAL_KEYS = [
   "owner_65",
   "installability",
   "flood",
+  // M2-web-followup (P9/P10): three new weight keys api.homes_ranked_weighted
+  // / api.home_score_breakdown now read (0216_scoring_pass.sql).
+  "income_100k",
+  "age_35_64",
+  "permit_risk",
 ] as const;
 
 export type SignalKey = (typeof SIGNAL_KEYS)[number];
@@ -92,6 +97,10 @@ interface HomesRankedWeightedDbRow {
   outage_source_ids: string[] | null;
   home_value_term: string | number | null;
   installability_term: string | number | null;
+  income_100k_share: string | number | null;
+  age_35_64_share: string | number | null;
+  permit_path: string | null;
+  permit_risk_term: string | number | null;
 }
 
 function toNumberOrNull(value: string | number | null | undefined): number | null {
@@ -138,6 +147,10 @@ export function mapWeightedRow(row: HomesRankedWeightedDbRow): TopHomeRow {
     outageSourceIds: row.outage_source_ids ?? [],
     homeValueTerm: toNumberOrNull(row.home_value_term),
     installabilityTerm: toNumberOrNull(row.installability_term),
+    income100kShare: toNumberOrNull(row.income_100k_share),
+    age3564Share: toNumberOrNull(row.age_35_64_share),
+    permitPath: row.permit_path,
+    permitRiskTerm: toNumberOrNull(row.permit_risk_term),
   };
 }
 
@@ -163,6 +176,7 @@ interface RankedRequestBody {
   afterPropId?: unknown;
   pageSize?: unknown;
   hideOldHomes?: unknown;
+  excludeBackup?: unknown;
 }
 
 /**
@@ -189,6 +203,12 @@ export async function fetchRankedHomes(params: {
    * M2-W3 scope note — never once per page). */
   withTotal?: boolean;
   hideOldHomes?: boolean;
+  /** M2-P11 "Hide homes that already have backup" ranking toggle -- passed
+   * straight through to api.homes_ranked_weighted's p_exclude_backup,
+   * which defaults to true itself. Default true here too, so a caller
+   * that omits it gets the same "excluded by default" behavior as the SQL
+   * function. */
+  excludeBackup?: boolean;
 }): Promise<{ rows: TopHomeRow[]; total: number | null }> {
   const {
     weights,
@@ -199,19 +219,20 @@ export async function fetchRankedHomes(params: {
     pageSize = PAGE_SIZE,
     withTotal = false,
     hideOldHomes = false,
+    excludeBackup = true,
   } = params;
 
   const weightsJson = JSON.stringify(weights);
 
   const [rows, totalRows] = await Promise.all([
     query<HomesRankedWeightedDbRow>(
-      `select * from api.homes_ranked_weighted($1::jsonb, $2::text, $3::text, $4::numeric, $5::text, $6::int)`,
-      [weightsJson, countyFips, blockGroupGeoid, afterScore, afterPropId, pageSize]
+      `select * from api.homes_ranked_weighted($1::jsonb, $2::text, $3::text, $4::numeric, $5::text, $6::int, $7::boolean)`,
+      [weightsJson, countyFips, blockGroupGeoid, afterScore, afterPropId, pageSize, excludeBackup]
     ),
     withTotal
       ? query<{ total: string | number }>(
-          `select api.homes_ranked_weighted_count($1::jsonb, $2::text, $3::text) as total`,
-          [weightsJson, countyFips, blockGroupGeoid]
+          `select api.homes_ranked_weighted_count($1::jsonb, $2::text, $3::text, $4::boolean) as total`,
+          [weightsJson, countyFips, blockGroupGeoid, excludeBackup]
         )
       : Promise.resolve(null),
   ]);
@@ -252,6 +273,10 @@ export async function POST(request: Request) {
     ? Math.floor(body.pageSize)
     : PAGE_SIZE;
   const hideOldHomes = body.hideOldHomes === true;
+  // M2-P11: "Hide homes that already have backup" -- default ON (true),
+  // same as api.homes_ranked_weighted's own p_exclude_backup default;
+  // only an explicit `false` turns it off.
+  const excludeBackup = body.excludeBackup !== false;
   // Page 1 (no keyset cursor yet) also returns the total row count for
   // this filter — the route recomputes it whenever weights/selection
   // change (a fresh page-1 request), never on Next/Previous.
@@ -266,6 +291,7 @@ export async function POST(request: Request) {
     pageSize,
     withTotal,
     hideOldHomes,
+    excludeBackup,
   });
 
   return NextResponse.json(

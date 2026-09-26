@@ -8,6 +8,7 @@ import { PermitLabel } from "../../../components/PermitLabel";
 import { ParcelMap } from "../../../components/ParcelMap";
 import { SolarPanel } from "../../../components/SolarPanel";
 import { ScoreExplainer } from "../../../components/ScoreExplainer";
+import { PermitPath, type PermitPathKind, type PermitPathStatsRow, type PermitRulesCitation } from "../../../components/PermitPath";
 import {
   DataTable,
   DataTableBody,
@@ -142,6 +143,20 @@ interface HomeSignalsRow {
   outage_basis: string | null;
   outage_null_reason: string | null;
   outage_source_ids: string[] | null;
+  block_group_geoid: string | null;
+}
+
+// M2-P10: core.acs_income_age_bg -- block-group ACS shares, "labelled on
+// screen as neighborhood figures" per the ticket (same for every home in
+// the block group, like age65/electric_heat above).
+interface IncomeAgeRow {
+  median_household_income: string | number | null;
+  median_household_income_null_reason: string | null;
+  income_100k_share: string | number | null;
+  income_100k_share_null_reason: string | null;
+  age_35_64_share: string | number | null;
+  age_35_64_share_null_reason: string | null;
+  source_id: string;
 }
 
 const GATE_REASON_LABEL: Record<string, string> = {
@@ -180,6 +195,71 @@ async function getRetailMarket(eiaId: string): Promise<RetailMarketRow | null> {
   }
 }
 
+async function getIncomeAge(blockGroupGeoid: string): Promise<IncomeAgeRow | null> {
+  try {
+    const rows = await query<IncomeAgeRow>(
+      `select median_household_income, median_household_income_null_reason,
+              income_100k_share, income_100k_share_null_reason,
+              age_35_64_share, age_35_64_share_null_reason, source_id
+       from api.acs_income_age_bg
+       where geoid = $1`,
+      [blockGroupGeoid]
+    );
+    return rows[0] ?? null;
+  } catch (err) {
+    console.error("home-detail: failed to load api.acs_income_age_bg", err);
+    return null;
+  }
+}
+
+interface PermitPathStatsDbRow {
+  median_days: string | number | null;
+  p90_days: string | number | null;
+  share_never_finished: string | number | null;
+  share_issued_online: string | number | null;
+  source_id: string | null;
+}
+
+/** M2-P9: the latest SB 1252 period (jurisdiction='ALL', label='battery',
+ * period_type='sb1252', period='after_sb1252', all installers) --
+ * citywide, since Base's Austin permit raw file has no per-jurisdiction
+ * split finer than that within Austin Energy territory. */
+async function getPermitPathStats(): Promise<PermitPathStatsDbRow | null> {
+  try {
+    const rows = await query<PermitPathStatsDbRow>(
+      `select median_days, p90_days, share_never_finished, share_issued_online, source_id
+       from api.permit_path_stats
+       where jurisdiction = 'ALL' and label = 'battery' and period_type = 'sb1252'
+             and period = 'after_sb1252' and is_base_power = false`
+    );
+    return rows[0] ?? null;
+  } catch (err) {
+    console.error("home-detail: failed to load api.permit_path_stats", err);
+    return null;
+  }
+}
+
+interface PermitRuleDbRow {
+  quote: string;
+  source_url: string;
+}
+
+async function getPermitRuleCitation(permitPath: PermitPathKind): Promise<PermitRuleDbRow | null> {
+  if (permitPath === null) return null;
+  const rule = permitPath === "city_battery_permit" ? "residential_ess_permit_required" : "municipal_regulation_barred";
+  const authority = permitPath === "city_battery_permit" ? "City of Austin (Austin Energy)" : "State of Texas (SB 1252)";
+  try {
+    const rows = await query<PermitRuleDbRow>(
+      `select quote, source_url from api.permit_rules where authority = $1 and rule = $2`,
+      [authority, rule]
+    );
+    return rows[0] ?? null;
+  } catch (err) {
+    console.error("home-detail: failed to load api.permit_rules", err);
+    return null;
+  }
+}
+
 async function getHomeSignals(propId: string): Promise<HomeSignalsRow | null> {
   try {
     const rows = await query<HomeSignalsRow>(
@@ -197,7 +277,8 @@ async function getHomeSignals(propId: string): Promise<HomeSignalsRow | null> {
               battery_permit_date, permit_null_reason,
               yr_built, yr_built_null_reason,
               installability_term, installability_null_reason,
-              outage_minutes, outage_year, outage_basis, outage_null_reason, outage_source_ids
+              outage_minutes, outage_year, outage_basis, outage_null_reason, outage_source_ids,
+              block_group_geoid
        from core.mv_home_signals
        where prop_id = $1`,
       [propId]
@@ -404,6 +485,9 @@ const EQUAL_WEIGHTS = {
   owner_65: 5,
   installability: 5,
   flood: 5,
+  income_100k: 5,
+  age_35_64: 5,
+  permit_risk: 5,
 };
 
 // M2-P8: base article cited as the source for the "150-200A main breaker"
@@ -478,18 +562,31 @@ export default async function HomeDetailPage({
   const retailMarket = homeSignals?.territory_eia_id
     ? await getRetailMarket(homeSignals.territory_eia_id)
     : null;
+  // M2-P9: same territory -> path derivation api.home_score_breakdown uses
+  // -- Austin Energy (EIA 1015) keeps a city battery permit under SB
+  // 1252's municipally-owned-utility exception; every other matched
+  // territory (Oncor-area cities) follows state rules only.
+  const permitPath: PermitPathKind =
+    homeSignals?.territory_eia_id === "1015"
+      ? "city_battery_permit"
+      : homeSignals?.territory_eia_id
+        ? "state_rules_only"
+        : null;
+  const incomeAge = homeSignals?.block_group_geoid ? await getIncomeAge(homeSignals.block_group_geoid) : null;
   const permitSourceIds = home.permits.map((p) => p.source_id).filter((s): s is string => !!s);
-  const allSourceIds = Array.from(
-    new Set([
-      ...(home.source_ids ?? []),
-      ...permitSourceIds,
-      ...(homeSignals?.source_ids ?? []),
-      ...(retailMarket ? [retailMarket.source_id] : []),
-    ])
-  );
 
-  const [sourcesById, scoreContext, topHomeRank, parcelGeojson, rulesHaveRun, texasOutagePercentile] = await Promise.all([
-    getSourcesByIds(allSourceIds),
+  const [sourcesById, scoreContext, topHomeRank, parcelGeojson, rulesHaveRun, texasOutagePercentile, permitPathStatsRow, permitRuleRow] = await Promise.all([
+    getSourcesByIds(
+      Array.from(
+        new Set([
+          ...(home.source_ids ?? []),
+          ...permitSourceIds,
+          ...(homeSignals?.source_ids ?? []),
+          ...(retailMarket ? [retailMarket.source_id] : []),
+          ...(incomeAge ? [incomeAge.source_id] : []),
+        ])
+      )
+    ),
     getScoreContext(home.prop_id),
     getTopHomeRank(home.prop_id),
     getParcelGeojson(home.prop_id),
@@ -497,7 +594,39 @@ export default async function HomeDetailPage({
     homeSignals?.outage_minutes !== null && homeSignals?.outage_minutes !== undefined && homeSignals?.outage_year
       ? getTexasOutagePercentile(Number(homeSignals.outage_minutes), homeSignals.outage_year)
       : Promise.resolve(null),
+    permitPath === "city_battery_permit" ? getPermitPathStats() : Promise.resolve(null),
+    getPermitRuleCitation(permitPath),
   ]);
+
+  const permitPathStats: PermitPathStatsRow | null = permitPathStatsRow
+    ? {
+        medianDays: permitPathStatsRow.median_days === null ? null : Number(permitPathStatsRow.median_days),
+        p90Days: permitPathStatsRow.p90_days === null ? null : Number(permitPathStatsRow.p90_days),
+        shareNeverFinished:
+          permitPathStatsRow.share_never_finished === null ? null : Number(permitPathStatsRow.share_never_finished),
+        shareIssuedOnline:
+          permitPathStatsRow.share_issued_online === null ? null : Number(permitPathStatsRow.share_issued_online),
+        provenance: (() => {
+          const src = permitPathStatsRow.source_id ? sourcesById.get(permitPathStatsRow.source_id) : undefined;
+          if (!src) return null;
+          return {
+            dataset: src.source,
+            url: src.url,
+            retrievedAt: src.retrieved_at instanceof Date ? src.retrieved_at.toISOString() : String(src.retrieved_at),
+            sha256: src.sha256,
+            runId: src.latest_run_id ?? "none",
+            runner: src.runner,
+            rowsIn: src.latest_run_rows_in ?? null,
+            rowsLoaded: src.latest_run_rows_loaded ?? null,
+            rawFileHref: `/sources/raw/${src.source_id}`,
+          };
+        })(),
+      }
+    : null;
+
+  const permitRuleCitation: PermitRulesCitation | null = permitRuleRow
+    ? { quote: permitRuleRow.quote, sourceUrl: permitRuleRow.source_url }
+    : null;
 
   const address = [home.situs_num, home.situs_street].filter(Boolean).join(" ");
   const cityZip = [home.situs_city, home.situs_zip].filter(Boolean).join(" ");
@@ -799,6 +928,60 @@ export default async function HomeDetailPage({
                         {(Number(homeSignals.acs_pct_electric_heat) * 100).toFixed(1)}%
                       </span>{" "}
                       of housing units in this block group heat with electricity (ACS 2024, same for all homes in block group)
+                    </span>
+                  </ProvenanceFor>
+                )}
+              </dd>
+            </div>
+
+            <div>
+              <dt style={{ color: "var(--theme-ink-muted)", fontSize: "var(--type-label-font-size)" }}>Permit path</dt>
+              <dd style={{ margin: "var(--space-1) 0 0 0" }}>
+                <PermitPath
+                  propId={home.prop_id}
+                  permitPath={permitPath}
+                  stats={permitPathStats}
+                  ruleCitation={permitRuleCitation}
+                />
+              </dd>
+            </div>
+
+            <div>
+              <dt style={{ color: "var(--theme-ink-muted)", fontSize: "var(--type-label-font-size)" }}>Household income $100k+ (ACS, neighborhood figure)</dt>
+              <dd style={{ margin: "var(--space-1) 0 0 0" }}>
+                {incomeAge === null || incomeAge.income_100k_share === null ? (
+                  <MissingState
+                    variant="not-loaded"
+                    reason={incomeAge?.income_100k_share_null_reason ?? "No ACS income figure"}
+                  />
+                ) : (
+                  <ProvenanceFor sourceRow={sourcesById.get(incomeAge.source_id)} id={`${home.prop_id}-income100k`}>
+                    <span>
+                      <span style={{ fontFamily: "var(--type-data-font-family)", fontWeight: 600 }}>
+                        {(Number(incomeAge.income_100k_share) * 100).toFixed(1)}%
+                      </span>{" "}
+                      of this block group&rsquo;s households earn $100k+ (ACS 2024 5-year, same for every home in the block group)
+                    </span>
+                  </ProvenanceFor>
+                )}
+              </dd>
+            </div>
+
+            <div>
+              <dt style={{ color: "var(--theme-ink-muted)", fontSize: "var(--type-label-font-size)" }}>Prime working age 35-64 (ACS, neighborhood figure)</dt>
+              <dd style={{ margin: "var(--space-1) 0 0 0" }}>
+                {incomeAge === null || incomeAge.age_35_64_share === null ? (
+                  <MissingState
+                    variant="not-loaded"
+                    reason={incomeAge?.age_35_64_share_null_reason ?? "No ACS age figure"}
+                  />
+                ) : (
+                  <ProvenanceFor sourceRow={sourcesById.get(incomeAge.source_id)} id={`${home.prop_id}-age3564`}>
+                    <span>
+                      <span style={{ fontFamily: "var(--type-data-font-family)", fontWeight: 600 }}>
+                        {(Number(incomeAge.age_35_64_share) * 100).toFixed(1)}%
+                      </span>{" "}
+                      of this block group&rsquo;s population is aged 35-64 (ACS 2024 5-year, same for every home in the block group)
                     </span>
                   </ProvenanceFor>
                 )}

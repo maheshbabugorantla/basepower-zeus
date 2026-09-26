@@ -80,8 +80,14 @@ describe.skipIf(!process.env.POSTGRES_URL)("POST /api/top-homes (api.homes_ranke
       if (page1.rows.length === 0) return;
 
       const geoid = page1.rows[0].blockGroupGeoid;
+      // M2-P11: api.homes_ranked_weighted's p_exclude_backup now defaults
+      // to true (excludes homes with an existing battery/generator/other-
+      // installer backup permit). This test cross-checks against the raw
+      // gate-passed count for the geoid (core.mv_home_signals), which does
+      // NOT exclude those homes -- pass excludeBackup:false so both sides
+      // of the comparison mean the same population.
       const scopedResponse = await POST(
-        makeRequest({ weights, countyFips: TRAVIS_COUNTY_FIPS, blockGroupGeoid: geoid, pageSize: 5000 })
+        makeRequest({ weights, countyFips: TRAVIS_COUNTY_FIPS, blockGroupGeoid: geoid, pageSize: 5000, excludeBackup: false })
       );
       const scoped = await scopedResponse.json();
 

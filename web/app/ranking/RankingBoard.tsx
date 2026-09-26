@@ -56,6 +56,8 @@ async function fetchPage(params: {
   pageSize?: number;
   withTotal: boolean;
   hideOldHomes?: boolean;
+  /** M2-P11 "Hide homes that already have backup" -- default ON. */
+  excludeBackup?: boolean;
 }): Promise<{ rows: TopHomeRow[]; total: number | null }> {
   const response = await fetch("/api/top-homes", {
     method: "POST",
@@ -69,6 +71,7 @@ async function fetchPage(params: {
       afterPropId: params.cursor.afterPropId,
       pageSize: params.pageSize ?? DEFAULT_PAGE_SIZE,
       hideOldHomes: params.hideOldHomes ?? false,
+      excludeBackup: params.excludeBackup ?? true,
     }),
   });
   if (!response.ok) throw new Error(`Ranking request failed (HTTP ${response.status})`);
@@ -106,6 +109,11 @@ export function RankingBoard({
   // (a column the ranking function already returns on every row), never
   // a second request-time scan of core.parcels.
   const [hideOldHomes, setHideOldHomes] = useState(false);
+  // M2-P11: "Hide homes that already have backup" -- default ON (a home
+  // already known to have its own battery/generator/other-installer permit
+  // is excluded from outreach ranking by default; toggle restores them).
+  // Wired straight through to api.homes_ranked_weighted's p_exclude_backup.
+  const [hideExistingBackup, setHideExistingBackup] = useState(true);
 
   // County-wide vs. block-group-scoped ranking.
   const [selectedGeoid, setSelectedGeoid] = useState<string | null>(null);
@@ -169,7 +177,7 @@ export function RankingBoard({
       setError(null);
       try {
         const [page, dotsPage] = await Promise.all([
-          fetchPage({ weights, blockGroupGeoid: selectedGeoid, cursor: FIRST_CURSOR, withTotal: true, hideOldHomes }),
+          fetchPage({ weights, blockGroupGeoid: selectedGeoid, cursor: FIRST_CURSOR, withTotal: true, hideOldHomes, excludeBackup: hideExistingBackup }),
           selectedGeoid
             ? fetchPage({
                 weights,
@@ -178,6 +186,7 @@ export function RankingBoard({
                 pageSize: DOTS_PAGE_SIZE,
                 withTotal: false,
                 hideOldHomes,
+                excludeBackup: hideExistingBackup,
               })
             : Promise.resolve({ rows: [] as TopHomeRow[], total: null }),
         ]);
@@ -210,7 +219,7 @@ export function RankingBoard({
 
     return () => clearTimeout(debounceTimer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [weights, selectedGeoid, hideOldHomes]);
+  }, [weights, selectedGeoid, hideOldHomes, hideExistingBackup]);
 
   useEffect(() => {
     return () => {
@@ -223,7 +232,7 @@ export function RankingBoard({
     setLoading(true);
     setError(null);
     try {
-      const page = await fetchPage({ weights, blockGroupGeoid: selectedGeoid, cursor, withTotal: false, hideOldHomes });
+      const page = await fetchPage({ weights, blockGroupGeoid: selectedGeoid, cursor, withTotal: false, hideOldHomes, excludeBackup: hideExistingBackup });
       if (mySeq !== requestSeqRef.current) return;
       setRows(page.rows);
       setPageIndex(nextIndex);
@@ -297,6 +306,20 @@ export function RankingBoard({
           </label>
           <p style={{ margin: "var(--space-1) 0 0 0", fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)" }}>
             A team choice, not a Base rule.
+          </p>
+        </Panel>
+        <Panel>
+          <label style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", fontSize: "var(--type-body-font-size)" }}>
+            <input
+              type="checkbox"
+              checked={hideExistingBackup}
+              onChange={(e) => setHideExistingBackup(e.target.checked)}
+              data-testid="hide-existing-backup-toggle"
+            />
+            Hide homes that already have backup
+          </label>
+          <p style={{ margin: "var(--space-1) 0 0 0", fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)" }}>
+            On by default: excludes homes already known to have a battery, generator, or other installer&rsquo;s backup permit on file.
           </p>
         </Panel>
       </div>
