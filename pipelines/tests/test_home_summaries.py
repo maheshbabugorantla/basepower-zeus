@@ -41,9 +41,19 @@ def _real_facts_and_breakdown(prop_id: str) -> tuple[str, list[hs.BreakdownRow],
     return facts_text, breakdown, ctx
 
 
+#: M2-P8b: every 1/0 flag signal's fact line is phrased in words (Yes/No,
+# Has/Has no, Likely/Not yet), never as a bare "1.0"/"0.0" number — same
+# treatment build_fact_line already gave `flood`. `outage`'s own raw
+# value (home_score_breakdown's `raw_value`, literally distributor_saidi)
+# is skipped too: its fact line uses ctx.outage_minutes instead (real for
+# both a reported distributor SAIDI and an EAGLE-I-proxied home), checked
+# separately below.
+WORDS_NOT_NUMBERS_KEYS = {"flood", "owner_65", "home_permits", "installability", "outage"}
+
+
 @pytest.mark.parametrize("prop_id", REAL_PROP_IDS)
 def test_facts_text_is_real_and_nonempty(prop_id):
-    facts_text, breakdown, _ctx = _real_facts_and_breakdown(prop_id)
+    facts_text, breakdown, ctx = _real_facts_and_breakdown(prop_id)
     assert facts_text.strip() != ""
     assert "Location: Travis County, block group" in facts_text
     # Every available signal's raw value is extractable from the facts
@@ -52,11 +62,13 @@ def test_facts_text_is_real_and_nonempty(prop_id):
     # real numbers the guard will check a reply against.
     fact_numbers = hs.extract_numbers(facts_text)
     for row in breakdown:
-        # flood's fact line describes inside/outside in words, never as a
-        # formatted number (see build_fact_line) — nothing to check there.
-        if row.available and row.raw_value is not None and row.key != "flood":
+        if row.available and row.raw_value is not None and row.key not in WORDS_NOT_NUMBERS_KEYS:
             decimals = 2 if row.key == "backup_intent" else 1
             assert hs._normalize_number(f"{float(row.raw_value):.{decimals}f}") in fact_numbers
+
+    outage_row = next((r for r in breakdown if r.key == "outage"), None)
+    if outage_row is not None and outage_row.available and ctx.outage_minutes is not None:
+        assert hs._normalize_number(f"{float(ctx.outage_minutes):.1f}") in fact_numbers
 
 
 @pytest.mark.parametrize("prop_id", REAL_PROP_IDS)
