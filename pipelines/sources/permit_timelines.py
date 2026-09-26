@@ -15,12 +15,16 @@ recorded, not a new one).
 
 core.permit_timelines: one row per permit that core.permit_labels
 (labeller='rules', from austin_permits.py's keyword classifier) has
-already tagged battery/generator/solar/panel/ev. A permit can carry more
-than one label (e.g. "battery" and "generator" both matched); this table
-stores one representative label per permit_number (its primary key),
-chosen by priority battery > generator > solar > panel > ev -- the
-per-label AGGREGATE stats below use every matching label, not just the
-representative one.
+already tagged battery/generator/solar/panel/ev -- every such permit is
+kept regardless of its applied/issue date (never date-filtered). A
+permit can carry more than one label (e.g. "battery" and "generator"
+both matched); this table stores one representative label per
+permit_number (its primary key), chosen by priority
+battery > generator > solar > panel > ev -- the per-label AGGREGATE
+stats below use every matching label, not just the representative one.
+tcad_id (the raw file's own field, indexed) is carried through
+unchanged -- it joins core.parcels.geo_id, the key a later ticket uses
+to match a permit to the home it was pulled for.
 
 core.permit_path_stats: median/p90 days-to-issue, share never finished
 (status Expired/Withdrawn/VOID) and share issued online (issue_method
@@ -35,9 +39,10 @@ other than the in-person "Permit Center") -- grouped two ways:
     before SB 1252").
   - period_type='quarter': period = 'YYYY-Qn' by issue_date's calendar
     quarter, jurisdiction='ALL' only (the Overview panel is citywide).
-is_base_power rows (contractor_company_name EXACTLY 'Base Power' -- NOT
-a substring match: 'Solid Base Electric, LLC' is a different company
-and must never match) always use jurisdiction='ALL'.
+is_base_power rows (contractor_company_name an exact match on 'Base
+Power', trimmed and case-insensitive -- NOT a substring match:
+'Solid Base Electric, LLC' is a different company and must never match)
+always use jurisdiction='ALL'.
 """
 from __future__ import annotations
 
@@ -96,8 +101,9 @@ def days_to_issue(applied: date | None, issued: date | None) -> int | None:
 
 
 def is_base_power(contractor_company_name: str | None) -> bool:
-    """Exact match only: 'Solid Base Electric, LLC' is a different company."""
-    return (contractor_company_name or "").strip() == BASE_POWER_CONTRACTOR
+    """Exact match only (trimmed, case-insensitive): 'Solid Base Electric,
+    LLC' is a different company and must never match."""
+    return (contractor_company_name or "").strip().casefold() == BASE_POWER_CONTRACTOR.casefold()
 
 
 def is_never_finished(status_current: str | None) -> bool:
@@ -127,6 +133,7 @@ def record_fields(record: dict[str, Any]) -> dict[str, Any]:
     issued = _parse_date(record.get("issue_date"))
     return {
         "permit_number": _clean_str(record.get("permit_number")),
+        "tcad_id": _clean_str(record.get("tcad_id")),
         "applied_date": applied,
         "issued_date": issued,
         "days_to_issue": days_to_issue(applied, issued),
@@ -261,11 +268,12 @@ def load_timelines(conn, source_id: str, rows: list[dict[str, Any]]) -> int:
         cur.executemany(
             """
             insert into core.permit_timelines (
-                permit_number, label, applied_date, issued_date, days_to_issue,
+                permit_number, tcad_id, label, applied_date, issued_date, days_to_issue,
                 issue_method, status_current, jurisdiction, contractor_company_name,
                 is_base_power, source_id
-            ) values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ) values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             on conflict (permit_number) do update set
+                tcad_id = excluded.tcad_id,
                 label = excluded.label,
                 applied_date = excluded.applied_date,
                 issued_date = excluded.issued_date,
@@ -279,7 +287,7 @@ def load_timelines(conn, source_id: str, rows: list[dict[str, Any]]) -> int:
             """,
             [
                 (
-                    r["permit_number"], r["label"], r["applied_date"], r["issued_date"],
+                    r["permit_number"], r["tcad_id"], r["label"], r["applied_date"], r["issued_date"],
                     r["days_to_issue"], r["issue_method"], r["status_current"],
                     r["jurisdiction"], r["contractor_company_name"],
                     is_base_power(r["contractor_company_name"]), source_id,

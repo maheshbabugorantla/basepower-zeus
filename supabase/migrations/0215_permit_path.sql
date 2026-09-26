@@ -18,6 +18,7 @@
 
 create table if not exists core.permit_timelines (
     permit_number           text primary key references core.permits (permit_number),
+    tcad_id                 text,
     label                   text not null check (label in ('battery', 'generator', 'solar', 'panel', 'ev')),
     applied_date            date,
     issued_date             date,
@@ -31,19 +32,24 @@ create table if not exists core.permit_timelines (
     created_at              timestamptz not null default now()
 );
 
+create index if not exists permit_timelines_tcad_id_idx on core.permit_timelines (tcad_id);
 create index if not exists permit_timelines_jurisdiction_idx on core.permit_timelines (jurisdiction);
 create index if not exists permit_timelines_label_idx on core.permit_timelines (label);
 create index if not exists permit_timelines_is_base_power_idx on core.permit_timelines (is_base_power) where is_base_power;
 
 comment on table core.permit_timelines is
     'One row per Austin permit rules-labelled battery/generator/solar/panel/ev '
-    '(core.permit_labels, labeller=''rules''): applied/issued dates, '
-    'days_to_issue, issue_method, status_current, the raw file''s own '
-    'jurisdiction field, contractor_company_name, and is_base_power (EXACT '
-    'match on contractor_company_name = ''Base Power'' -- ''Solid Base '
-    'Electric, LLC'' is a different company). label is one representative '
-    'label per permit (priority battery > generator > solar > panel > ev) -- '
-    'a permit matching more than one label counts under every matching '
+    '(core.permit_labels, labeller=''rules''), kept regardless of applied/'
+    'issue date -- never date-filtered: tcad_id (indexed, joins '
+    'core.parcels.geo_id -- the key a later ticket uses to match a permit '
+    'to the home it was pulled for), applied/issued dates, days_to_issue, '
+    'issue_method, status_current, the raw file''s own jurisdiction field, '
+    'contractor_company_name, and is_base_power (an EXACT match on '
+    'contractor_company_name = ''Base Power'', trimmed and '
+    'case-insensitive -- ''Solid Base Electric, LLC'' is a different '
+    'company and never matches). label is one representative label per '
+    'permit (priority battery > generator > solar > panel > ev) -- a '
+    'permit matching more than one label counts under every matching '
     'label in core.permit_path_stats, not just this one. Filled by '
     'pipelines/sources/permit_timelines.py (M2-P9), which reads the '
     'already-manifested austin_permits raw file directly (no new '

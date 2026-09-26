@@ -54,6 +54,7 @@ def test_record_fields_before_sb1252():
     rec = _load_fixture_record("battery_before_sb1252")
     fields = permit_timelines.record_fields(rec)
     assert fields["permit_number"] == "2023-043728 EP"
+    assert fields["tcad_id"] == "0100061056"
     assert fields["applied_date"].isoformat() == "2023-04-11"
     assert fields["issued_date"].isoformat() == "2023-11-21"
     assert fields["days_to_issue"] == (fields["issued_date"] - fields["applied_date"]).days
@@ -87,6 +88,17 @@ def test_is_base_power_is_an_exact_match_not_a_substring():
     solid_base_rec = _load_fixture_record("solid_base_electric_permit")
     assert solid_base_rec["contractor_company_name"] == "Solid Base Electric, LLC"
     assert permit_timelines.is_base_power(solid_base_rec["contractor_company_name"]) is False
+
+
+def test_is_base_power_is_trimmed_and_case_insensitive():
+    assert permit_timelines.is_base_power("Base Power") is True
+    assert permit_timelines.is_base_power("BASE POWER") is True
+    assert permit_timelines.is_base_power("base power") is True
+    assert permit_timelines.is_base_power("  Base Power  ") is True
+    # Still never a substring match on a different real company's name.
+    assert permit_timelines.is_base_power("SOLID BASE ELECTRIC, LLC") is False
+    assert permit_timelines.is_base_power("Base Power Solar LLC") is False
+    assert permit_timelines.is_base_power(None) is False
 
 
 def test_quarter_of():
@@ -235,6 +247,19 @@ def test_live_db_permit_timelines_and_stats_loaded():
                 "where contractor_company_name = 'Solid Base Electric, LLC' and is_base_power"
             )
             assert cur.fetchone()[0] == 0, "'Solid Base Electric, LLC' must never be flagged is_base_power"
+
+            cur.execute(
+                "select count(*) from core.permit_timelines where is_base_power and tcad_id is not null"
+            )
+            base_power_with_tcad = cur.fetchone()[0]
+            assert base_power_with_tcad > 0, "no Base Power permit rows carry a tcad_id"
+
+            cur.execute(
+                "select count(distinct pt.tcad_id) from core.permit_timelines pt "
+                "join core.parcels p on p.geo_id = pt.tcad_id "
+                "where pt.is_base_power"
+            )
+            assert cur.fetchone()[0] > 0, "no Base Power permit tcad_id resolves to a real core.parcels row"
 
             cur.execute(
                 "select n, median_days, p90_days from api.permit_path_stats "
