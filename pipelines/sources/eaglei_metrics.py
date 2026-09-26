@@ -8,8 +8,9 @@ counties as early as possible, since neither 1.4 GB file is loaded into
 memory at once) to compute, per county:
 
   longest_event_hours / _peak_customers / _start_epoch / _end_epoch
-      The longest run of consecutive 15-minute snapshots with
-      customers_out > 0 in the latest published year (2025, same file
+      The longest run of consecutive 15-minute snapshots with at least 1%
+      of the county's customers out (MAJOR_EVENT_MIN_SHARE; floor from
+      EAGLE-I MCC customers) in the latest published year (2025, same file
       pipelines/sources/eaglei.py uses). "Consecutive" means each row's
       run_start_time is exactly 15 minutes after the previous row kept for
       that county — any gap (including a snapshot where customers_out was
@@ -61,6 +62,8 @@ CLI-only (`python -m pipelines.run eaglei_metrics --backfill`), same
 posture as eaglei.py.
 """
 from __future__ import annotations
+
+import math
 
 import base64
 import hashlib
@@ -354,11 +357,20 @@ def stream_county_series(path: str, fips_set: set[str], *,
     return series
 
 
-def longest_event(rows: list[tuple[datetime, int]]) -> dict[str, Any] | None:
-    """Given one county's (timestamp, customers_out>0) rows, return the
-    longest run of consecutive 15-minute snapshots (a gap of any size, or
-    a snapshot EAGLE-I omitted, ends the run): {hours, peak_customers,
-    start, end}. None if `rows` is empty."""
+# A "major outage event" needs at least this share of the county's
+# customers out at once (team choice, stated on screen). Without a floor, a
+# large county never reads zero (Harris 2025: a literal "any customer out"
+# run lasted 63 days), which is background noise, not an event.
+MAJOR_EVENT_MIN_SHARE = 0.01
+
+
+def longest_event(rows: list[tuple[datetime, int]], min_customers: int = 1) -> dict[str, Any] | None:
+    """Given one county's (timestamp, customers_out) rows, return the
+    longest run of consecutive 15-minute snapshots with customers_out >=
+    min_customers (a gap of any size, a snapshot EAGLE-I omitted, or one
+    below the floor ends the run): {hours, peak_customers, start, end}.
+    None if no snapshot reaches the floor."""
+    rows = [(ts, c) for ts, c in rows if c >= min_customers]
     if not rows:
         return None
     ordered = sorted(rows)
@@ -576,11 +588,12 @@ def run(*, runner: Runner, backfill: bool = False, cursor: dict[str, Any] | None
 
         with db.connect(pooled=False) as conn:
             for fips in TARGET_COUNTIES:
-                event = longest_event(series_2025.get(fips, []))
+                mcc_customers, mcc_source_id = read_county_customers(conn, fips)
+                floor = max(1, math.ceil(MAJOR_EVENT_MIN_SHARE * float(mcc_customers))) if mcc_customers else 1
+                event = longest_event(series_2025.get(fips, []), min_customers=floor)
                 load_longest_event(conn, fips, event, source_id=manifest_2025["id"])
 
                 peak = july_peak(series_2024_july.get(fips, []))
-                mcc_customers, mcc_source_id = read_county_customers(conn, fips)
                 load_beryl_peak(
                     conn, fips, peak,
                     source_id_2024=manifest_2024["id"],
