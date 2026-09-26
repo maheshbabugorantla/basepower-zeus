@@ -25,7 +25,10 @@ import { buildTemplateSentence, type BreakdownSignal } from "../../components/Sc
 const TRAVIS_COUNTY_FIPS = "48453";
 // The 3 real homes pipelines/sources/home_summaries.py pre-generated a
 // summary for as part of this ticket's build (see its TEST_PROP_IDS).
-const REAL_HOMES_WITH_STORED_SUMMARY = ["572532", "572533", "572534"];
+// M2-web-followup: kept in lockstep with pipelines/sources/home_summaries.py's
+// TEST_PROP_IDS (refreshed off a data-drift-related failure -- the
+// previous 3 homes had aged out of the top 50 at equal weights).
+const REAL_HOMES_WITH_STORED_SUMMARY = ["113398", "509880", "713484"];
 
 function breakdownRequest(propId: string, weights: Record<string, number>) {
   return new Request("http://localhost/ranking/breakdown", {
@@ -46,6 +49,11 @@ describe.skipIf(!process.env.POSTGRES_URL_READONLY)("M2-W5 score breakdown + sum
 
   it("api.home_score_breakdown's contributions sum to the ranked score on 3 real homes (±0.001)", async () => {
     const weights = equalWeights();
+    // M2-web-followup: several sequential round trips against the live
+    // Supabase pooler (3 homes x a pageSize-500 rank fetch + a breakdown
+    // fetch each) -- vitest's 5000ms default is too tight for that many
+    // real network round trips; other real-DB tests in this suite already
+    // use an explicit longer timeout (see tests/m2-map).
     const firstPage = await (
       await topHomesPOST(
         new Request("http://localhost/api/top-homes", {
@@ -75,7 +83,7 @@ describe.skipIf(!process.env.POSTGRES_URL_READONLY)("M2-W5 score breakdown + sum
 
       expect(Math.abs(total - rankedRow.score)).toBeLessThanOrEqual(0.001);
     }
-  });
+  }, 20000);
 
   it("a home with a pre-generated summary reads back in well under 100ms", async () => {
     const propId = REAL_HOMES_WITH_STORED_SUMMARY[0];
@@ -147,5 +155,5 @@ describe.skipIf(!process.env.POSTGRES_URL_READONLY)("M2-W5 score breakdown + sum
     for (const s of top2) {
       expect(template).toContain(s.label.split(" (")[0]);
     }
-  });
+  }, 20000);
 });

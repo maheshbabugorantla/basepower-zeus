@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { query } from "../../lib/db";
 import { RankingBoard } from "./RankingBoard";
 import { QualityPanel, type QualityPanelData, type ClassifierPrecisionRow } from "../../components/QualityPanel";
@@ -225,6 +226,9 @@ export default async function RankingPage() {
         <p style={{ color: "var(--theme-ink-muted)", margin: "var(--space-1) 0 0 0", maxWidth: "80ch" }}>
           Ranking owner-occupied single-family homes inside Travis County on outage
           exposure, grid value, installability and household fit.
+        </p>
+        <p style={{ margin: "var(--space-1) 0 0 0" }}>
+          <Link href="/ranking/coverage">See coverage gaps -- where Base isn&rsquo;t yet, but backup demand is proven →</Link>
         </p>
       </div>
       <RankingBoard

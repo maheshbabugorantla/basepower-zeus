@@ -17,12 +17,13 @@ describe("WeightSliders (M2-P8)", () => {
     expect(html).toContain("Neighborhood");
   });
 
-  it("renders a slider for all 10 signals with their plain-language labels", () => {
+  it("renders a slider for all 13 signals with their plain-language labels", () => {
     for (const label of Object.values(SIGNAL_LABELS)) {
       expect(html, `missing label "${label}"`).toContain(label);
     }
-    // 10 range inputs, one per signal.
-    expect(html.match(/type="range"/g)?.length).toBe(10);
+    // 13 range inputs, one per signal (M2-web-followup added income_100k/
+    // age_35_64/permit_risk to the original 10).
+    expect(html.match(/type="range"/g)?.length).toBe(13);
   });
 
   it("renders both the evidence-based-defaults and reset-to-equal actions", () => {

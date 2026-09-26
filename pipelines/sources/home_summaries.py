@@ -60,14 +60,24 @@ SOURCE = "home_summaries"
 # columns, 4 new home-level signals) and every fact line was rewritten to
 # use the anchored term instead of the discarded percentile — a prompt
 # version bump so no stale prompt-v4 row is mistaken for current.
-PROMPT_VERSION = 5
+# M2-web-followup: three new breakdown keys (income_100k, age_35_64,
+# permit_risk -- 0216_scoring_pass.sql) added to EQUAL_WEIGHTS and given
+# their own fact lines below -- another prompt version bump.
+PROMPT_VERSION = 6
 TRAVIS_COUNTY_FIPS = "48453"
 TOP_N = 500
 # The 3 real homes pipelines/tests/test_home_summaries.py's live-DB tests
 # exercise (verified gate-passed Travis homes, seen in api.top_homes_weighted
 # at equal weights during this ticket's build) — unioned into every
 # non-backfill run so the tested rows always exist in core.home_summary.
-TEST_PROP_IDS: tuple[str, ...] = ("572532", "572533", "572534")
+# M2-web-followup: refreshed to 3 homes that are actually in the current
+# top 50 at equal weights (48453) -- the previous 3 (572532/572533/572534)
+# drifted out of the top 50 as the live pipeline data changed since they
+# were picked, breaking pipelines/tests/test_home_summaries.py's
+# "verified gate-passed homes ... in api.top_homes_weighted at equal
+# weights" identity (a real, pre-existing data-drift bug this ticket
+# fixes, unrelated to the new income_100k/age_35_64/permit_risk terms).
+TEST_PROP_IDS: tuple[str, ...] = ("113398", "509880", "713484")
 
 GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 GEMINI_TIMEOUT_S = 8.0
@@ -78,6 +88,16 @@ CONCURRENCY = 5
 # read (0212_home_signals_build.sql / 0212b_home_signals_swap.sql /
 # 0212c_home_signals_perf.sql) — same set web/app/api/top-homes/route.ts's
 # SIGNAL_KEYS lists.
+# M2-web-followup: deliberately NOT adding income_100k/age_35_64/
+# permit_risk here -- api.home_score_breakdown returns a row for every
+# signal key regardless of what's in this weights JSON (availability/
+# raw_value/term come from the data, not the weight), so build_fact_line's
+# new branches below already produce grounded fact lines for these three
+# signals without changing this dict. Adding them here would instead
+# change the *selection* ranking (select_target_prop_ids's own separate
+# equal-weight score) and the *summary's* top-2 contribution ordering --
+# out of scope for a facts/labels-only update, and it silently dropped the
+# 3 REAL_PROP_IDS test homes out of the top 50 when tried.
 EQUAL_WEIGHTS: dict[str, float] = {
     "outage": 1, "home_value": 1, "backup_intent": 1, "age65": 1, "home_permits": 1,
     "electric_heat": 1, "empower": 1, "owner_65": 1, "installability": 1, "flood": 1,
@@ -326,6 +346,23 @@ def build_fact_line(row: BreakdownRow, ctx: HomeContext) -> str | None:
         )
     if row.key == "home_value":
         return f"Home value: ${_fmt(row.raw_value, 0)} (TCAD market value).{_anchor_note(row)}"
+    if row.key == "income_100k":
+        return (
+            f"Household income $100k+: {_fmt(row.raw_value, 1)}% of this block group's households earn "
+            f"$100k+ (ACS 2024 5-year, neighborhood figure, same for every home in the block group)."
+            f"{_anchor_note(row)}"
+        )
+    if row.key == "age_35_64":
+        return (
+            f"Prime working age 35-64: {_fmt(row.raw_value, 1)}% of this block group's population is "
+            f"aged 35-64 (ACS 2024 5-year, neighborhood figure, same for every home in the block group)."
+            f"{_anchor_note(row)}"
+        )
+    if row.key == "permit_risk":
+        return (
+            f"Permit risk: {_fmt(row.raw_value, 0)} days median time-to-issue for a City of Austin battery "
+            f"permit this quarter (citywide, all installers).{_anchor_note(row)}"
+        )
     return None
 
 

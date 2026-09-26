@@ -70,6 +70,11 @@ export interface TopHomeRow {
   outageSourceIds: string[];
   homeValueTerm: number | null;
   installabilityTerm: number | null;
+  /** M2-P10/P9 (block group ACS shares + per-home permit path/risk). */
+  income100kShare: number | null;
+  age3564Share: number | null;
+  permitPath: string | null;
+  permitRiskTerm: number | null;
 }
 
 /** api.homes_ranked_weighted's reason keys -> a short label + DESIGN.md signal
@@ -98,6 +103,13 @@ export const REASON_META: Record<string, { label: string; signal: SignalName }> 
   home_permits: { label: "Own solar/EV/generator permit", signal: "install" },
   installability: { label: "Installability", signal: "install" },
   home_value: { label: "Home value", signal: "grid" },
+  // M2-P10: block-group ACS shares -> household (same category as
+  // age65/electric_heat, the other neighborhood-demographic signals).
+  income_100k: { label: "Household income $100k+", signal: "household" },
+  age_35_64: { label: "Prime working age 35-64", signal: "household" },
+  // M2-P9: permit-timeline risk is an installability/eligibility signal,
+  // same category as home_permits/installability/backup_intent.
+  permit_risk: { label: "Permit friction", signal: "install" },
 };
 
 function formatAddressLine(row: TopHomeRow): string {

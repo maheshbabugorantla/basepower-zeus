@@ -32,6 +32,13 @@ export const SIGNAL_LABELS: Record<SignalKey, string> = {
   owner_65: "Homeowner 65+",
   installability: "Installability",
   flood: "Outside flood zone",
+  // M2-web-followup (P9/P10): income_100k/age_35_64 are block-group ACS
+  // shares (neighborhood figures); permit_risk is the Austin permit-
+  // timeline friction term (an installability/eligibility signal on
+  // "This home", small default weight).
+  income_100k: "Households earning $100k+",
+  age_35_64: "Adults 35–64",
+  permit_risk: "Permit friction",
 };
 
 export interface SliderGroup {
@@ -42,8 +49,8 @@ export interface SliderGroup {
 // Ticket-specified grouping: "Outage & grid", "This home", "Neighborhood".
 export const SLIDER_GROUPS: SliderGroup[] = [
   { heading: "Outage & grid", keys: ["outage"] },
-  { heading: "This home", keys: ["home_value", "home_permits", "owner_65", "installability", "flood"] },
-  { heading: "Neighborhood", keys: ["backup_intent", "age65", "electric_heat", "empower"] },
+  { heading: "This home", keys: ["home_value", "home_permits", "owner_65", "installability", "flood", "permit_risk"] },
+  { heading: "Neighborhood", keys: ["backup_intent", "age65", "electric_heat", "empower", "income_100k", "age_35_64"] },
 ];
 
 export const SIGNAL_ORDER: SignalKey[] = SLIDER_GROUPS.flatMap((g) => g.keys);

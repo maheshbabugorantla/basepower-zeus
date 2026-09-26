@@ -3,11 +3,13 @@ import { SIGNAL_KEYS, sanitizeWeights } from "../../app/api/top-homes/route";
 import { REASON_META } from "../../components/TopHomesTable";
 import { SLIDER_GROUPS, SIGNAL_ORDER, equalWeights, WEIGHT_EQUAL } from "../../components/WeightSliders";
 
-// M2-P8: the ranking function now reads 10 weight keys (home-level
-// signals owner_65/home_permits/installability/home_value joined to the
-// existing outage/backup_intent/age65/electric_heat/empower/flood) —
-// pure unit tests, no DB, covering the plumbing every route/component
-// shares (sanitizeWeights, REASON_META, the slider groups).
+// M2-P8: the ranking function reads 10 home-level/neighborhood weight
+// keys (owner_65/home_permits/installability/home_value joined to the
+// existing outage/backup_intent/age65/electric_heat/empower/flood).
+// M2-web-followup (P9/P10) added 3 more (income_100k, age_35_64,
+// permit_risk -- 0216_scoring_pass.sql) -- pure unit tests, no DB,
+// covering the plumbing every route/component shares (sanitizeWeights,
+// REASON_META, the slider groups).
 
 const EXPECTED_KEYS = [
   "outage",
@@ -20,12 +22,15 @@ const EXPECTED_KEYS = [
   "owner_65",
   "installability",
   "flood",
+  "income_100k",
+  "age_35_64",
+  "permit_risk",
 ];
 
 describe("M2-P8 weight keys", () => {
-  it("SIGNAL_KEYS is exactly the 10 keys the SQL scoring functions read", () => {
+  it("SIGNAL_KEYS is exactly the 13 keys the SQL scoring functions read", () => {
     expect(new Set(SIGNAL_KEYS)).toEqual(new Set(EXPECTED_KEYS));
-    expect(SIGNAL_KEYS.length).toBe(10);
+    expect(SIGNAL_KEYS.length).toBe(13);
   });
 
   it("sanitizeWeights keeps every real key and drops unknown/invalid ones", () => {
@@ -57,12 +62,12 @@ describe("M2-P8 weight keys", () => {
         seen.add(key);
       }
     }
-    expect(seen.size).toBe(10);
+    expect(seen.size).toBe(13);
   });
 
-  it("equalWeights() sets every one of the 10 keys to the same mid-scale value", () => {
+  it("equalWeights() sets every one of the 13 keys to the same mid-scale value", () => {
     const weights = equalWeights();
-    expect(Object.keys(weights).length).toBe(10);
+    expect(Object.keys(weights).length).toBe(13);
     for (const key of SIGNAL_KEYS) expect(weights[key]).toBe(WEIGHT_EQUAL);
   });
 });
