@@ -125,6 +125,38 @@ const GATE_REASON_LABEL: Record<string, string> = {
   territory_not_base_served: "Not in a utility Base serves (HIFLD polygon match, or Base's served-utilities list does not mark it mapped=yes)",
 };
 
+// M2-W4: regulated (no retail choice, e.g. Austin Energy municipal) vs
+// deregulated (retail choice, e.g. Oncor) market, from api.retail_market
+// (0206_retail_market.sql) -- a single row keyed by eia_utility_number,
+// the same EIA-861 number homeSignals.territory_eia_id already carries.
+// A PK/unique-index lookup, well under the 50 ms budget.
+interface RetailMarketRow {
+  eia_utility_number: string;
+  utility_name: string | null;
+  retail_market: "deregulated" | "not_deregulated";
+  plain_language: string;
+  source_url: string;
+  quote: string;
+  retrieved_at: string | Date;
+  source_id: string;
+}
+
+async function getRetailMarket(eiaId: string): Promise<RetailMarketRow | null> {
+  try {
+    const rows = await query<RetailMarketRow>(
+      `select eia_utility_number, utility_name, retail_market, plain_language,
+              source_url, quote, retrieved_at, source_id
+       from api.retail_market
+       where eia_utility_number = $1`,
+      [eiaId]
+    );
+    return rows[0] ?? null;
+  } catch (err) {
+    console.error("home-detail: failed to load api.retail_market", err);
+    return null;
+  }
+}
+
 async function getHomeSignals(propId: string): Promise<HomeSignalsRow | null> {
   try {
     const rows = await query<HomeSignalsRow>(
@@ -364,9 +396,17 @@ export default async function HomeDetailPage({
     homeSignals && homeSignals.distributor_saidi === null && homeSignals.territory_eia_id
       ? await getDistributorSaidiNullReason(homeSignals.territory_eia_id)
       : null;
+  const retailMarket = homeSignals?.territory_eia_id
+    ? await getRetailMarket(homeSignals.territory_eia_id)
+    : null;
   const permitSourceIds = home.permits.map((p) => p.source_id).filter((s): s is string => !!s);
   const allSourceIds = Array.from(
-    new Set([...(home.source_ids ?? []), ...permitSourceIds, ...(homeSignals?.source_ids ?? [])])
+    new Set([
+      ...(home.source_ids ?? []),
+      ...permitSourceIds,
+      ...(homeSignals?.source_ids ?? []),
+      ...(retailMarket ? [retailMarket.source_id] : []),
+    ])
   );
 
   const [sourcesById, scoreContext, topHomeRank, parcelGeojson, rulesHaveRun] = await Promise.all([
@@ -523,6 +563,55 @@ export default async function HomeDetailPage({
                       </div>
                     ) : null}
                   </>
+                )}
+              </dd>
+            </div>
+
+            <div>
+              <dt style={{ color: "var(--theme-ink-muted)", fontSize: "var(--type-label-font-size)" }}>Electricity market</dt>
+              <dd style={{ margin: "var(--space-1) 0 0 0" }}>
+                {homeSignals.territory_eia_id === null ? (
+                  <MissingState
+                    variant="not-loaded"
+                    reason="No utility territory match for this home yet — the electricity market can't be shown without one"
+                  />
+                ) : retailMarket === null ? (
+                  <MissingState
+                    variant="not-available"
+                    reason="This home's utility isn't in Base's cited retail-market list yet"
+                  />
+                ) : (
+                  (() => {
+                    const marketManifest = sourcesById.get(retailMarket.source_id);
+                    // Reuses the existing ProvenancePopover as-is (DESIGN.md:
+                    // reuse tokens/base components, never invent new ones) —
+                    // its "Dataset" row is repurposed to carry Base's own
+                    // verbatim quote as the link text, hrefed to Base's
+                    // source page (retailMarket.source_url), while
+                    // retrieved/SHA-256/run/raw-file still describe the
+                    // loaded data/manual/retail_market.csv snapshot.
+                    if (!marketManifest) return <span>{retailMarket.plain_language}</span>;
+                    return (
+                      <ProvenancePopover
+                        id={`${home.prop_id}-retail-market`}
+                        dataset={`"${retailMarket.quote}"`}
+                        url={retailMarket.source_url}
+                        retrievedAt={
+                          marketManifest.retrieved_at instanceof Date
+                            ? marketManifest.retrieved_at.toISOString()
+                            : String(marketManifest.retrieved_at)
+                        }
+                        sha256={marketManifest.sha256}
+                        runId={marketManifest.latest_run_id ?? "none"}
+                        runner={marketManifest.runner}
+                        rowsIn={marketManifest.latest_run_rows_in ?? null}
+                        rowsLoaded={marketManifest.latest_run_rows_loaded ?? null}
+                        rawFileHref={`/sources/raw/${marketManifest.source_id}`}
+                      >
+                        <span>{retailMarket.plain_language}</span>
+                      </ProvenancePopover>
+                    );
+                  })()
                 )}
               </dd>
             </div>

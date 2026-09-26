@@ -1,5 +1,7 @@
+import { Suspense } from "react";
 import { Panel } from "./ui/Panel";
 import { MissingState } from "./ui/MissingState";
+import { query } from "../lib/db";
 
 // M2-W1: "Can Base serve this home?" (api.gate_counts, 0201_m2.sql — the
 // home -> Base-served-utility check, distinct from M1's parcel-level
@@ -44,6 +46,102 @@ function segmentClass(reason: string): string {
   if (reason === "passed") return "gate-funnel__segment--passed";
   if (NOT_LOADED_REASONS.has(reason)) return "gate-funnel__segment--not-loaded";
   return "gate-funnel__segment--excluded";
+}
+
+// M2-W4: "Can Base serve this home?" split by electricity market
+// (api.gate_counts_by_market, 0206_retail_market.sql — built on
+// core.mv_home_signals + core.retail_market, a small precomputed table
+// read by a plain SELECT, never a request-time join over parcels). Own
+// query + render, wrapped in Suspense: in the real Next.js app this
+// server component is awaited and streamed in below the funnel above
+// with no change needed to whatever page renders <GateCounts>; a plain
+// synchronous React renderer (e.g. this component's own unit tests)
+// simply shows the Suspense fallback (nothing) instead, so it can never
+// break an existing render of the funnel above.
+
+export interface MarketGateCountRow {
+  market: string;
+  homeCount: number;
+}
+
+const MARKET_LABEL: Record<string, string> = {
+  deregulated: "Deregulated (retail choice)",
+  not_deregulated: "Regulated (no retail choice)",
+  no_territory_match: "No utility match yet",
+  retail_market_not_loaded: "Market list not loaded yet",
+  utility_not_in_retail_market_file: "Utility not in the market list yet",
+};
+
+function marketLabelFor(market: string): string {
+  return MARKET_LABEL[market] ?? market;
+}
+
+const KNOWN_MARKETS = new Set(["deregulated", "not_deregulated"]);
+const NOT_LOADED_MARKETS = new Set(["retail_market_not_loaded"]);
+
+function marketSegmentClass(market: string): string {
+  if (KNOWN_MARKETS.has(market)) return "gate-funnel__segment--passed";
+  if (NOT_LOADED_MARKETS.has(market)) return "gate-funnel__segment--not-loaded";
+  return "gate-funnel__segment--excluded";
+}
+
+async function fetchMarketSplit(): Promise<MarketGateCountRow[] | null> {
+  try {
+    const rows = await query<{ market: string; home_count: string | number }>(
+      `select market, sum(home_count) as home_count
+       from api.gate_counts_by_market
+       group by market
+       order by sum(home_count) desc`
+    );
+    return rows.map((r) => ({ market: r.market, homeCount: Number(r.home_count) }));
+  } catch (err) {
+    console.error("GateCounts: failed to load api.gate_counts_by_market", err);
+    return null;
+  }
+}
+
+async function MarketSplit() {
+  const marketRows = await fetchMarketSplit();
+  if (!marketRows || marketRows.length === 0) return null;
+  const total = marketRows.reduce((sum, r) => sum + r.homeCount, 0);
+  if (total === 0) return null;
+
+  return (
+    <div style={{ marginTop: "var(--space-4)" }}>
+      <h3
+        style={{
+          fontFamily: "var(--type-label-font-family)",
+          fontSize: "var(--type-label-font-size)",
+          fontWeight: "var(--type-label-font-weight)",
+          color: "var(--theme-ink-muted)",
+          margin: "0 0 var(--space-2) 0",
+        }}
+      >
+        By electricity market
+      </h3>
+      <div className="gate-funnel" role="img" aria-label="Home count by electricity market">
+        {marketRows.map((row) => (
+          <span
+            key={row.market}
+            className={`gate-funnel__segment ${marketSegmentClass(row.market)}`}
+            style={{ width: `${(row.homeCount / total) * 100}%` }}
+            title={`${marketLabelFor(row.market)}: ${row.homeCount.toLocaleString()}`}
+          />
+        ))}
+      </div>
+      <ul className="gate-funnel__legend">
+        {marketRows.map((row) => (
+          <li key={row.market} className="gate-funnel__legend-item">
+            <span className={`gate-funnel__dot ${marketSegmentClass(row.market)}`} aria-hidden="true" />
+            <span>{marketLabelFor(row.market)}</span>
+            <span style={{ fontFamily: "var(--type-data-font-family)", marginLeft: "auto" }}>
+              {row.homeCount.toLocaleString()}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
 }
 
 export function GateCounts({ rows }: { rows: GateCountRow[] }) {
@@ -107,6 +205,10 @@ export function GateCounts({ rows }: { rows: GateCountRow[] }) {
             HIFLD electric retail service territories and the City of Austin&rsquo;s official Austin Energy service
             area.
           </p>
+
+          <Suspense fallback={null}>
+            <MarketSplit />
+          </Suspense>
         </>
       )}
     </Panel>
