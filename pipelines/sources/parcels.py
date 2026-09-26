@@ -33,6 +33,16 @@ keeps the first prop_id it sees and drops every later occurrence via an
 in-memory `seen` set). Owner-name fields (py_owner_name, jan1_owner_name,
 appr_owner_name) are never read.
 
+prop_id is normalized to the canonical unpadded integer string
+(str(int(field)), e.g. '000000100008' -> '100008') before dedup/load: it
+is the join key core.parcels shares with core.parcel_geoms (from the
+Travis County GIS layer, loaded by M1-P4), whose prop_id is unpadded. A
+record whose prop_id field isn't a plain integer is rejected (filter drop
+'non_numeric_prop_id'), never substituted. geo_id, by contrast, is kept
+exactly as the fixed-width field gives it (10-digit, zero-padded) because
+it is the join key core.parcels shares with core.permits.tcad_id, which
+is itself 10-digit and zero-padded.
+
 Loading: batches of BATCH_SIZE rows are COPYed into a session-temporary
 staging table, then upserted into core.parcels (ON CONFLICT prop_id DO
 UPDATE, so a re-run or a resumed batch is idempotent), committing after
@@ -99,7 +109,7 @@ DEFAULT_RAW_DIR = (
 TUS_CHUNK_BYTES = 6 * 1024 * 1024  # Supabase's documented resumable-upload chunk size
 BATCH_SIZE = 5000
 
-FILTER_NAMES = ("not_r", "missing_prop_id", "duplicate_prop_id")
+FILTER_NAMES = ("not_r", "missing_prop_id", "non_numeric_prop_id", "duplicate_prop_id")
 
 Runner = Literal["cron", "cli"]
 
@@ -347,6 +357,21 @@ def _set_manifest_rows(manifest_id: str, rows: int) -> None:
 # --------------------------------------------------------------------------
 
 
+def _normalize_prop_id(raw: str | None) -> str | None:
+    """PROP.TXT's prop_id field is a fixed-width, zero-padded int(12)
+    (e.g. '000000100008'), but core.parcel_geoms.prop_id (from the Travis
+    County GIS layer, loaded by M1-P4) is the canonical unpadded integer
+    string (e.g. '100008') — the join key both tables share. Normalize to
+    that canonical form here; a non-numeric value is rejected (not
+    substituted) and counted as a filter drop."""
+    if not raw:
+        return None
+    try:
+        return str(int(raw))
+    except ValueError:
+        return None
+
+
 def _build_row(text: str, *, manifest_id: str, county_fips: str, tax_year: int, prop_id: str) -> tuple:
     market_value_raw = tcad_layout.extract_stripped(text, "market_value")
     market_value = int(market_value_raw) if market_value_raw else None
@@ -405,7 +430,7 @@ def _rebuild_seen_up_to(f, byte_offset: int) -> set[str]:
         prop_type = tcad_layout.extract_stripped(text, "prop_type_cd")
         if prop_type != "R":
             continue
-        prop_id = tcad_layout.extract_stripped(text, "prop_id")
+        prop_id = _normalize_prop_id(tcad_layout.extract_stripped(text, "prop_id"))
         if prop_id:
             seen.add(prop_id)
     return seen
@@ -503,9 +528,15 @@ def _process(
             state["byte_offset"] = pos
             continue
 
-        prop_id = tcad_layout.extract_stripped(text, "prop_id")
-        if not prop_id:
+        prop_id_raw = tcad_layout.extract_stripped(text, "prop_id")
+        if not prop_id_raw:
             state["filter_drops"]["missing_prop_id"] += 1
+            state["byte_offset"] = pos
+            continue
+
+        prop_id = _normalize_prop_id(prop_id_raw)
+        if prop_id is None:
+            state["filter_drops"]["non_numeric_prop_id"] += 1
             state["byte_offset"] = pos
             continue
 

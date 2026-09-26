@@ -42,11 +42,16 @@ def test_process_matches_independent_recompute_on_fixture():
     expected_kept: dict[str, tuple] = {}
     for text in _iter_fixture_lines():
         expected_rows_in += 1
-        prop_id = text[0:12].strip()
+        prop_id_raw = text[0:12].strip()
         prop_type = text[12:17].strip()
         if prop_type != "R":
             expected_not_r += 1
             continue
+        # core.parcels.prop_id is normalized to the canonical unpadded
+        # integer string — the join key core.parcel_geoms.prop_id (from
+        # the Travis County GIS layer) actually uses — not the fixed-width
+        # zero-padded field as PROP.TXT stores it.
+        prop_id = str(int(prop_id_raw))
         if prop_id in seen_expected:
             expected_duplicate += 1
             continue
@@ -91,6 +96,11 @@ def test_process_matches_independent_recompute_on_fixture():
 
     loaded_rows = {row[0]: row for batch in batches for row in batch}
     assert set(loaded_rows) == set(expected_kept)
+    # Loaded prop_id must be the canonical unpadded integer string (the
+    # join key core.parcel_geoms.prop_id uses), never the fixed-width
+    # zero-padded field PROP.TXT stores it as.
+    for prop_id in loaded_rows:
+        assert prop_id == str(int(prop_id)), f"prop_id {prop_id!r} is not canonical unpadded form"
     for prop_id, (geo_id, imprv, land, hs, market_value) in expected_kept.items():
         # row layout: prop_id, geo_id, county_fips, prop_type_cd, imprv_state_cd,
         # land_state_cd, hs_exempt, ov65_exempt, situs_num, situs_street,
