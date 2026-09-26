@@ -33,6 +33,9 @@ describe.skipIf(!process.env.POSTGRES_URL)("GateCounts against api.gate_counts",
         }
         if (rows.some((r) => r.reason === "territories_not_loaded" || r.reason === "crosswalk_not_loaded")) {
           expect(html).toContain("fail-open");
+          // Plain-language rewrite (M2-W3): no "territory gate" jargon.
+          expect(html).not.toContain("territory gate");
+          expect(html).not.toContain("Territory gate");
         }
       }
     },
@@ -56,6 +59,8 @@ describe("GateCounts (structural)", () => {
     expect(html).toContain("gate-funnel");
     expect(html).toContain("100");
     expect(html).toContain("25");
-    expect(html).toContain("Territory not Base-served");
+    expect(html).toContain("In a utility Base doesn");
+    expect(html).not.toContain("territory gate");
+    expect(html).not.toContain("Territory gate");
   });
 });

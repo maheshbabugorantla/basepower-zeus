@@ -4,7 +4,7 @@ import { QualityPanel, type QualityPanelData, type ClassifierPrecisionRow } from
 import { EligibilityFunnel, type FunnelStep } from "../../components/EligibilityFunnel";
 import { GateCounts, type GateCountRow } from "../../components/GateCounts";
 import type { TopHomeRow } from "../../components/TopHomesTable";
-import { mapWeightedRow } from "../api/top-homes/route";
+import { fetchRankedHomes } from "../api/top-homes/route";
 
 // M1-W1: MapLibre choropleth of Travis block groups (api.blockgroup_scores,
 // via the app/ranking/blockgroups route handler) + top-50 table
@@ -98,17 +98,19 @@ async function getFunnelSteps(): Promise<FunnelStep[]> {
   return values.map((v) => ({ ...v, ratio: v.value / total }));
 }
 
-async function getTopHomes(): Promise<TopHomeRow[]> {
-  // M2-W1: score v1 (api.top_homes_weighted, 0201_m2.sql) replaces the v0
-  // api.top_homes view. Server-rendered with equal weights so the first
-  // paint (no JS, or before hydration) matches WeightSliders' default
-  // state; every re-rank after that goes through /api/top-homes.
-  const rows = await query(
-    `select * from api.top_homes_weighted($1::jsonb, $2::text)`,
-    [JSON.stringify(EQUAL_WEIGHTS), TRAVIS_COUNTY_FIPS]
-  );
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return (rows as any[]).map(mapWeightedRow);
+async function getTopHomes(): Promise<{ rows: TopHomeRow[]; total: number }> {
+  // M2-W1: score v1 (api.homes_ranked_weighted, 0201/0204/0205_*.sql)
+  // replaces the v0 api.top_homes view. Server-rendered with equal
+  // weights, page 1, no block-group selection, so the first paint (no
+  // JS, or before hydration) matches WeightSliders'/RankingBoard's
+  // default state; every re-rank/page/selection change after that goes
+  // through /api/top-homes.
+  const { rows, total } = await fetchRankedHomes({
+    weights: EQUAL_WEIGHTS,
+    countyFips: TRAVIS_COUNTY_FIPS,
+    withTotal: true,
+  });
+  return { rows, total: total ?? 0 };
 }
 
 async function getGateCounts(): Promise<GateCountRow[]> {
@@ -174,6 +176,7 @@ export default async function RankingPage() {
     getFunnelSteps(),
     getGateCounts(),
   ]);
+  const { rows: topHomeRows, total: topHomesTotal } = topHomes;
 
   const leftRail = (
     <>
@@ -201,7 +204,7 @@ export default async function RankingPage() {
           exposure, grid value, installability and household fit.
         </p>
       </div>
-      <RankingBoard rows={topHomes} leftRail={leftRail} />
+      <RankingBoard rows={topHomeRows} initialTotal={topHomesTotal} leftRail={leftRail} />
     </div>
   );
 }
