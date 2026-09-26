@@ -214,7 +214,7 @@ def check_literal_record_arrays_other(path: Path, text: str) -> list[Violation]:
     return violations
 
 
-SQL_CONFIG_SEED_RE = re.compile(r"--\s*no-mock-check:\s*config-seed\s+\S")
+SQL_CONFIG_SEED_RE = re.compile(r"--[ \t]*no-mock-check:[ \t]*config-seed[ \t]+\S")
 
 
 # ---- Check 4: fixtures must have a source sidecar --------------------------
