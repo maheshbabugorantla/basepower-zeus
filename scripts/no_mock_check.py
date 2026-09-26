@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 import ast
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -103,19 +104,25 @@ def iter_files(root: Path):
         scan_dir = root / scan_name
         if not scan_dir.is_dir():
             continue
-        for path in scan_dir.rglob("*"):
-            if not path.is_file():
-                continue
-            # Check generated-dir membership against the path *relative to
-            # root*, not the absolute path — an absolute-path check would
-            # false-skip everything when the repo itself is checked out
-            # under a directory named e.g. "build" or "dist".
-            rel_parts = path.relative_to(root).parts
-            if any(part in SKIP_DIR_NAMES for part in rel_parts):
-                continue
-            if is_self(path):
-                continue
-            yield path
+        # os.walk with in-place pruning never descends into generated dirs
+        # (node_modules, .next, ...), so the scan stays fast and can't trip
+        # over files a concurrent install is moving.
+        for dirpath, dirnames, filenames in os.walk(scan_dir):
+            dirnames[:] = [d for d in dirnames if d not in SKIP_DIR_NAMES]
+            for fname in filenames:
+                path = Path(dirpath) / fname
+                if not path.is_file():
+                    continue
+                # Check generated-dir membership against the path *relative to
+                # root*, not the absolute path — an absolute-path check would
+                # false-skip everything when the repo itself is checked out
+                # under a directory named e.g. "build" or "dist".
+                rel_parts = path.relative_to(root).parts
+                if any(part in SKIP_DIR_NAMES for part in rel_parts):
+                    continue
+                if is_self(path):
+                    continue
+                yield path
 
 
 def read_text(path: Path) -> str | None:
