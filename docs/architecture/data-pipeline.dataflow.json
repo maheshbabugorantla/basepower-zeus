@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "Base Power Zeus - Data Pipeline Architecture",
+    "output": "data-pipeline.html",
+    "viewBox": [1080, 760],
+    "quality_profile": "showcase",
+    "views": [
+      { "id": "load-path", "label": "Load path", "focus": ["sources", "manifest", "raw_storage", "loader", "core_tables"], "note": "Every source is downloaded, hashed, manifested, and loaded by COPY batches into core tables." },
+      { "id": "refresh-path", "label": "Refresh path", "focus": ["core_tables", "mv", "anchors", "api_layer"], "note": "core.refresh_all_scores() rebuilds materialized views in a fixed order, then recomputes anchors and medians." },
+      { "id": "briefing-path", "label": "Offline briefing", "focus": ["mv", "gemini", "home_summary", "web"], "note": "home_summaries.py reads the refreshed signals and writes a grounded or template summary, offline only, never through the public web path." }
+    ]
+  },
+  "stages": [
+    { "label": "Source" },
+    { "label": "Manifest, raw, load" },
+    { "label": "Core + refresh" },
+    { "label": "API + offline briefing" },
+    { "label": "Web" }
+  ],
+  "nodes": [
+    { "id": "sources", "type": "external", "label": "External sources", "sublabel": "17 pipelines", "stage": 0, "row": 0, "width": 150, "height": 60 },
+    { "id": "manifest", "type": "database", "label": "source_manifest", "sublabel": "url, sha256", "stage": 1, "row": 0, "width": 150, "height": 60 },
+    { "id": "loader", "type": "backend", "label": "COPY loaders", "sublabel": "sources/*.py", "stage": 1, "row": 1, "width": 150, "height": 60 },
+    { "id": "raw_storage", "type": "cloud", "label": "raw bucket", "sublabel": "Storage", "stage": 1, "row": 2, "width": 150, "height": 60 },
+    { "id": "core_tables", "type": "database", "label": "core.* tables", "sublabel": "source_id FK", "stage": 2, "row": 0, "width": 150, "height": 60 },
+    { "id": "mv", "type": "database", "label": "core.mv_* views", "sublabel": "refresh order", "stage": 2, "row": 1, "width": 150, "height": 60 },
+    { "id": "api_layer", "type": "backend", "label": "api schema", "sublabel": "weighted score fn", "stage": 3, "row": 0, "width": 150, "height": 60 },
+    { "id": "anchors", "type": "database", "label": "signal_anchors", "sublabel": "90th pct", "stage": 3, "row": 1, "width": 150, "height": 60 },
+    { "id": "gemini", "type": "external", "label": "Gemini", "sublabel": "offline, CLI/cron", "stage": 3, "row": 2, "width": 150, "height": 60 },
+    { "id": "web", "type": "frontend", "label": "Web routes", "sublabel": "zeus_web_ro", "stage": 4, "row": 0, "width": 150, "height": 60 },
+    { "id": "home_summary", "type": "database", "label": "home_summary", "sublabel": "grounded/template", "stage": 4, "row": 2, "width": 150, "height": 60 }
+  ],
+  "flows": [
+    { "id": "download", "from": "sources", "to": "manifest", "label": "download + hash", "classification": "provenance", "variant": "emphasis", "route": "straight", "labelAt": [208, 96] },
+    { "id": "upload", "from": "sources", "to": "raw_storage", "label": "raw upload", "classification": "download", "variant": "default" },
+    { "id": "manifest-read", "from": "manifest", "to": "loader", "label": "manifest row", "classification": "lookup", "variant": "default", "labelAt": [315, 202] },
+    { "id": "raw-read", "from": "raw_storage", "to": "loader", "label": "stream file", "classification": "load input", "variant": "default", "labelAt": [315, 430] },
+    { "id": "load-core", "from": "loader", "to": "core_tables", "label": "COPY / upsert", "classification": "batched insert", "variant": "emphasis" },
+    { "id": "refresh-mv", "from": "core_tables", "to": "mv", "label": "refresh_all_scores()", "classification": "ordered refresh", "variant": "emphasis", "labelAt": [530, 202] },
+    { "id": "recompute-anchors", "from": "mv", "to": "anchors", "label": "recompute anchors", "classification": "M2-P8 anchored scale", "variant": "default", "labelAt": [530, 316] },
+    { "id": "mv-to-api", "from": "mv", "to": "api_layer", "label": "read signals", "classification": "live SQL function", "variant": "default" },
+    { "id": "anchors-to-api", "from": "anchors", "to": "api_layer", "label": "anchor values", "classification": "score terms", "variant": "default", "labelAt": [745, 316] },
+    { "id": "api-to-web", "from": "api_layer", "to": "web", "label": "SELECT/EXECUTE", "classification": "zeus_web_ro", "variant": "emphasis", "labelAt": [853, 202] },
+    { "id": "mv-to-gemini", "from": "mv", "to": "gemini", "label": "score breakdown", "classification": "offline read", "variant": "dashed" },
+    { "id": "gemini-to-summary", "from": "gemini", "to": "home_summary", "label": "upsert summary", "classification": "grounded or template", "variant": "dashed", "labelAt": [853, 430] },
+    { "id": "summary-to-web", "from": "home_summary", "to": "web", "label": "pk read", "classification": "api.home_summary", "variant": "default", "labelAt": [960, 430] }
+  ],
+  "cards": [
+    { "dot": "emerald", "title": "Traceability", "items": ["Every core row carries a source_id foreign key into ops.source_manifest", "A source that fails to download stops the pipeline; no substituted value", "The Sources page (/sources) links every number back to its raw file via a signed Storage URL"] },
+    { "dot": "cyan", "title": "Refresh order", "items": ["core.refresh_all_scores() refreshes mv_home_block_group, mv_home_signals, mv_join_rate, mv_blockgroup_scores, mv_top_homes, then mv_gate_counts/mv_parcel_gate_counts/mv_blockgroup_geojson, then core.refresh_market() and mv_gate_counts_by_market", "Anchors (90th percentile) and per-county medians are recomputed last, off the just-refreshed mv_home_signals", "Scoring is anchored-absolute, never percentile-ranked across homes (M2-P8 decision)"] },
+    { "dot": "rose", "title": "Offline briefing, not a score input", "items": ["home_summaries.py is the only module that calls Gemini, and it never runs on the web path", "A reply is stored only if every number in it is grounded in the input facts text; otherwise a deterministic template sentence is stored with guard_failed=true", "core.home_summary contributes no score term, it only backs the 'why this home' read on the home page"] }
+  ]
+}
