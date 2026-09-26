@@ -98,7 +98,10 @@ def test_austin_energy_contains_tcad_parcel_101325_and_centerpoint_exists():
             assert within is True, "Austin Energy (1015) polygon does not contain TCAD parcel 101325's centroid"
 
             cur.execute(
-                "select count(*) from ops.source_manifest where id = %s and source = 'territories'",
+                # Since M2-H2 the Austin Energy polygon is the City of Austin's
+                # official service area (territory override), so its source is
+                # that manifest row, not the HIFLD territories file.
+                "select count(*) from ops.source_manifest where id = %s and source in ('territories', 'austin_energy_service_area')",
                 (source_id,),
             )
-            assert cur.fetchone()[0] == 1, "Austin Energy row's source_id does not resolve to a territories manifest row"
+            assert cur.fetchone()[0] == 1, "Austin Energy row's source_id does not resolve to a territories or City of Austin service-area manifest row"

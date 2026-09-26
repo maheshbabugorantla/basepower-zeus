@@ -103,7 +103,10 @@ PROVENANCE_EXEMPT: dict[str, str] = {
 # Views intentionally exempted from the whole per-row check (none yet —
 # every api.* view as of M0 carries a source_id column). Add a view here
 # only with a comment explaining why it has no per-row provenance.
-PROVENANCE_EXEMPT_VIEWS: set[str] = set()
+# api.default_weights is a team configuration table (slider defaults with a
+# written basis), seeded by migration 0212 with a config-seed marker — it is
+# not data derived from a downloaded source file, so it has no source_id.
+PROVENANCE_EXEMPT_VIEWS: set[str] = {"api.default_weights"}
 
 # Row-level exemption (not a column exemption): M1-S1's summary views
 # (api.join_rate, api.classifier_precision, ...) are always present with
