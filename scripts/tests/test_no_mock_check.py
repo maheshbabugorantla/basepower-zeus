@@ -125,6 +125,24 @@ class TestLiteralRecordArrays(unittest.TestCase):
             violations = nmc.scan(root)
             self.assertTrue(any(v.check == "3" and "VALUES" in v.detail for v in violations))
 
+    def test_sql_config_seed_marker_with_reason_is_allowed(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            values = ", ".join(f"({i}, 'x')" for i in range(7))
+            write(root, "supabase/migrations/9999_test.sql",
+                  f"-- no-mock-check: config-seed refresh cycles are team policy\ninsert into t values {values};\n")
+            self.assertEqual(nmc.scan(root), [])
+
+    def test_sql_config_seed_marker_without_reason_or_in_other_statement_fails(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            values = ", ".join(f"({i}, 'x')" for i in range(7))
+            write(root, "supabase/migrations/9999_a.sql", f"-- no-mock-check: config-seed\ninsert into t values {values};\n")
+            write(root, "supabase/migrations/9999_b.sql",
+                  f"-- no-mock-check: config-seed policy\nselect 1;\ninsert into t values {values};\n")
+            violations = nmc.scan(root)
+            self.assertEqual(sum(1 for v in violations if v.check == "3"), 2)
+
     def test_exactly_six_rows_is_the_boundary_fail_py(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)

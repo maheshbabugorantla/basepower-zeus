@@ -202,11 +202,19 @@ def check_literal_record_arrays_other(path: Path, text: str) -> list[Violation]:
         if JS_ARRAY_OF_OBJECTS_RE.search(text):
             violations.append(Violation("3", path, "literal array of >5 object records"))
     if path.suffix == ".sql":
-        m = SQL_VALUES_RE.search(text)
-        if m:
+        for m in SQL_VALUES_RE.finditer(text):
+            # A seed of team-chosen configuration (e.g. refresh cycles) is not
+            # data, but it must say so explicitly, with a reason, inside the
+            # same statement: `-- no-mock-check: config-seed <reason>`.
+            stmt_start = text.rfind(";", 0, m.start()) + 1
+            if SQL_CONFIG_SEED_RE.search(text[stmt_start:m.start()]):
+                continue
             tuple_count = m.group(1).count("(")
             violations.append(Violation("3", path, f"SQL VALUES list with {tuple_count} tuples (>5)"))
     return violations
+
+
+SQL_CONFIG_SEED_RE = re.compile(r"--\s*no-mock-check:\s*config-seed\s+\S")
 
 
 # ---- Check 4: fixtures must have a source sidecar --------------------------

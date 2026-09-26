@@ -111,6 +111,7 @@ comment on table ops.refresh_policy is
 -- Source keys match the --source values used by `pipelines.check` across the
 -- ticket graph (grepped from tickets/M0 … M4) so this table stays a working
 -- lookup, not just documentation.
+-- no-mock-check: config-seed refresh cycles are the team's freshness policy from the spec, not source data
 insert into ops.refresh_policy (source, refresh_cycle_days, note) values
     ('austin_permits',      7,    'Austin Issued Construction Permits — daily cron, 7 d policy per spec'),
     ('ercot_spp',           1,    'ERCOT settlement point prices — daily cron, 1 d policy per spec'),
