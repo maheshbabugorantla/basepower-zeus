@@ -1,0 +1,16 @@
+# Per-county parcel source registry.
+#
+# Each entry names the pipelines/sources/<name>.py adapter that loads that
+# county's parcel attributes into core.parcels, plus the county_fips and
+# tax_year that adapter loads. A later county (e.g. Harris, M3) plugs in a
+# different adapter by adding its own block here — never by editing an
+# existing county's block or the adapter that reads it.
+#
+# Parsed by pipelines/sources/parcels.py's tiny hand-rolled loader (no
+# PyYAML dependency is declared in pipelines/requirements.txt, and this
+# file's shape is deliberately kept to that loader's supported subset:
+# top-level county keys, each a flat map of scalar string/int values).
+travis:
+  fips: "48453"
+  parcel_adapter: tcad_certified_export
+  tax_year: 2026
