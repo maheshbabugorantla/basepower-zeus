@@ -26,6 +26,15 @@ Subcommands:
         PROVENANCE_EXEMPT below) are explicitly exempted, never silently
         skipped. A view with zero rows passes vacuously and says so.
 
+        A row whose null-reason column (any column named like
+        `*null_reason*`, or exactly `reason`) is non-null is an explicit
+        "not loaded" state (e.g. api.classifier_precision before M1-H1
+        labels exist: a non-null zero/summary column plus a non-null
+        `precision_null_reason`, no source_id yet) and the WHOLE row is
+        exempt from the per-row check — printed explicitly, never a
+        silent skip. Once data is loaded, that column's null-reason goes
+        null and the row is checked normally like any other.
+
     reconcile --source X
         For every ops.pipeline_runs row with status='success' for source
         X: rows loaded = raw rows - sum(filter drops) (check 5). A source
@@ -90,6 +99,22 @@ PROVENANCE_EXEMPT: dict[str, str] = {
 # every api.* view as of M0 carries a source_id column). Add a view here
 # only with a comment explaining why it has no per-row provenance.
 PROVENANCE_EXEMPT_VIEWS: set[str] = set()
+
+# Row-level exemption (not a column exemption): M1-S1's summary views
+# (api.join_rate, api.classifier_precision, ...) are always present with
+# exactly one row (or one row per label), and while their underlying data
+# hasn't loaded yet they carry a non-null "0" or "no_x_yet" value column
+# plus a non-null `*_null_reason` column explaining why — e.g.
+# api.classifier_precision.precision_null_reason = 'no_claude_labels_yet'
+# with claude_labelled_count still null but precision_null_reason itself
+# non-null. That is an explicit "not loaded" state, not an unsourced
+# value: a row whose null-reason column (matched by _NULL_REASON_COL_RE,
+# any column named like `*null_reason*`, or exactly `reason`) is non-null
+# is exempt from the per-row check in its ENTIRETY (every column on that
+# row, not just the null-reason column). Once the source loads, that
+# column goes null and the row is checked like any other — carrying a
+# real source_id, same as api.join_rate does today.
+_NULL_REASON_COL_RE = re.compile(r"null_reason|^reason$", re.IGNORECASE)
 
 _ID_COL_RE = re.compile(r"^(latest_)?source_ids?$")
 _IDENT_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
@@ -291,6 +316,15 @@ def cmd_provenance() -> int:
                 print(f"OK: provenance: {view} has no checkable value columns (all exempt or id-only)")
                 continue
 
+            # Row-level "not loaded" exemption — see _NULL_REASON_COL_RE
+            # above. A row is exempt in its entirety (all its columns,
+            # including the null-reason column itself) when any
+            # null-reason column on it is non-null.
+            null_reason_cols = [name for name, _ in columns if _NULL_REASON_COL_RE.search(name)]
+            row_exempt_expr = (
+                " or ".join(f"{c} is not null" for c in null_reason_cols) if null_reason_cols else "false"
+            )
+
             value_expr = " or ".join(f"{c} is not null" for c in value_cols)
             ids_expr = (
                 id_col if id_dtype == "ARRAY"
@@ -302,33 +336,42 @@ def cmd_provenance() -> int:
                     f"""
                     with v as (
                         select ({value_expr}) as _value_present,
-                               ({ids_expr}) as _ids
+                               ({ids_expr}) as _ids,
+                               ({row_exempt_expr}) as _row_exempt
                         from {view}
                     )
                     select
                         count(*) filter (
-                            where _value_present
+                            where _value_present and not _row_exempt
                               and (_ids is null or array_length(_ids, 1) is null)
                         ) as missing_id_count,
                         count(*) filter (
-                            where _value_present and _ids is not null
+                            where _value_present and not _row_exempt and _ids is not null
                               and exists (
                                   select 1 from unnest(_ids) as eid(id)
                                   where eid.id not in (select id from ops.source_manifest)
                               )
                         ) as unresolved_count,
+                        count(*) filter (where _row_exempt) as exempt_count,
                         count(*) as total_rows
                     from v
                     """
                 )
                 row = cur.fetchone()
                 assert row is not None
-                missing_id_count, unresolved_count, total_rows = row
+                missing_id_count, unresolved_count, exempt_count, total_rows = row
 
             if total_rows == 0:
                 print(f"OK: provenance: {view} has 0 rows (vacuous pass)")
                 continue
             checked_any_rows = True
+
+            if exempt_count:
+                reason_cols_desc = ", ".join(null_reason_cols)
+                print(
+                    f"OK: provenance: {view}: {exempt_count} row(s) exempt as explicit "
+                    f"not-loaded state (non-null {reason_cols_desc})"
+                )
 
             if missing_id_count or unresolved_count:
                 with conn.cursor() as cur:
@@ -337,11 +380,12 @@ def cmd_provenance() -> int:
                         with v as (
                             select t.*,
                                    ({value_expr}) as _value_present,
-                                   ({ids_expr}) as _ids
+                                   ({ids_expr}) as _ids,
+                                   ({row_exempt_expr}) as _row_exempt
                             from {view} as t
                         )
                         select * from v
-                        where _value_present and (
+                        where _value_present and not _row_exempt and (
                             _ids is null or array_length(_ids, 1) is null
                             or exists (
                                 select 1 from unnest(_ids) as eid(id)
