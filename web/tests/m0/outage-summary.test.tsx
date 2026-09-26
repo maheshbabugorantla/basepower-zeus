@@ -18,6 +18,11 @@ describe.skipIf(!process.env.POSTGRES_URL)("HomePage — Travis 2025 outage sent
     await getPool().end();
   });
 
+  // Both tests below pass an explicit 20s timeout (matching every other
+  // real-DB test in this repo) — the default 5s vitest timeout is tight
+  // enough that a cold connection to the Supabase transaction pooler
+  // occasionally trips it (a flaky-timeout problem, not a
+  // query-correctness one).
   it("renders 'not loaded' when Travis 2025 has no row (or a null value) in api.county_outage", async () => {
     const rows = await query<{
       customer_hours_out: string | number | null;
@@ -41,7 +46,7 @@ describe.skipIf(!process.env.POSTGRES_URL)("HomePage — Travis 2025 outage sent
     expect(html).toContain("county-level");
     // Never a literal number, dash, or zero standing in for the missing value.
     expect(html).not.toMatch(/>\s*0\s*customer-hours/);
-  });
+  }, 20000);
 
   it("renders the real figure (equal to the DB value) and a popover with the real manifest SHA, when a Travis 2025 row exists", async () => {
     const rows = await query<{
@@ -79,5 +84,5 @@ describe.skipIf(!process.env.POSTGRES_URL)("HomePage — Travis 2025 outage sent
     if (sha) {
       expect(html).toContain(sha.slice(0, 12));
     }
-  });
+  }, 20000);
 });

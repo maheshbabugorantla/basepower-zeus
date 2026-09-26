@@ -15,8 +15,19 @@
   box-sizing: border-box;
 }
 
+/* M1-W3 fix #3: light by default (DESIGN.md §1), never following the OS
+ * dark preference on its own — app/layout.tsx sets data-theme="light" on
+ * <html> by default and only an explicit user choice (persisted in
+ * localStorage, applied by that layout's inline script) flips this to
+ * dark. `color-scheme` here must track the same explicit signal, not
+ * `light dark`, or native form controls/scrollbars would still auto-flip
+ * to dark on a dark OS even though the app chrome stayed light. */
 html {
-  color-scheme: light dark;
+  color-scheme: light;
+}
+
+html[data-theme="dark"] {
+  color-scheme: dark;
 }
 
 body {

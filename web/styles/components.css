@@ -206,19 +206,208 @@
 }
 
 /* ---------------------------------------------------------------------- */
+/* Top bar / primary nav / county switcher / export (M1-W3)               */
+/* ---------------------------------------------------------------------- */
+
+.top-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-6);
+  background-color: var(--theme-surface);
+  border-bottom: 1px solid var(--theme-divider);
+}
+
+.top-bar__brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.top-bar__wordmark {
+  font-family: var(--type-heading-font-family);
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--theme-ink);
+  white-space: nowrap;
+}
+
+.top-bar__spacer {
+  flex: 1 1 auto;
+}
+
+.primary-nav {
+  display: flex;
+  gap: var(--space-1);
+}
+
+.primary-nav__link {
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--rounded-sm);
+  text-decoration: none;
+  font-family: var(--type-label-font-family);
+  font-size: var(--type-label-font-size);
+  font-weight: var(--type-label-font-weight);
+  color: var(--theme-ink-muted);
+  transition: background-color var(--motion-duration) var(--motion-ease);
+}
+
+.primary-nav__link:hover {
+  background-color: var(--theme-divider);
+}
+
+.primary-nav__link--active {
+  color: var(--theme-brand-accent-text);
+  background-color: var(--color-brand-subtle);
+  font-weight: 600;
+}
+
+.county-switcher {
+  display: flex;
+  border: 1px solid var(--color-control-border);
+  border-radius: var(--rounded-sm);
+  overflow: hidden;
+}
+
+.county-switcher__button {
+  height: 36px;
+  padding: 0 var(--space-3);
+  border: none;
+  background-color: var(--component-button-primary-background-color);
+  color: var(--component-button-primary-text-color);
+  font-family: var(--type-label-font-family);
+  font-size: var(--type-label-font-size);
+  font-weight: var(--type-label-font-weight);
+  cursor: default;
+}
+
+.export-button-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.export-button-wrap .btn[aria-disabled="true"] {
+  background-color: var(--color-surface-sunken);
+  color: var(--color-ink-disabled);
+  border-color: var(--color-surface-sunken);
+  cursor: not-allowed;
+}
+
+.export-button-tooltip {
+  position: absolute;
+  top: calc(100% + var(--space-2));
+  right: 0;
+  z-index: 10;
+  width: max-content;
+  max-width: 220px;
+  padding: var(--space-2) var(--space-3);
+  background-color: var(--theme-ink);
+  color: var(--theme-canvas);
+  border-radius: var(--rounded-sm);
+  font-family: var(--type-label-font-family);
+  font-size: var(--type-label-font-size);
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity var(--motion-duration) var(--motion-ease);
+}
+
+.export-button-wrap:hover .export-button-tooltip,
+.export-button-wrap:focus-within .export-button-tooltip {
+  opacity: 1;
+  visibility: visible;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Breadcrumb (home detail)                                               */
+/* ---------------------------------------------------------------------- */
+
+.breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-family: var(--type-label-font-family);
+  font-size: var(--type-label-font-size);
+  color: var(--theme-ink-muted);
+}
+
+.breadcrumb__separator {
+  color: var(--color-ink-disabled);
+}
+
+/* ---------------------------------------------------------------------- */
+/* Ranking board layout (Main.dc.html: rail + map + table, one screen)    */
+/* ---------------------------------------------------------------------- */
+
+.ranking-board {
+  display: grid;
+  grid-template-columns: minmax(280px, 340px) minmax(0, 1.4fr) minmax(0, 1.6fr);
+  gap: var(--space-6);
+  align-items: stretch;
+  height: calc(100vh - 260px);
+  min-height: 560px;
+}
+
+.ranking-board__rail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  overflow-y: auto;
+  min-height: 0;
+}
+
+@media (max-width: 1200px) {
+  .ranking-board {
+    grid-template-columns: 1fr;
+    height: auto;
+  }
+}
+
+/* ---------------------------------------------------------------------- */
+/* Eligibility funnel (ranking page)                                      */
+/* ---------------------------------------------------------------------- */
+
+.funnel-row__track {
+  height: 8px;
+  background-color: var(--theme-divider);
+  border-radius: var(--rounded-sm);
+  overflow: hidden;
+}
+
+.funnel-row__fill {
+  height: 8px;
+  background-color: var(--theme-brand-accent-text);
+  border-radius: var(--rounded-sm);
+}
+
+/* ---------------------------------------------------------------------- */
 /* Provenance popover (DESIGN.md §5 Signature component)                  */
 /* ---------------------------------------------------------------------- */
 
+/* M1-W3 fix #6: "quieter provenance triggers ... drop monospace dotted
+ * underlines on every value." The sourced value itself (rendered by the
+ * caller, next to this button) is now plain text; only a small icon
+ * button after it opens the popover, so a page dense with sourced numbers
+ * no longer looks like every value is a broken link. */
 .provenance-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  min-width: 18px;
+  margin-left: var(--space-1);
+  vertical-align: middle;
   background: none;
   border: none;
+  border-radius: var(--rounded-full);
   padding: 0;
-  margin: 0;
-  font: inherit;
-  color: inherit;
+  color: var(--theme-ink-muted);
   cursor: pointer;
-  text-decoration: underline dotted;
-  text-underline-offset: 2px;
+  transition: background-color var(--motion-duration) var(--motion-ease);
+}
+
+.provenance-trigger:hover {
+  background-color: var(--theme-divider);
 }
 
 .provenance-trigger:focus-visible {

@@ -88,6 +88,8 @@ export interface BlockGroupMapProps {
   /** api.top_homes' block_group_geoid for the currently hovered table row, or null. */
   hoveredGeoid?: string | null;
   onFeatureHover?: (geoid: string | null) => void;
+  /** CSS height; defaults to filling its container (Main.dc.html's single-screen layout). */
+  height?: string;
 }
 
 const SOURCE_ID = "blockgroups";
@@ -96,7 +98,12 @@ const LAYER_UNSCORED = "blockgroups-unscored";
 const LAYER_OUTLINE = "blockgroups-outline";
 const LAYER_HIGHLIGHT = "blockgroups-highlight";
 
-export function BlockGroupMap({ geojsonUrl, hoveredGeoid = null, onFeatureHover }: BlockGroupMapProps) {
+export function BlockGroupMap({
+  geojsonUrl,
+  hoveredGeoid = null,
+  onFeatureHover,
+  height = "100%",
+}: BlockGroupMapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
 
@@ -205,7 +212,8 @@ export function BlockGroupMap({ geojsonUrl, hoveredGeoid = null, onFeatureHover 
       data-testid="blockgroup-map"
       style={{
         width: "100%",
-        height: "480px",
+        height,
+        minHeight: "360px",
         borderRadius: "var(--rounded-md)",
         overflow: "hidden",
       }}

@@ -1,6 +1,7 @@
 import { query } from "../../lib/db";
 import { RankingBoard } from "./RankingBoard";
 import { QualityPanel, type QualityPanelData, type ClassifierPrecisionRow } from "../../components/QualityPanel";
+import { EligibilityFunnel, type FunnelStep } from "../../components/EligibilityFunnel";
 import type { TopHomeRow } from "../../components/TopHomesTable";
 
 // M1-W1: MapLibre choropleth of Travis block groups (api.blockgroup_scores,
@@ -51,6 +52,51 @@ interface ParcelGateCountsRow {
 function toNumberOrNull(value: string | number | null | undefined): number | null {
   if (value === null || value === undefined) return null;
   return Number(value);
+}
+
+interface FunnelCountsRow {
+  total_parcels: string | number;
+  single_family_count: string | number;
+  single_family_homestead_count: string | number;
+  gated_with_geometry_count: string | number;
+}
+
+async function getFunnelSteps(): Promise<FunnelStep[]> {
+  // Real intersection counts (single-family AND homestead AND has parcel
+  // geometry) — api.parcel_gate_counts reports single-family and
+  // homestead as independent gates over all parcels, which would be
+  // dishonest to draw as one narrowing funnel (M1-W3 fix: funnel honesty).
+  // One pass over core.parcels with FILTER (not three separate COUNT(*)
+  // subqueries, each its own full scan) for the first three steps; the
+  // last step reads core.mv_home_block_group (perf(M1) materialization),
+  // never a live ST_Within join — that join is exactly what used to make
+  // /ranking time out before it was materialized.
+  const [countsRows, gatedRows] = await Promise.all([
+    query<FunnelCountsRow>(
+      `select
+         count(*) as total_parcels,
+         count(*) filter (
+           where imprv_state_cd like 'A1%' or land_state_cd like 'A1%'
+         ) as single_family_count,
+         count(*) filter (
+           where (imprv_state_cd like 'A1%' or land_state_cd like 'A1%') and hs_exempt = 'T'
+         ) as single_family_homestead_count
+       from core.parcels`
+    ),
+    query<{ n: string | number }>(`select count(*) as n from core.mv_home_block_group`),
+  ]);
+  if (countsRows.length === 0) return [];
+  const row = { ...countsRows[0], gated_with_geometry_count: gatedRows[0]?.n ?? 0 };
+  const total = Number(row.total_parcels);
+  if (total === 0) return [];
+
+  const values = [
+    { label: "Residential parcels (TCAD, Travis)", value: Number(row.total_parcels) },
+    { label: "Single-family (state code A1)", value: Number(row.single_family_count) },
+    { label: "Single-family + homestead", value: Number(row.single_family_homestead_count) },
+    { label: "Gated with parcel geometry (scoreable)", value: Number(row.gated_with_geometry_count) },
+  ];
+  return values.map((v) => ({ ...v, ratio: v.value / total }));
 }
 
 async function getTopHomes(): Promise<TopHomeRow[]> {
@@ -118,24 +164,38 @@ async function getQualityPanelData(): Promise<QualityPanelData> {
 }
 
 export default async function RankingPage() {
-  const [topHomes, qualityData] = await Promise.all([getTopHomes(), getQualityPanelData()]);
+  const [topHomes, qualityData, funnelSteps] = await Promise.all([
+    getTopHomes(),
+    getQualityPanelData(),
+    getFunnelSteps(),
+  ]);
+
+  const leftRail = (
+    <>
+      <EligibilityFunnel steps={funnelSteps} />
+      <QualityPanel data={qualityData} />
+    </>
+  );
 
   return (
-    <div style={{ display: "grid", gap: "var(--space-6)" }}>
-      <h1
-        style={{
-          fontFamily: "var(--type-title-font-family)",
-          fontSize: "var(--type-title-font-size)",
-          fontWeight: "var(--type-title-font-weight)",
-          margin: 0,
-        }}
-      >
-        Ranking
-      </h1>
-      <div style={{ display: "grid", gridTemplateColumns: "3fr 1fr", gap: "var(--space-6)" }}>
-        <RankingBoard rows={topHomes} />
-        <QualityPanel data={qualityData} />
+    <div style={{ display: "grid", gap: "var(--space-4)" }}>
+      <div>
+        <h1
+          style={{
+            fontFamily: "var(--type-title-font-family)",
+            fontSize: "var(--type-title-font-size)",
+            fontWeight: "var(--type-title-font-weight)",
+            margin: 0,
+          }}
+        >
+          Where should Base knock next?
+        </h1>
+        <p style={{ color: "var(--theme-ink-muted)", margin: "var(--space-1) 0 0 0", maxWidth: "80ch" }}>
+          Ranking owner-occupied single-family homes inside Travis County on outage
+          exposure, grid value, installability and household fit.
+        </p>
       </div>
+      <RankingBoard rows={topHomes} leftRail={leftRail} />
     </div>
   );
 }

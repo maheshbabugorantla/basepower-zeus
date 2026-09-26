@@ -19,8 +19,8 @@ describe.skipIf(!process.env.POSTGRES_URL)("Sources page", () => {
   });
 
   it("renders real api.sources rows when the table is non-empty, or MissingState when empty", async () => {
-    const rows = await query<{ source: string; sha256: string }>(
-      "select source, sha256 from api.sources"
+    const rows = await query<{ source: string; sha256: string; rows: string | number | null }>(
+      "select source, sha256, rows from api.sources"
     );
 
     const jsx = await SourcesPage();
@@ -38,7 +38,14 @@ describe.skipIf(!process.env.POSTGRES_URL)("Sources page", () => {
         expect(html).toContain(row.sha256.slice(0, 16));
       }
       expect(html).toContain("View raw file");
-      expect(html).not.toContain("missing-state--not-loaded");
+      // "missing-state--not-loaded" is a real, correct rendering whenever
+      // a real row's own `rows` count wasn't recorded by its pipeline run
+      // (DESIGN.md "The Missing Is Grey Rule") — only assert its absence
+      // when every real row actually has a recorded row count.
+      const anyRowCountMissing = rows.some((row) => row.rows === null);
+      if (!anyRowCountMissing) {
+        expect(html).not.toContain("missing-state--not-loaded");
+      }
     }
   });
 });

@@ -57,13 +57,18 @@ export function ProvenancePopover({
 
   return (
     <>
+      <span>{children}</span>
       <button
         type="button"
         id={triggerId}
+        aria-label="Show source"
         className="provenance-trigger"
         popoverTarget={popoverId}
       >
-        {children}
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+          <circle cx="8" cy="8" r="6.5" stroke="currentColor" strokeWidth="1.3" />
+          <path d="M8 7.2v3.6M8 5.2v.01" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+        </svg>
       </button>
       <span id={popoverId} popover="auto" className="provenance-popover">
         <span className="provenance-popover__row">

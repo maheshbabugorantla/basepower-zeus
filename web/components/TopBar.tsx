@@ -1,88 +1,53 @@
-import { Button } from "./ui/Button";
+import { PrimaryNav } from "./PrimaryNav";
+import { ExportButton } from "./ExportButton";
+import { ThemeToggle } from "./ThemeToggle";
 import { FreshnessSummary, type SourceFreshnessRow } from "./FreshnessSummary";
 
 // DESIGN.md §5 Navigation: "The top bar holds the wordmark, the county
 // switcher (Travis, Harris), the freshness summary (quiet unless something
-// is stale) and Export." Only Travis exists through M3, so the switcher
-// has exactly one real option — it is still a real, focusable <select>
-// (not a disabled control) so keyboard navigation reaches it, per this
-// ticket's acceptance criterion. Export ships in M5, so its button is
-// disabled with a tooltip saying so; DESIGN.md's Button already renders
-// the disabled state (ink-disabled on surface-sunken).
+// is stale) and Export" — matches the mockup's single header row
+// (Main.dc.html), which is why the primary nav now lives here rather than
+// in its own bar under the header (M1-W3 fix #4/#5: "nav is plain
+// underlined links with no active state").
+//
+// Only Travis has any loaded parcel/geometry data through M1 (Harris lands
+// in a later milestone), so the county control is a real, focusable
+// segmented group with exactly one enabled, pressed option — not a
+// disabled/fake control, and not a raw <select> (M1-W3 fix #5).
 
 export function TopBar({ freshness }: { freshness: SourceFreshnessRow[] }) {
   return (
-    <header
-      style={{
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "space-between",
-        gap: "var(--space-4)",
-        padding: "var(--space-3) var(--space-6)",
-        backgroundColor: "var(--theme-surface)",
-        borderBottom: "1px solid var(--theme-divider)",
-      }}
-    >
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: "var(--space-6)",
-        }}
-      >
-        <span
-          style={{
-            fontFamily: "var(--type-heading-font-family)",
-            fontSize: "var(--type-heading-font-size)",
-            fontWeight: "var(--type-heading-font-weight)",
-            color: "var(--theme-ink)",
-          }}
+    <header className="top-bar">
+      <div className="top-bar__brand">
+        <svg
+          width="20"
+          height="20"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="var(--theme-brand-accent-text)"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden="true"
         >
-          Base Power Zeus
-        </span>
-
-        <label
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: "var(--space-2)",
-            fontFamily: "var(--type-label-font-family)",
-            fontSize: "var(--type-label-font-size)",
-            color: "var(--theme-ink-muted)",
-          }}
-        >
-          County
-          <select
-            aria-label="County"
-            defaultValue="travis"
-            style={{
-              height: "36px",
-              borderRadius: "var(--rounded-sm)",
-              border: "1px solid var(--color-control-border)",
-              backgroundColor: "var(--theme-surface)",
-              color: "var(--theme-ink)",
-              padding: "0 var(--space-2)",
-              fontFamily: "var(--type-label-font-family)",
-              fontSize: "var(--type-label-font-size)",
-            }}
-          >
-            <option value="travis">Travis</option>
-          </select>
-        </label>
+          <path d="M13 2 4 14h7l-1 8 9-12h-7z" />
+        </svg>
+        <span className="top-bar__wordmark">Base Power Zeus</span>
       </div>
 
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: "var(--space-4)",
-        }}
-      >
-        <FreshnessSummary rows={freshness} />
-        <Button variant="secondary" disabled title="Available in M5">
-          Export
-        </Button>
+      <PrimaryNav />
+
+      <div className="top-bar__spacer" />
+
+      <div role="group" aria-label="County" className="county-switcher">
+        <button type="button" aria-pressed="true" className="county-switcher__button">
+          Travis
+        </button>
       </div>
+
+      <FreshnessSummary rows={freshness} />
+      <ThemeToggle />
+      <ExportButton />
     </header>
   );
 }

@@ -107,8 +107,8 @@ export function OutageSummary({ data }: { data: OutageSummaryData | null }) {
         ) : (
           figure
         )}{" "}
-        without power in 2025. This is a county-level total across every
-        customer in Travis County, not a per-home figure.
+        in 2025. This is a county-level total across every customer in
+        Travis County, not a per-home figure.
       </p>
       <p
         style={{
