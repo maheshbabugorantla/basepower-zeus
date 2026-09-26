@@ -63,7 +63,7 @@ AS $function$
                 when s.territory_eia_id = '1015' and stats.median_days is not null then
                     1 - least(1, greatest(0,
                         0.5 * least(1, stats.median_days::float8 / greatest(stats.p90_days, 1)::float8)
-                        + 0.5 * coalesce(stats.share_never_finished, 0)::float8
+                        + 0.5 * stats.share_never_finished::float8
                     ))
                 when s.territory_eia_id is not null and s.territory_eia_id != '1015' then 1.0
                 else null
@@ -83,19 +83,19 @@ AS $function$
             n.prop_id,
             n.backup_intent_rate,
             (
-                coalesce(w.w_outage * n.outage_term, 0)
-                + coalesce(w.w_flood * n.flood_term, 0)
-                + coalesce(w.w_empower * n.empower_term, 0)
-                + coalesce(w.w_age65 * n.age65_term, 0)
-                + coalesce(w.w_heat * n.electric_heat_term, 0)
-                + coalesce(w.w_backup * n.backup_intent_term, 0)
-                + coalesce(w.w_owner65 * n.owner65_term, 0)
-                + coalesce(w.w_permits * n.permits_term, 0)
-                + coalesce(w.w_install * n.installability_term, 0)
-                + coalesce(w.w_homevalue * n.home_value_term, 0)
-                + coalesce(w.w_income100k * n.income100k_term, 0)
-                + coalesce(w.w_age3564 * n.age3564_term, 0)
-                + coalesce(w.w_permitrisk * n.permitrisk_term, 0)
+                case when n.outage_term is not null then w.w_outage * n.outage_term else 0 end
+                + case when n.flood_term is not null then w.w_flood * n.flood_term else 0 end
+                + case when n.empower_term is not null then w.w_empower * n.empower_term else 0 end
+                + case when n.age65_term is not null then w.w_age65 * n.age65_term else 0 end
+                + case when n.electric_heat_term is not null then w.w_heat * n.electric_heat_term else 0 end
+                + case when n.backup_intent_term is not null then w.w_backup * n.backup_intent_term else 0 end
+                + case when n.owner65_term is not null then w.w_owner65 * n.owner65_term else 0 end
+                + case when n.permits_term is not null then w.w_permits * n.permits_term else 0 end
+                + case when n.installability_term is not null then w.w_install * n.installability_term else 0 end
+                + case when n.home_value_term is not null then w.w_homevalue * n.home_value_term else 0 end
+                + case when n.income100k_term is not null then w.w_income100k * n.income100k_term else 0 end
+                + case when n.age3564_term is not null then w.w_age3564 * n.age3564_term else 0 end
+                + case when n.permitrisk_term is not null then w.w_permitrisk * n.permitrisk_term else 0 end
             ) as weighted_sum,
             (
                 (case when n.outage_term is not null then w.w_outage else 0 end)
@@ -142,23 +142,23 @@ AS $function$
                 select label, contrib, home_level
                 from (values
                     ('outage',        case when s.outage_term is not null
-                                          then (select w_outage from w) * (s.outage_term - coalesce((md.med->>'outage')::numeric, 0)) end, true),
+                                          then (select w_outage from w) * (s.outage_term - (case when (md.med->>'outage') is null then 0 else (md.med->>'outage')::numeric end)) end, true),
                     ('empower',       case when s.empower_term is not null
-                                          then (select w_empower from w) * (s.empower_term - coalesce((md.med->>'empower')::numeric, 0)) end, false),
+                                          then (select w_empower from w) * (s.empower_term - (case when (md.med->>'empower') is null then 0 else (md.med->>'empower')::numeric end)) end, false),
                     ('age65',         case when s.age65_term is not null
-                                          then (select w_age65 from w) * (s.age65_term - coalesce((md.med->>'age65')::numeric, 0)) end, false),
+                                          then (select w_age65 from w) * (s.age65_term - (case when (md.med->>'age65') is null then 0 else (md.med->>'age65')::numeric end)) end, false),
                     ('electric_heat', case when s.electric_heat_term is not null
-                                          then (select w_heat from w) * (s.electric_heat_term - coalesce((md.med->>'electric_heat')::numeric, 0)) end, false),
+                                          then (select w_heat from w) * (s.electric_heat_term - (case when (md.med->>'electric_heat') is null then 0 else (md.med->>'electric_heat')::numeric end)) end, false),
                     ('backup_intent', case when s.backup_intent_term is not null
-                                          then (select w_backup from w) * (s.backup_intent_term - coalesce((md.med->>'backup_intent')::numeric, 0)) end, true),
+                                          then (select w_backup from w) * (s.backup_intent_term - (case when (md.med->>'backup_intent') is null then 0 else (md.med->>'backup_intent')::numeric end)) end, true),
                     ('owner_65',      case when s.owner_65 is not null
-                                          then (select w_owner65 from w) * (s.owner_65::int::numeric - coalesce((md.med->>'owner_65')::numeric, 0)) end, true),
+                                          then (select w_owner65 from w) * (s.owner_65::int::numeric - (case when (md.med->>'owner_65') is null then 0 else (md.med->>'owner_65')::numeric end)) end, true),
                     ('home_permits',  case when s.home_permits_flag is not null
-                                          then (select w_permits from w) * (s.home_permits_flag::int::numeric - coalesce((md.med->>'home_permits')::numeric, 0)) end, true),
+                                          then (select w_permits from w) * (s.home_permits_flag::int::numeric - (case when (md.med->>'home_permits') is null then 0 else (md.med->>'home_permits')::numeric end)) end, true),
                     ('installability', case when s.installability_term is not null
-                                          then (select w_install from w) * (s.installability_term - coalesce((md.med->>'installability')::numeric, 0)) end, true),
+                                          then (select w_install from w) * (s.installability_term - (case when (md.med->>'installability') is null then 0 else (md.med->>'installability')::numeric end)) end, true),
                     ('home_value',    case when s.home_value_term is not null
-                                          then (select w_homevalue from w) * (s.home_value_term - coalesce((md.med->>'home_value')::numeric, 0)) end, true)
+                                          then (select w_homevalue from w) * (s.home_value_term - (case when (md.med->>'home_value') is null then 0 else (md.med->>'home_value')::numeric end)) end, true)
                 ) as t(label, contrib, home_level)
                 where contrib is not null and contrib > 0
                 order by contrib desc, home_level desc
@@ -201,7 +201,7 @@ AS $function$
             when s.territory_eia_id = '1015' and stats.median_days is not null then
                 1 - least(1, greatest(0,
                     0.5 * least(1, stats.median_days::float8 / greatest(stats.p90_days, 1)::float8)
-                    + 0.5 * coalesce(stats.share_never_finished, 0)::float8
+                    + 0.5 * stats.share_never_finished::float8
                 ))
             when s.territory_eia_id is not null and s.territory_eia_id != '1015' then 1.0
             else null
@@ -284,7 +284,7 @@ AS $function$
                 when s.territory_eia_id = '1015' and stats.median_days is not null then
                     1 - least(1, greatest(0,
                         0.5 * least(1, stats.median_days::float8 / greatest(stats.p90_days, 1)::float8)
-                        + 0.5 * coalesce(stats.share_never_finished, 0)::float8
+                        + 0.5 * stats.share_never_finished::float8
                     ))
                 when s.territory_eia_id is not null and s.territory_eia_id != '1015' then 1.0
                 else null
@@ -305,19 +305,19 @@ AS $function$
             n.prop_id,
             n.backup_intent_rate,
             (
-                coalesce(w.w_outage * n.outage_term, 0)
-                + coalesce(w.w_flood * n.flood_term, 0)
-                + coalesce(w.w_empower * n.empower_term, 0)
-                + coalesce(w.w_age65 * n.age65_term, 0)
-                + coalesce(w.w_heat * n.electric_heat_term, 0)
-                + coalesce(w.w_backup * n.backup_intent_term, 0)
-                + coalesce(w.w_owner65 * n.owner65_term, 0)
-                + coalesce(w.w_permits * n.permits_term, 0)
-                + coalesce(w.w_install * n.installability_term, 0)
-                + coalesce(w.w_homevalue * n.home_value_term, 0)
-                + coalesce(w.w_income100k * n.income100k_term, 0)
-                + coalesce(w.w_age3564 * n.age3564_term, 0)
-                + coalesce(w.w_permitrisk * n.permitrisk_term, 0)
+                case when n.outage_term is not null then w.w_outage * n.outage_term else 0 end
+                + case when n.flood_term is not null then w.w_flood * n.flood_term else 0 end
+                + case when n.empower_term is not null then w.w_empower * n.empower_term else 0 end
+                + case when n.age65_term is not null then w.w_age65 * n.age65_term else 0 end
+                + case when n.electric_heat_term is not null then w.w_heat * n.electric_heat_term else 0 end
+                + case when n.backup_intent_term is not null then w.w_backup * n.backup_intent_term else 0 end
+                + case when n.owner65_term is not null then w.w_owner65 * n.owner65_term else 0 end
+                + case when n.permits_term is not null then w.w_permits * n.permits_term else 0 end
+                + case when n.installability_term is not null then w.w_install * n.installability_term else 0 end
+                + case when n.home_value_term is not null then w.w_homevalue * n.home_value_term else 0 end
+                + case when n.income100k_term is not null then w.w_income100k * n.income100k_term else 0 end
+                + case when n.age3564_term is not null then w.w_age3564 * n.age3564_term else 0 end
+                + case when n.permitrisk_term is not null then w.w_permitrisk * n.permitrisk_term else 0 end
             ) as weighted_sum,
             (
                 (case when n.outage_term is not null then w.w_outage else 0 end)
@@ -371,23 +371,23 @@ AS $function$
                 select label, contrib, home_level
                 from (values
                     ('outage',        case when s.outage_term is not null
-                                          then (select w_outage from w) * (s.outage_term - coalesce((md.med->>'outage')::numeric, 0)) end, true),
+                                          then (select w_outage from w) * (s.outage_term - (case when (md.med->>'outage') is null then 0 else (md.med->>'outage')::numeric end)) end, true),
                     ('empower',       case when s.empower_term is not null
-                                          then (select w_empower from w) * (s.empower_term - coalesce((md.med->>'empower')::numeric, 0)) end, false),
+                                          then (select w_empower from w) * (s.empower_term - (case when (md.med->>'empower') is null then 0 else (md.med->>'empower')::numeric end)) end, false),
                     ('age65',         case when s.age65_term is not null
-                                          then (select w_age65 from w) * (s.age65_term - coalesce((md.med->>'age65')::numeric, 0)) end, false),
+                                          then (select w_age65 from w) * (s.age65_term - (case when (md.med->>'age65') is null then 0 else (md.med->>'age65')::numeric end)) end, false),
                     ('electric_heat', case when s.electric_heat_term is not null
-                                          then (select w_heat from w) * (s.electric_heat_term - coalesce((md.med->>'electric_heat')::numeric, 0)) end, false),
+                                          then (select w_heat from w) * (s.electric_heat_term - (case when (md.med->>'electric_heat') is null then 0 else (md.med->>'electric_heat')::numeric end)) end, false),
                     ('backup_intent', case when s.backup_intent_term is not null
-                                          then (select w_backup from w) * (s.backup_intent_term - coalesce((md.med->>'backup_intent')::numeric, 0)) end, true),
+                                          then (select w_backup from w) * (s.backup_intent_term - (case when (md.med->>'backup_intent') is null then 0 else (md.med->>'backup_intent')::numeric end)) end, true),
                     ('owner_65',      case when s.owner_65 is not null
-                                          then (select w_owner65 from w) * (s.owner_65::int::numeric - coalesce((md.med->>'owner_65')::numeric, 0)) end, true),
+                                          then (select w_owner65 from w) * (s.owner_65::int::numeric - (case when (md.med->>'owner_65') is null then 0 else (md.med->>'owner_65')::numeric end)) end, true),
                     ('home_permits',  case when s.home_permits_flag is not null
-                                          then (select w_permits from w) * (s.home_permits_flag::int::numeric - coalesce((md.med->>'home_permits')::numeric, 0)) end, true),
+                                          then (select w_permits from w) * (s.home_permits_flag::int::numeric - (case when (md.med->>'home_permits') is null then 0 else (md.med->>'home_permits')::numeric end)) end, true),
                     ('installability', case when s.installability_term is not null
-                                          then (select w_install from w) * (s.installability_term - coalesce((md.med->>'installability')::numeric, 0)) end, true),
+                                          then (select w_install from w) * (s.installability_term - (case when (md.med->>'installability') is null then 0 else (md.med->>'installability')::numeric end)) end, true),
                     ('home_value',    case when s.home_value_term is not null
-                                          then (select w_homevalue from w) * (s.home_value_term - coalesce((md.med->>'home_value')::numeric, 0)) end, true)
+                                          then (select w_homevalue from w) * (s.home_value_term - (case when (md.med->>'home_value') is null then 0 else (md.med->>'home_value')::numeric end)) end, true)
                 ) as t(label, contrib, home_level)
                 where contrib is not null and contrib > 0
                 order by contrib desc, home_level desc
@@ -432,7 +432,7 @@ AS $function$
             when s.territory_eia_id = '1015' and stats.median_days is not null then
                 1 - least(1, greatest(0,
                     0.5 * least(1, stats.median_days::float8 / greatest(stats.p90_days, 1)::float8)
-                    + 0.5 * coalesce(stats.share_never_finished, 0)::float8
+                    + 0.5 * stats.share_never_finished::float8
                 ))
             when s.territory_eia_id is not null and s.territory_eia_id != '1015' then 1.0
             else null
@@ -511,7 +511,7 @@ AS $function$
                 when s.territory_eia_id = '1015' and stats.median_days is not null then
                     1 - least(1, greatest(0,
                         0.5 * least(1, stats.median_days::float8 / greatest(stats.p90_days, 1)::float8)
-                        + 0.5 * coalesce(stats.share_never_finished, 0)::float8
+                        + 0.5 * stats.share_never_finished::float8
                     ))
                 when s.territory_eia_id is not null and s.territory_eia_id != '1015' then 1.0
                 else null
@@ -605,7 +605,7 @@ AS $function$
                 when s.territory_eia_id = '1015' and stats.median_days is not null then
                     1 - least(1, greatest(0,
                         0.5 * least(1, stats.median_days::float8 / greatest(stats.p90_days, 1)::float8)
-                        + 0.5 * coalesce(stats.share_never_finished, 0)::float8
+                        + 0.5 * stats.share_never_finished::float8
                     ))
                 when s.territory_eia_id is not null and s.territory_eia_id != '1015' then 1.0
                 else null
@@ -624,19 +624,19 @@ AS $function$
         select
             n.block_group_geoid,
             (
-                coalesce(w.w_outage * n.outage_term, 0)
-                + coalesce(w.w_flood * n.flood_term, 0)
-                + coalesce(w.w_empower * n.empower_term, 0)
-                + coalesce(w.w_age65 * n.age65_term, 0)
-                + coalesce(w.w_heat * n.electric_heat_term, 0)
-                + coalesce(w.w_backup * n.backup_intent_term, 0)
-                + coalesce(w.w_owner65 * n.owner65_term, 0)
-                + coalesce(w.w_permits * n.permits_term, 0)
-                + coalesce(w.w_install * n.installability_term, 0)
-                + coalesce(w.w_homevalue * n.home_value_term, 0)
-                + coalesce(w.w_income100k * n.income100k_term, 0)
-                + coalesce(w.w_age3564 * n.age3564_term, 0)
-                + coalesce(w.w_permitrisk * n.permitrisk_term, 0)
+                case when n.outage_term is not null then w.w_outage * n.outage_term else 0 end
+                + case when n.flood_term is not null then w.w_flood * n.flood_term else 0 end
+                + case when n.empower_term is not null then w.w_empower * n.empower_term else 0 end
+                + case when n.age65_term is not null then w.w_age65 * n.age65_term else 0 end
+                + case when n.electric_heat_term is not null then w.w_heat * n.electric_heat_term else 0 end
+                + case when n.backup_intent_term is not null then w.w_backup * n.backup_intent_term else 0 end
+                + case when n.owner65_term is not null then w.w_owner65 * n.owner65_term else 0 end
+                + case when n.permits_term is not null then w.w_permits * n.permits_term else 0 end
+                + case when n.installability_term is not null then w.w_install * n.installability_term else 0 end
+                + case when n.home_value_term is not null then w.w_homevalue * n.home_value_term else 0 end
+                + case when n.income100k_term is not null then w.w_income100k * n.income100k_term else 0 end
+                + case when n.age3564_term is not null then w.w_age3564 * n.age3564_term else 0 end
+                + case when n.permitrisk_term is not null then w.w_permitrisk * n.permitrisk_term else 0 end
             ) as weighted_sum,
             (
                 (case when n.outage_term is not null then w.w_outage else 0 end)
