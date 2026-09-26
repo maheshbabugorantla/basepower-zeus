@@ -10,22 +10,15 @@ import {
   DataTableRow,
 } from "./ui/DataTable";
 import { MissingState } from "./ui/MissingState";
+import { Chip, type SignalName } from "./ui/Chip";
 
-// M1-W1: top-50 table from api.top_homes. Every row links to
-// /home/[prop_id] (acceptance criterion). Hovering a row highlights its
-// block group on the map — the hover handlers are plain props so this
-// component itself stays server-renderable-shaped (no internal state);
-// the "use client" boundary for the actual hover *state* lives one level
-// up, in app/ranking/RankingBoard.tsx.
-//
-// M1-W3-b fix #3: the ~520px right column was wrapping addresses to
-// 3-4 lines and forcing a horizontal scrollbar (Block group, Market value,
-// a verbose reasons chip and a raw decimal score all fighting for the same
-// narrow width). Block group and market value are already shown on the
-// home detail page, so they're dropped here; the table now fits Rank,
-// Home (single-line address + a small muted ZIP line), a Score bar, and
-// one compact reason chip, all inside a fixed-layout table that never
-// scrolls sideways.
+// M2-W1: top-50 table from api.top_homes_weighted (score v1, re-ranked
+// live by WeightSliders — see app/ranking/RankingBoard.tsx). Every row
+// still links to /home/[prop_id] (M1-W1 acceptance, unchanged). The old
+// single "rate/1k homes" chip (M1, backup-intent-only) is replaced by the
+// function's own top-3 `reasons`, rendered as signal-colored chips
+// (DESIGN.md §5 Chips) so the ranking reads as multi-signal even before
+// every M2 pipeline has loaded.
 
 export interface TopHomeRow {
   propId: string;
@@ -35,10 +28,35 @@ export interface TopHomeRow {
   situsZip: string | null;
   marketValue: number | null;
   blockGroupGeoid: string;
+  countyFips: string | null;
   score: number | null;
-  ratePer1000: number | null;
+  /** api.top_homes_weighted's top-3 nonzero-contributing signal keys, in order. */
   reasons: string[];
+  distributorName: string | null;
+  distributorSaidi: number | null;
+  distributorSaidiYear: number | null;
+  distributorSaidiEarlyRelease: boolean | null;
+  floodFlag: boolean | null;
+  empowerRate: number | null;
+  acsPct65Plus: number | null;
+  acsPctElectricHeat: number | null;
+  backupIntentRate: number | null;
 }
+
+/** api.top_homes_weighted's reason keys -> a short label + DESIGN.md signal
+ * category for the chip dot. outage/flood are both "will this home lose
+ * power" exposure signals -> the outage (grid-off red) category. empower/
+ * age65/electric_heat are household-need signals -> household (sky).
+ * backup_intent (a demonstrated interest in battery/generator backup) ->
+ * install (deep blue), the closest of the four named categories. */
+export const REASON_META: Record<string, { label: string; signal: SignalName }> = {
+  outage: { label: "Outage exposure", signal: "outage" },
+  flood: { label: "Flood risk", signal: "outage" },
+  empower: { label: "Medical need", signal: "household" },
+  age65: { label: "Age 65+", signal: "household" },
+  electric_heat: { label: "Electric heat", signal: "household" },
+  backup_intent: { label: "Backup intent", signal: "install" },
+};
 
 function formatAddressLine(row: TopHomeRow): string {
   const parts = [row.situsNum, row.situsStreet].filter(Boolean).join(" ");
@@ -46,26 +64,20 @@ function formatAddressLine(row: TopHomeRow): string {
   return [parts, city].filter((s) => s && s.trim() !== "").join(", ");
 }
 
-/** Drops a trailing ".00" (or a trailing insignificant zero, e.g. "200.50" -> "200.5"). */
-function formatRate(rate: number): string {
-  const fixed = rate.toFixed(2);
-  if (fixed.endsWith(".00")) return fixed.slice(0, -3);
-  if (fixed.endsWith("0")) return fixed.slice(0, -1);
-  return fixed;
-}
-
 export interface TopHomesTableProps {
   rows: TopHomeRow[];
   hoveredGeoid?: string | null;
   onHoverRow?: (geoid: string | null) => void;
+  /** propId -> rank delta (oldRank - newRank; positive = moved up). Cleared 2s after a re-rank. */
+  rankDeltas?: Map<string, number>;
 }
 
-export function TopHomesTable({ rows, hoveredGeoid = null, onHoverRow }: TopHomesTableProps) {
+export function TopHomesTable({ rows, hoveredGeoid = null, onHoverRow, rankDeltas }: TopHomesTableProps) {
   if (rows.length === 0) {
     return (
       <MissingState
         variant="not-loaded"
-        reason="api.top_homes has no rows yet — parcels, geometry, block groups, or permits are still loading"
+        reason="api.top_homes_weighted returned no rows — no homes have a nonzero weight sum, or no homes have passed the gate yet"
       />
     );
   }
@@ -75,21 +87,22 @@ export function TopHomesTable({ rows, hoveredGeoid = null, onHoverRow }: TopHome
       <colgroup>
         <col style={{ width: "40px" }} />
         <col />
-        <col style={{ width: "108px" }} />
-        <col style={{ width: "104px" }} />
+        <col style={{ width: "88px" }} />
+        <col style={{ width: "180px" }} />
       </colgroup>
       <DataTableHead>
         <DataTableRow>
           <DataTableHeaderCell>#</DataTableHeaderCell>
           <DataTableHeaderCell>Home</DataTableHeaderCell>
           <DataTableHeaderCell>Score</DataTableHeaderCell>
-          <DataTableHeaderCell>Reason</DataTableHeaderCell>
+          <DataTableHeaderCell>Top signals</DataTableHeaderCell>
         </DataTableRow>
       </DataTableHead>
       <DataTableBody>
         {rows.map((row, index) => {
           const addressLine = formatAddressLine(row);
           const title = [addressLine, row.situsZip].filter(Boolean).join(" ") || row.propId;
+          const delta = rankDeltas?.get(row.propId);
           return (
             <DataTableRow
               key={row.propId}
@@ -98,7 +111,18 @@ export function TopHomesTable({ rows, hoveredGeoid = null, onHoverRow }: TopHome
               onMouseLeave={() => onHoverRow?.(null)}
             >
               <DataTableCell>
-                <span style={{ color: "var(--theme-ink-muted)" }}>{index + 1}</span>
+                <span style={{ display: "inline-flex", alignItems: "center", gap: "var(--space-1)" }}>
+                  <span style={{ color: "var(--theme-ink-muted)" }}>{index + 1}</span>
+                  {delta && delta !== 0 ? (
+                    <span
+                      className={delta > 0 ? "rank-delta rank-delta--up" : "rank-delta rank-delta--down"}
+                      aria-label={delta > 0 ? `Moved up ${delta}` : `Moved down ${Math.abs(delta)}`}
+                    >
+                      {delta > 0 ? "↑" : "↓"}
+                      {Math.abs(delta)}
+                    </span>
+                  ) : null}
+                </span>
               </DataTableCell>
               <DataTableCell>
                 <Link href={`/home/${row.propId}`} className="top-homes-address" title={title}>
@@ -108,7 +132,7 @@ export function TopHomesTable({ rows, hoveredGeoid = null, onHoverRow }: TopHome
               </DataTableCell>
               <DataTableCell>
                 {row.score === null ? (
-                  <MissingState variant="not-loaded" reason="Block group score not yet computed" />
+                  <MissingState variant="not-loaded" reason="No signal has a nonzero weight for this home" />
                 ) : (
                   <div className="top-homes-score">
                     <span className="top-homes-score__bar-track">
@@ -122,12 +146,16 @@ export function TopHomesTable({ rows, hoveredGeoid = null, onHoverRow }: TopHome
                 )}
               </DataTableCell>
               <DataTableCell>
-                {row.ratePer1000 === null ? (
-                  <MissingState variant="not-loaded" reason="Rate not yet computed" />
+                {row.reasons.length === 0 ? (
+                  <MissingState variant="not-loaded" reason="No weighted signal available for this home" />
                 ) : (
-                  <span className="chip" title={row.reasons.join("; ") || undefined}>
-                    <span className="chip__label">{formatRate(row.ratePer1000)} / 1k homes</span>
-                  </span>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--space-1)" }}>
+                    {row.reasons.map((reason) => {
+                      const meta = REASON_META[reason];
+                      if (!meta) return null;
+                      return <Chip key={reason} label={meta.label} signal={meta.signal} />;
+                    })}
+                  </div>
                 )}
               </DataTableCell>
             </DataTableRow>

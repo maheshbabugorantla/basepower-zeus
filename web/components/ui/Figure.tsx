@@ -24,7 +24,14 @@ export function Figure({ value, unit, className, ...rest }: FigureProps) {
         className="figure__value"
         style={{
           fontFamily: "var(--type-figure-font-family)",
-          fontSize: "var(--type-figure-font-size)",
+          // M2-W1 responsive fix: a fixed 2.25rem (36px) figure could
+          // overflow a narrow Overview panel (800px width) — clamp so it
+          // shrinks instead. 1rem + 1.5vw is ~28px at an 800px viewport
+          // and ~32px at 1100px (16px base font), staying below the
+          // 36px ceiling at both, and reaches the ceiling itself above
+          // ~1387px — never below 1.375rem (22px), never above the
+          // DESIGN.md token value.
+          fontSize: "clamp(1.375rem, 1rem + 1.5vw, var(--type-figure-font-size))",
           fontWeight: "var(--type-figure-font-weight)",
           lineHeight: "var(--type-figure-line-height)",
           letterSpacing: "var(--type-figure-letter-spacing)",

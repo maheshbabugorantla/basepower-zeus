@@ -3,8 +3,9 @@ import { Panel } from "./ui/Panel";
 // M1-W3 fix #4: Main.dc.html's "Who is eligible" funnel — a stacked list
 // of gates with a proportional bar, each step's width relative to the
 // first (total) step. Every `value`/`ratio` here comes from a real
-// api.parcel_gate_counts + core.parcels/core.parcel_geoms query in
-// app/ranking/page.tsx — never a literal number.
+// api.parcel_gate_counts + api.gate_counts query in app/ranking/page.tsx
+// (M2-W1 perf fix: precomputed reads only, never a live core.parcels
+// scan or ST_Within join) — never a literal number.
 
 export interface FunnelStep {
   label: string;
@@ -51,7 +52,7 @@ export function EligibilityFunnel({ steps }: { steps: FunnelStep[] }) {
         ))}
       </div>
       <p style={{ fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)", marginBottom: 0 }}>
-        Counts from core.parcels/core.parcel_geoms (Travis, TCAD). Territory gate lands in M2.
+        Counts from api.parcel_gate_counts and api.gate_counts (Travis, TCAD). See the Territory gate panel below for the M2 gate itself.
       </p>
     </Panel>
   );

@@ -374,10 +374,17 @@
   min-height: 0;
 }
 
-@media (max-width: 1200px) {
+/* M2-W1 (responsive fix): stack rail -> map -> table below 1280px, in
+ * that DOM order, instead of squeezing three columns into one-word-per-
+ * line widths. */
+@media (max-width: 1279px) {
   .ranking-board {
     grid-template-columns: 1fr;
     height: auto;
+  }
+
+  .ranking-board__rail {
+    overflow-y: visible;
   }
 }
 
@@ -566,4 +573,158 @@
 .provenance-popover__copy:focus-visible {
   outline: 2px solid var(--color-focus);
   outline-offset: 2px;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Rank-change indicator (M2-W1) — ↑n/↓n shown 2s after a re-rank.        */
+/* The color change itself is a transition, so `prefers-reduced-motion`   */
+/* (globals.css's global rule, near-zero transition-duration) makes it    */
+/* instant automatically; only the JS-timed 2s *display* duration is      */
+/* unaffected by that media query, per DESIGN.md's own wording.           */
+/* ---------------------------------------------------------------------- */
+
+.rank-delta {
+  display: inline-flex;
+  align-items: center;
+  font-family: var(--type-data-font-family);
+  font-size: var(--type-label-font-size);
+  font-weight: 600;
+  transition: opacity var(--motion-duration) var(--motion-ease);
+}
+
+.rank-delta--up {
+  color: var(--theme-brand-accent-text);
+}
+
+.rank-delta--down {
+  color: var(--color-signal-outage);
+}
+
+/* ---------------------------------------------------------------------- */
+/* Weight sliders (M2-W1, DESIGN.md §5 Inputs: "track is divider, fill    */
+/* is forest")                                                            */
+/* ---------------------------------------------------------------------- */
+
+.weight-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 6px;
+  border-radius: var(--rounded-sm);
+  background: var(--theme-divider);
+  cursor: pointer;
+}
+
+.weight-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: var(--rounded-full);
+  background: var(--theme-brand-accent-text);
+  border: none;
+  cursor: pointer;
+}
+
+.weight-slider::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: var(--rounded-full);
+  background: var(--theme-brand-accent-text);
+  border: none;
+  cursor: pointer;
+}
+
+.weight-slider::-moz-range-track {
+  height: 6px;
+  border-radius: var(--rounded-sm);
+  background: var(--theme-divider);
+}
+
+.weight-slider:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Territory gate funnel (M2-W1, api.gate_counts) — one horizontal bar,   */
+/* segments proportional to count, not a grid of cards.                   */
+/* ---------------------------------------------------------------------- */
+
+.gate-funnel {
+  display: flex;
+  width: 100%;
+  height: 16px;
+  border-radius: var(--rounded-sm);
+  overflow: hidden;
+  margin-bottom: var(--space-3);
+}
+
+.gate-funnel__segment {
+  height: 100%;
+  min-width: 2px;
+}
+
+.gate-funnel__segment--passed,
+.gate-funnel__dot--passed {
+  background-color: var(--theme-brand-accent-text);
+}
+
+.gate-funnel__segment--excluded,
+.gate-funnel__dot--excluded {
+  background-color: var(--color-excluded-fill);
+}
+
+.gate-funnel__segment--not-loaded,
+.gate-funnel__dot--not-loaded {
+  background-color: var(--color-not-loaded-bg);
+}
+
+.gate-funnel__legend {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.gate-funnel__legend-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--type-body-font-size);
+}
+
+.gate-funnel__dot {
+  width: 10px;
+  height: 10px;
+  min-width: 10px;
+  border-radius: var(--rounded-full);
+  border: 1px solid var(--theme-divider);
+}
+
+/* ---------------------------------------------------------------------- */
+/* Overview stat figures (M2-W1 responsive fix): a figure must shrink     */
+/* rather than overflow its panel at narrow widths — clamp() the value's  */
+/* font size instead of the fixed --type-figure-font-size, and let the    */
+/* stat row wrap onto a second line instead of clipping.                  */
+/* ---------------------------------------------------------------------- */
+
+.stat-row {
+  flex-wrap: wrap;
+}
+
+.stat-row__value {
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.figure {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.figure__value {
+  overflow-wrap: anywhere;
 }

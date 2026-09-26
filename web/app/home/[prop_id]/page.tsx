@@ -90,6 +90,105 @@ interface TopHomeRankRow {
   total: string | number;
 }
 
+// M2-W1: core.mv_home_signals (0201_m2.sql) — every M2 per-home gate +
+// need signal, read directly rather than through an `api` view: no view
+// over this mv exists yet (api.top_homes_weighted only returns the top
+// 50), and the ticket explicitly calls for "a small server query or an
+// api view if one exists". Every join in the mv is LEFT JOIN, so a row
+// always exists once the home is in the M1 gated universe
+// (core.mv_home_block_group) — gate_reason/null_reason columns say why a
+// given signal is missing, never a silent 0.
+interface HomeSignalsRow {
+  gate_reason: string | null;
+  territory_null_reason: string | null;
+  territory_eia_id: string | null;
+  distributor_name: string | null;
+  distributor_saidi: string | number | null;
+  distributor_saidi_year: number | null;
+  distributor_saidi_early_release: boolean | null;
+  distributor_saidi_null_reason: string | null;
+  flood_flag: boolean | null;
+  flood_null_reason: string | null;
+  empower_rate: string | number | null;
+  empower_null_reason: string | null;
+  acs_pct_65_plus: string | number | null;
+  acs_65_null_reason: string | null;
+  acs_pct_electric_heat: string | number | null;
+  acs_heat_null_reason: string | null;
+  backup_intent_rate: string | number | null;
+  backup_intent_null_reason: string | null;
+  source_ids: string[] | null;
+}
+
+const GATE_REASON_LABEL: Record<string, string> = {
+  territory_not_base_served: "Outside every Base-served utility territory (HIFLD polygon match, or the crosswalk does not mark it mapped=yes)",
+};
+
+async function getHomeSignals(propId: string): Promise<HomeSignalsRow | null> {
+  try {
+    const rows = await query<HomeSignalsRow>(
+      `select gate_reason, territory_null_reason, territory_eia_id,
+              distributor_name, distributor_saidi, distributor_saidi_year,
+              distributor_saidi_early_release, distributor_saidi_null_reason,
+              flood_flag, flood_null_reason,
+              empower_rate, empower_null_reason,
+              acs_pct_65_plus, acs_65_null_reason,
+              acs_pct_electric_heat, acs_heat_null_reason,
+              backup_intent_rate, backup_intent_null_reason,
+              source_ids
+       from core.mv_home_signals
+       where prop_id = $1`,
+      [propId]
+    );
+    return rows[0] ?? null;
+  } catch (err) {
+    console.error("home-detail: failed to load core.mv_home_signals", err);
+    return null;
+  }
+}
+
+// core.mv_home_signals.distributor_saidi_null_reason only distinguishes
+// "no territory match" / "EIA-861 not loaded at all" / a generic
+// "no_eia861_figure_for_distributor" — it can't carry EIA's own reason
+// for a specific distributor+year (e.g. Oncor 44372's real reason is the
+// literal "not_reported", loaded as core.utility_reliability.
+// saidi_incl_major_null_reason, per M2-P7/0201_m2.sql) because the mv's
+// lateral join only selects rows where saidi_incl_major IS NOT NULL. A
+// distributor that IS matched but has no reported figure is "not
+// available" (a real, permanent absence from EIA), not "not loaded" (a
+// pipeline that hasn't run yet) — so this looks up the real reason
+// directly when a territory match exists but distributor_saidi is null.
+async function getDistributorSaidiNullReason(eiaId: string): Promise<string | null> {
+  try {
+    const rows = await query<{ saidi_incl_major_null_reason: string | null }>(
+      `select saidi_incl_major_null_reason
+       from core.utility_reliability
+       where eia_id = $1
+       order by year desc
+       limit 1`,
+      [eiaId]
+    );
+    return rows[0]?.saidi_incl_major_null_reason ?? null;
+  } catch (err) {
+    console.error("home-detail: failed to load core.utility_reliability null reason", err);
+    return null;
+  }
+}
+
+/** Finds the api.sources row whose `source` label contains one of `needles` (case-insensitive). */
+function findSourceByName(
+  sourcesById: Map<string, SourceRow>,
+  sourceIds: string[] | null | undefined,
+  needles: string[]
+): SourceRow | undefined {
+  if (!sourceIds) return undefined;
+  for (const id of sourceIds) {
+    const row = sourcesById.get(id);
+    if (row && needles.some((n) => row.source.toLowerCase().includes(n))) return row;
+  }
+  return undefined;
+}
+
 async function getSourcesByIds(sourceIds: string[]): Promise<Map<string, SourceRow>> {
   if (sourceIds.length === 0) return new Map();
   const rows = await query<SourceRow>(
@@ -254,8 +353,15 @@ export default async function HomeDetailPage({
   }
 
   const home = rows[0];
+  const homeSignals = await getHomeSignals(home.prop_id);
+  const distributorSaidiRealNullReason =
+    homeSignals && homeSignals.distributor_saidi === null && homeSignals.territory_eia_id
+      ? await getDistributorSaidiNullReason(homeSignals.territory_eia_id)
+      : null;
   const permitSourceIds = home.permits.map((p) => p.source_id).filter((s): s is string => !!s);
-  const allSourceIds = Array.from(new Set([...(home.source_ids ?? []), ...permitSourceIds]));
+  const allSourceIds = Array.from(
+    new Set([...(home.source_ids ?? []), ...permitSourceIds, ...(homeSignals?.source_ids ?? [])])
+  );
 
   const [sourcesById, scoreContext, topHomeRank, parcelGeojson, rulesHaveRun] = await Promise.all([
     getSourcesByIds(allSourceIds),
@@ -271,10 +377,6 @@ export default async function HomeDetailPage({
   const parcelSourceId = home.source_ids?.[0];
 
   const score = scoreContext?.score === null || scoreContext?.score === undefined ? null : Number(scoreContext.score);
-  const ratePer1000 =
-    scoreContext?.rate_per_1000 === null || scoreContext?.rate_per_1000 === undefined
-      ? null
-      : Number(scoreContext.rate_per_1000);
 
   return (
     <div style={{ display: "grid", gap: "var(--space-6)" }}>
@@ -353,31 +455,179 @@ export default async function HomeDetailPage({
         >
           Why this home
         </h2>
-        {score === null ? (
+
+        {homeSignals === null ? (
           <MissingState
             variant="not-loaded"
-            reason={scoreContext?.score_null_reason ?? "Not yet scored — block group score not computed"}
+            reason="This home is outside the gated (single-family + homestead + parcel geometry) universe used for scoring, or core.mv_home_signals hasn't refreshed since it was gated"
           />
-        ) : (
-          <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 160px", gap: "var(--space-4)", alignItems: "center" }}>
-            <span>
-              {ratePer1000 === null ? (
-                <MissingState variant="not-loaded" reason="Rate not computed for this block group" />
-              ) : (
-                <>
-                  <span style={{ fontWeight: 600, fontFamily: "var(--type-data-font-family)" }}>
-                    {ratePer1000.toFixed(2)}
-                  </span>{" "}
-                  battery/generator permits per 1,000 gated homes in block group{" "}
-                  {scoreContext?.block_group_geoid ?? "—"} (36 months)
-                </>
-              )}
-            </span>
-            <span style={{ fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)" }}>
-              Percentile {(score * 100).toFixed(0)} · same for all homes in this block group
-            </span>
+        ) : homeSignals.gate_reason ? (
+          <div
+            style={{
+              backgroundColor: "var(--color-excluded-fill)",
+              color: "var(--theme-ink)",
+              borderRadius: "var(--rounded-sm)",
+              padding: "var(--space-3)",
+              marginBottom: "var(--space-4)",
+            }}
+          >
+            <strong>Gated out of ranking:</strong>{" "}
+            {GATE_REASON_LABEL[homeSignals.gate_reason] ?? homeSignals.gate_reason}
           </div>
-        )}
+        ) : homeSignals.territory_null_reason ? (
+          <div style={{ marginBottom: "var(--space-4)" }}>
+            <MissingState
+              variant="not-loaded"
+              reason={`Territory gate not yet resolvable (${homeSignals.territory_null_reason}) — this home passes by default until it is`}
+            />
+          </div>
+        ) : null}
+
+        {homeSignals ? (
+          <dl style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)", gap: "var(--space-4) var(--space-6)", margin: 0 }}>
+            <div>
+              <dt style={{ color: "var(--theme-ink-muted)", fontSize: "var(--type-label-font-size)" }}>Outage exposure</dt>
+              <dd style={{ margin: "var(--space-1) 0 0 0" }}>
+                {homeSignals.distributor_saidi === null ? (
+                  distributorSaidiRealNullReason ? (
+                    // A real EIA-861 distributor is matched (e.g. Oncor
+                    // 44372) but EIA itself reports no figure for it —
+                    // "not available", not "not loaded": the pipeline has
+                    // run and this is EIA's own stated reason (e.g.
+                    // "not_reported"), never a made-up one.
+                    <MissingState variant="not-available" reason={distributorSaidiRealNullReason} />
+                  ) : (
+                    <MissingState
+                      variant="not-loaded"
+                      reason={homeSignals.distributor_saidi_null_reason ?? "No distributor SAIDI figure"}
+                    />
+                  )
+                ) : (
+                  <>
+                    <ProvenanceFor
+                      sourceRow={findSourceByName(sourcesById, homeSignals.source_ids, ["eia861", "eia-861", "reliability"])}
+                      id={`${home.prop_id}-outage`}
+                    >
+                      <span>
+                        {homeSignals.distributor_name ?? "This distributor"}'s customers averaged{" "}
+                        <span style={{ fontFamily: "var(--type-data-font-family)", fontWeight: 600 }}>
+                          {Number(homeSignals.distributor_saidi).toLocaleString(undefined, { maximumFractionDigits: 1 })}
+                        </span>{" "}
+                        minutes without power in {homeSignals.distributor_saidi_year} (SAIDI, incl. major events)
+                      </span>
+                    </ProvenanceFor>
+                    {homeSignals.distributor_saidi_early_release ? (
+                      <div style={{ fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)" }}>
+                        Early release, not fully edited (EIA-861)
+                      </div>
+                    ) : null}
+                  </>
+                )}
+              </dd>
+            </div>
+
+            <div>
+              <dt style={{ color: "var(--theme-ink-muted)", fontSize: "var(--type-label-font-size)" }}>Flood risk</dt>
+              <dd style={{ margin: "var(--space-1) 0 0 0" }}>
+                {homeSignals.flood_flag === null ? (
+                  <MissingState variant="not-loaded" reason={homeSignals.flood_null_reason ?? "Flood zones not loaded"} />
+                ) : (
+                  <ProvenanceFor
+                    sourceRow={findSourceByName(sourcesById, homeSignals.source_ids, ["nfhl", "flood"])}
+                    id={`${home.prop_id}-flood`}
+                  >
+                    <span>Inside a FEMA Special Flood Hazard Area: {homeSignals.flood_flag ? "Yes" : "No"}</span>
+                  </ProvenanceFor>
+                )}
+              </dd>
+            </div>
+
+            <div>
+              <dt style={{ color: "var(--theme-ink-muted)", fontSize: "var(--type-label-font-size)" }}>Medical need (emPOWER)</dt>
+              <dd style={{ margin: "var(--space-1) 0 0 0" }}>
+                {homeSignals.empower_rate === null ? (
+                  <MissingState
+                    variant={homeSignals.empower_null_reason === "suppressed_1_to_10" ? "not-available" : "not-loaded"}
+                    reason={homeSignals.empower_null_reason ?? "No emPOWER figure"}
+                  />
+                ) : (
+                  <ProvenanceFor
+                    sourceRow={findSourceByName(sourcesById, homeSignals.source_ids, ["empower"])}
+                    id={`${home.prop_id}-empower`}
+                  >
+                    <span>
+                      <span style={{ fontFamily: "var(--type-data-font-family)", fontWeight: 600 }}>
+                        {(Number(homeSignals.empower_rate) * 1000).toFixed(1)}
+                      </span>{" "}
+                      power-dependent Medicare devices per 1,000 Medicare beneficiaries in this ZIP
+                    </span>
+                  </ProvenanceFor>
+                )}
+              </dd>
+            </div>
+
+            <div>
+              <dt style={{ color: "var(--theme-ink-muted)", fontSize: "var(--type-label-font-size)" }}>Age 65+ (ACS)</dt>
+              <dd style={{ margin: "var(--space-1) 0 0 0" }}>
+                {homeSignals.acs_pct_65_plus === null ? (
+                  <MissingState variant="not-loaded" reason={homeSignals.acs_65_null_reason ?? "No ACS figure"} />
+                ) : (
+                  <ProvenanceFor
+                    sourceRow={findSourceByName(sourcesById, homeSignals.source_ids, ["acs", "census"])}
+                    id={`${home.prop_id}-age65`}
+                  >
+                    <span>
+                      <span style={{ fontFamily: "var(--type-data-font-family)", fontWeight: 600 }}>
+                        {(Number(homeSignals.acs_pct_65_plus) * 100).toFixed(1)}%
+                      </span>{" "}
+                      of this block group's population is 65+ (ACS 2024, same for all homes in block group)
+                    </span>
+                  </ProvenanceFor>
+                )}
+              </dd>
+            </div>
+
+            <div>
+              <dt style={{ color: "var(--theme-ink-muted)", fontSize: "var(--type-label-font-size)" }}>Electric heat (ACS)</dt>
+              <dd style={{ margin: "var(--space-1) 0 0 0" }}>
+                {homeSignals.acs_pct_electric_heat === null ? (
+                  <MissingState variant="not-loaded" reason={homeSignals.acs_heat_null_reason ?? "No ACS figure"} />
+                ) : (
+                  <ProvenanceFor
+                    sourceRow={findSourceByName(sourcesById, homeSignals.source_ids, ["acs", "census"])}
+                    id={`${home.prop_id}-heat`}
+                  >
+                    <span>
+                      <span style={{ fontFamily: "var(--type-data-font-family)", fontWeight: 600 }}>
+                        {(Number(homeSignals.acs_pct_electric_heat) * 100).toFixed(1)}%
+                      </span>{" "}
+                      of housing units in this block group heat with electricity (ACS 2024, same for all homes in block group)
+                    </span>
+                  </ProvenanceFor>
+                )}
+              </dd>
+            </div>
+
+            <div>
+              <dt style={{ color: "var(--theme-ink-muted)", fontSize: "var(--type-label-font-size)" }}>Backup intent</dt>
+              <dd style={{ margin: "var(--space-1) 0 0 0" }}>
+                {homeSignals.backup_intent_rate === null ? (
+                  <MissingState
+                    variant="not-loaded"
+                    reason={homeSignals.backup_intent_null_reason ?? "Rate not computed for this block group"}
+                  />
+                ) : (
+                  <span>
+                    <span style={{ fontFamily: "var(--type-data-font-family)", fontWeight: 600 }}>
+                      {Number(homeSignals.backup_intent_rate).toFixed(2)}
+                    </span>{" "}
+                    battery/generator permits per 1,000 gated homes in this block group (36 months, same for all homes in block group)
+                  </span>
+                )}
+              </dd>
+            </div>
+          </dl>
+        ) : null}
       </Panel>
 
       <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 320px", gap: "var(--space-6)" }}>

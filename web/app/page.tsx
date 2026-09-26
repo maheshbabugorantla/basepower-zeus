@@ -22,6 +22,8 @@ const OUTAGE_YEAR = 2025;
 interface TravisOutageRow {
   customer_hours_out: string | number | null;
   customer_hours_out_null_reason: string | null;
+  hours_per_customer: string | number | null;
+  hours_per_customer_null_reason: string | null;
   source: string | null;
   url: string | null;
   retrieved_at: string | Date | null;
@@ -38,6 +40,8 @@ async function getTravis2025Outage(): Promise<OutageSummaryData | null> {
     `select
        co.customer_hours_out,
        co.customer_hours_out_null_reason,
+       co.hours_per_customer,
+       co.hours_per_customer_null_reason,
        s.source,
        s.url,
        s.retrieved_at,
@@ -69,6 +73,9 @@ async function getTravis2025Outage(): Promise<OutageSummaryData | null> {
     customerHoursOut:
       row.customer_hours_out === null ? null : Number(row.customer_hours_out),
     nullReason: row.customer_hours_out_null_reason,
+    hoursPerCustomer:
+      row.hours_per_customer === null ? null : Number(row.hours_per_customer),
+    hoursPerCustomerNullReason: row.hours_per_customer_null_reason,
     source: hasSource
       ? {
           dataset: row.source as string,
@@ -109,12 +116,17 @@ interface GateCounts {
   singleFamilyCount: number;
   homesteadCount: number;
   /**
-   * M1-W3-b fix #1 (data bug): the number of parcels *gated for ranking*,
-   * not "homestead parcels" (which is a much larger, independent gate —
-   * see api.parcel_gate_counts). Gated means single-family (state code
-   * A1) AND homestead, the exact predicate app/ranking/page.tsx's
-   * eligibility funnel uses for its "Single-family + homestead" step, so
-   * this number always agrees with the Ranking screen's funnel.
+   * M2-W1 perf fix: this used to run its own live
+   * `count(*) from core.parcels where (single-family) and hs_exempt='T'`
+   * subquery on every Overview request — a full scan of core.parcels
+   * (441,961 rows), duplicating work app/ranking/page.tsx's funnel ran
+   * too. A live incident (statement-timeout cascades under concurrent
+   * load) showed this doesn't scale. Read instead from api.gate_counts
+   * (0201_m2.sql, built on the materialized core.mv_home_signals): the
+   * sum of every reason's home_count is exactly the single-family +
+   * homestead + parcel-geometry population core.mv_home_block_group (the
+   * M1 gate) contains, since core.mv_home_signals has one row per home in
+   * that population regardless of the M2 territory-gate outcome.
    */
   gatedCount: number;
   source: (Omit<ProvenancePopoverProps, "children" | "id">) | null;
@@ -127,10 +139,7 @@ async function getGateCounts(): Promise<GateCounts | null> {
          pgc.total_parcels,
          pgc.single_family_count,
          pgc.homestead_count,
-         (select count(*)
-            from core.parcels
-            where (imprv_state_cd like 'A1%' or land_state_cd like 'A1%')
-              and hs_exempt = 'T') as gated_count,
+         (select coalesce(sum(home_count), 0) from api.gate_counts) as gated_count,
          s.source, s.url, s.retrieved_at, s.sha256, s.storage_key, s.runner,
          s.latest_run_id, s.latest_run_rows_in, s.latest_run_rows_loaded
        from api.parcel_gate_counts pgc
@@ -272,7 +281,7 @@ export default async function HomePage() {
             />
             <StatRow
               id="overview-gated"
-              label="Gated for ranking (single-family + homestead)"
+              label="Gated for ranking (single-family + homestead + parcel geometry)"
               value={gateCounts.gatedCount.toLocaleString()}
               unit="homes"
               source={gateCounts.source}

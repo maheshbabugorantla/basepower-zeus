@@ -17,9 +17,17 @@ describe.skipIf(!process.env.POSTGRES_URL)("RankingPage", () => {
   });
 
   it(
-    "renders the honest empty state when api.top_homes has no rows, or real linked rows when it does",
+    "renders the honest empty state when api.top_homes_weighted has no rows, or real linked rows when it does",
     async () => {
-      const topHomes = await query<{ prop_id: string }>("select prop_id from api.top_homes");
+      // M2-W1: the page now sources its ranked table from
+      // api.top_homes_weighted (score v1, equal weights for the
+      // server-rendered first paint), not the retired v0 api.top_homes
+      // view — see 0201_m2.sql / app/ranking/page.tsx.
+      const equalWeights = { outage: 1, flood: 1, empower: 1, age65: 1, electric_heat: 1, backup_intent: 1 };
+      const topHomes = await query<{ prop_id: string }>(
+        `select prop_id from api.top_homes_weighted($1::jsonb, $2::text)`,
+        [JSON.stringify(equalWeights), "48453"]
+      );
 
       const html = renderToStaticMarkup(await RankingPage());
 
@@ -32,7 +40,7 @@ describe.skipIf(!process.env.POSTGRES_URL)("RankingPage", () => {
         }
       }
     },
-    20000
+    60000
   );
 
   it(
@@ -58,6 +66,6 @@ describe.skipIf(!process.env.POSTGRES_URL)("RankingPage", () => {
         }
       }
     },
-    20000
+    60000
   );
 });

@@ -27,6 +27,9 @@ export interface OutageSummaryData {
   nullReason: string | null;
   /** Provenance for the row's source_ids, when resolvable against api.sources. */
   source: OutageSourceProvenance | null;
+  /** api.county_outage.hours_per_customer = customer_hours_out / core.county_customers.customers (M2-P7). */
+  hoursPerCustomer: number | null;
+  hoursPerCustomerNullReason: string | null;
 }
 
 const DEFAULT_NOT_LOADED_REASON =
@@ -53,6 +56,22 @@ export function OutageSummary({ data }: { data: OutageSummaryData | null }) {
           <MissingState variant="not-loaded" reason={reason} /> customer-hours
           without power in 2025. This is a county-level total, not a
           per-home figure.
+        </p>
+        <p
+          style={{
+            fontFamily: "var(--type-body-font-family)",
+            fontSize: "var(--type-body-font-size)",
+            fontWeight: "var(--type-body-font-weight)",
+            lineHeight: "var(--type-body-line-height)",
+            color: "var(--theme-ink-muted)",
+            maxWidth: "70ch",
+          }}
+        >
+          Hours per customer:{" "}
+          <MissingState
+            variant="not-loaded"
+            reason={data?.hoursPerCustomerNullReason ?? "Not loaded"}
+          />
         </p>
         <p
           style={{
@@ -109,6 +128,31 @@ export function OutageSummary({ data }: { data: OutageSummaryData | null }) {
         )}{" "}
         in 2025. This is a county-level total across every customer in
         Travis County, not a per-home figure.
+      </p>
+      <p
+        style={{
+          fontFamily: "var(--type-body-font-family)",
+          fontSize: "var(--type-body-font-size)",
+          fontWeight: "var(--type-body-font-weight)",
+          lineHeight: "var(--type-body-line-height)",
+          color: "var(--theme-ink-muted)",
+          maxWidth: "70ch",
+        }}
+      >
+        {data?.hoursPerCustomer === null || data?.hoursPerCustomer === undefined ? (
+          <>
+            Hours per customer:{" "}
+            <MissingState
+              variant="not-loaded"
+              reason={data?.hoursPerCustomerNullReason ?? "Not loaded"}
+            />
+          </>
+        ) : (
+          <>
+            ≈{data.hoursPerCustomer.toFixed(1)} h per customer (this county-total figure divided by
+            EAGLE-I's county customer count).
+          </>
+        )}
       </p>
       <p
         style={{

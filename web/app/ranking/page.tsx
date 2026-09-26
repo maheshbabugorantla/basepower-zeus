@@ -2,7 +2,9 @@ import { query } from "../../lib/db";
 import { RankingBoard } from "./RankingBoard";
 import { QualityPanel, type QualityPanelData, type ClassifierPrecisionRow } from "../../components/QualityPanel";
 import { EligibilityFunnel, type FunnelStep } from "../../components/EligibilityFunnel";
+import { GateCounts, type GateCountRow } from "../../components/GateCounts";
 import type { TopHomeRow } from "../../components/TopHomesTable";
+import { mapWeightedRow } from "../api/top-homes/route";
 
 // M1-W1: MapLibre choropleth of Travis block groups (api.blockgroup_scores,
 // via the app/ranking/blockgroups route handler) + top-50 table
@@ -13,18 +15,19 @@ import type { TopHomeRow } from "../../components/TopHomesTable";
 
 export const dynamic = "force-dynamic";
 
-interface TopHomesRowDb {
-  prop_id: string;
-  situs_num: string | null;
-  situs_street: string | null;
-  situs_city: string | null;
-  situs_zip: string | null;
-  market_value: string | number | null;
-  block_group_geoid: string;
-  score: string | number | null;
-  rate_per_1000: string | number | null;
-  reasons: string[];
-}
+const TRAVIS_COUNTY_FIPS = "48453";
+
+// Equal weights across every signal api.top_homes_weighted supports — the
+// same starting point WeightSliders' equalWeights() uses client-side, so
+// the server-rendered first paint matches what "Reset to equal" produces.
+const EQUAL_WEIGHTS = {
+  outage: 1,
+  flood: 1,
+  empower: 1,
+  age65: 1,
+  electric_heat: 1,
+  backup_intent: 1,
+};
 
 interface JoinRateRow {
   permits_with_tcad_id: string | number;
@@ -54,69 +57,70 @@ function toNumberOrNull(value: string | number | null | undefined): number | nul
   return Number(value);
 }
 
-interface FunnelCountsRow {
+interface ParcelGateCountsRow {
   total_parcels: string | number;
   single_family_count: string | number;
-  single_family_homestead_count: string | number;
-  gated_with_geometry_count: string | number;
+}
+
+interface GateCountsRow {
+  reason: string;
+  home_count: string | number;
 }
 
 async function getFunnelSteps(): Promise<FunnelStep[]> {
-  // Real intersection counts (single-family AND homestead AND has parcel
-  // geometry) — api.parcel_gate_counts reports single-family and
-  // homestead as independent gates over all parcels, which would be
-  // dishonest to draw as one narrowing funnel (M1-W3 fix: funnel honesty).
-  // One pass over core.parcels with FILTER (not three separate COUNT(*)
-  // subqueries, each its own full scan) for the first three steps; the
-  // last step reads core.mv_home_block_group (perf(M1) materialization),
-  // never a live ST_Within join — that join is exactly what used to make
-  // /ranking time out before it was materialized.
-  const [countsRows, gatedRows] = await Promise.all([
-    query<FunnelCountsRow>(
-      `select
-         count(*) as total_parcels,
-         count(*) filter (
-           where imprv_state_cd like 'A1%' or land_state_cd like 'A1%'
-         ) as single_family_count,
-         count(*) filter (
-           where (imprv_state_cd like 'A1%' or land_state_cd like 'A1%') and hs_exempt = 'T'
-         ) as single_family_homestead_count
-       from core.parcels`
-    ),
-    query<{ n: string | number }>(`select count(*) as n from core.mv_home_block_group`),
+  // M2-W1 perf fix: this used to run a live `select count(*) ... FILTER
+  // (...) from core.parcels` (a full 441,961-row scan) plus a second
+  // `count(*) from core.mv_home_block_group` on every /ranking request —
+  // duplicating Overview's own (also-live) count and, under concurrent
+  // load, contributing to a real statement-timeout cascade on the shared
+  // Supabase pooler. Every count below now comes from an already-precomputed
+  // source: api.parcel_gate_counts for the first two steps, and
+  // api.gate_counts (0201_m2.sql, built on the materialized
+  // core.mv_home_signals) for the last — sum(home_count) across every
+  // reason is exactly the single-family + homestead + parcel-geometry
+  // population, since core.mv_home_signals has one row per home in that
+  // population regardless of the M2 territory-gate outcome.
+  const [pgcRows, gateRows] = await Promise.all([
+    query<ParcelGateCountsRow>(`select total_parcels, single_family_count from api.parcel_gate_counts`),
+    query<GateCountsRow>(`select reason, home_count from api.gate_counts`),
   ]);
-  if (countsRows.length === 0) return [];
-  const row = { ...countsRows[0], gated_with_geometry_count: gatedRows[0]?.n ?? 0 };
-  const total = Number(row.total_parcels);
+  const pgc = pgcRows[0];
+  if (!pgc) return [];
+  const total = Number(pgc.total_parcels);
   if (total === 0) return [];
+  const gatedForScoring = gateRows.reduce((sum, r) => sum + Number(r.home_count), 0);
 
   const values = [
-    { label: "Residential parcels (TCAD, Travis)", value: Number(row.total_parcels) },
-    { label: "Single-family (state code A1)", value: Number(row.single_family_count) },
-    { label: "Single-family + homestead", value: Number(row.single_family_homestead_count) },
-    { label: "Gated with parcel geometry (scoreable)", value: Number(row.gated_with_geometry_count) },
+    { label: "Residential parcels (TCAD, Travis)", value: total },
+    { label: "Single-family (state code A1)", value: Number(pgc.single_family_count) },
+    { label: "Single-family + homestead + parcel geometry (scoreable)", value: gatedForScoring },
   ];
   return values.map((v) => ({ ...v, ratio: v.value / total }));
 }
 
 async function getTopHomes(): Promise<TopHomeRow[]> {
-  const rows = await query<TopHomesRowDb>(
-    `select prop_id, situs_num, situs_street, situs_city, situs_zip, market_value,
-            block_group_geoid, score, rate_per_1000, reasons
-     from api.top_homes`
+  // M2-W1: score v1 (api.top_homes_weighted, 0201_m2.sql) replaces the v0
+  // api.top_homes view. Server-rendered with equal weights so the first
+  // paint (no JS, or before hydration) matches WeightSliders' default
+  // state; every re-rank after that goes through /api/top-homes.
+  const rows = await query(
+    `select * from api.top_homes_weighted($1::jsonb, $2::text)`,
+    [JSON.stringify(EQUAL_WEIGHTS), TRAVIS_COUNTY_FIPS]
   );
-  return rows.map((row) => ({
-    propId: row.prop_id,
-    situsNum: row.situs_num,
-    situsStreet: row.situs_street,
-    situsCity: row.situs_city,
-    situsZip: row.situs_zip,
-    marketValue: toNumberOrNull(row.market_value),
-    blockGroupGeoid: row.block_group_geoid,
-    score: toNumberOrNull(row.score),
-    ratePer1000: toNumberOrNull(row.rate_per_1000),
-    reasons: row.reasons ?? [],
-  }));
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return (rows as any[]).map(mapWeightedRow);
+}
+
+async function getGateCounts(): Promise<GateCountRow[]> {
+  try {
+    const rows = await query<{ reason: string; home_count: string | number }>(
+      `select reason, home_count from api.gate_counts order by home_count desc`
+    );
+    return rows.map((row) => ({ reason: row.reason, homeCount: Number(row.home_count) }));
+  } catch (err) {
+    console.error("ranking: failed to load api.gate_counts", err);
+    return [];
+  }
 }
 
 async function getQualityPanelData(): Promise<QualityPanelData> {
@@ -164,15 +168,17 @@ async function getQualityPanelData(): Promise<QualityPanelData> {
 }
 
 export default async function RankingPage() {
-  const [topHomes, qualityData, funnelSteps] = await Promise.all([
+  const [topHomes, qualityData, funnelSteps, gateCounts] = await Promise.all([
     getTopHomes(),
     getQualityPanelData(),
     getFunnelSteps(),
+    getGateCounts(),
   ]);
 
   const leftRail = (
     <>
       <EligibilityFunnel steps={funnelSteps} />
+      <GateCounts rows={gateCounts} />
       <QualityPanel data={qualityData} />
     </>
   );
