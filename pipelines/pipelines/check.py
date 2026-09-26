@@ -93,6 +93,11 @@ PROVENANCE_EXEMPT: dict[str, str] = {
     "api.source_freshness.status": "derived label, non-null even when not_loaded",
     # The grouping key (source name) the row is about, not sourced data.
     "api.source_freshness.source": "grouping key (source name), not a value",
+    # Run metadata from ops.pipeline_runs (when a step last succeeded and
+    # whether that is past its cycle), not a value read from a raw file.
+    # Derived steps such as refresh_scores have no manifest by design.
+    "api.source_freshness.last_success_at": "run metadata from ops.pipeline_runs, not sourced data",
+    "api.source_freshness.is_stale": "derived from run metadata and refresh policy, not sourced data",
 }
 
 # Views intentionally exempted from the whole per-row check (none yet —
