@@ -75,8 +75,8 @@ VINTAGES: tuple[int, ...] = (2024, 2023)
 
 STATE_FIPS = "48"
 # county_fips (core.acs_bg.county_fips) -> 3-digit county code for the API's `in=` clause
-COUNTIES: dict[str, str] = {"48453": "453", "48201": "201"}
-COUNTY_FILE_NAMES: dict[str, str] = {"48453": "travis", "48201": "harris"}
+COUNTIES: dict[str, str] = {"48453": "453", "48201": "201", "48491": "491"}
+COUNTY_FILE_NAMES: dict[str, str] = {"48453": "travis", "48201": "harris", "48491": "williamson"}
 
 VARIABLES: list[str] = [
     "NAME",

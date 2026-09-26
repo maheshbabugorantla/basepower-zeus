@@ -114,6 +114,10 @@ PAGE_SIZE = 1000
 COUNTY_ENVELOPES: dict[str, tuple[float, float, float, float]] = {
     "48453": (-98.172977, 30.023451, -97.369539, 30.628249),  # Travis
     "48201": (-95.960733, 29.497297, -94.908492, 30.170606),  # Harris
+    # Williamson (M3-P5): live ST_Extent(geom) over core.block_groups
+    # where county_fips='48491' (TIGER, already loaded) -- same recipe
+    # the module docstring documents for Travis/Harris.
+    "48491": (-98.049886, 30.402843, -97.155219, 30.904414),  # Williamson
 }
 
 OUT_FIELDS = "FLD_ZONE,ZONE_SUBTY,SFHA_TF,DFIRM_ID,OBJECTID"
