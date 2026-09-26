@@ -122,7 +122,7 @@ interface HomeSignalsRow {
 }
 
 const GATE_REASON_LABEL: Record<string, string> = {
-  territory_not_base_served: "Outside every Base-served utility territory (HIFLD polygon match, or the crosswalk does not mark it mapped=yes)",
+  territory_not_base_served: "Not in a utility Base serves (HIFLD polygon match, or Base's served-utilities list does not mark it mapped=yes)",
 };
 
 async function getHomeSignals(propId: string): Promise<HomeSignalsRow | null> {
@@ -472,14 +472,14 @@ export default async function HomeDetailPage({
               marginBottom: "var(--space-4)",
             }}
           >
-            <strong>Gated out of ranking:</strong>{" "}
+            <strong>Excluded from ranking:</strong>{" "}
             {GATE_REASON_LABEL[homeSignals.gate_reason] ?? homeSignals.gate_reason}
           </div>
         ) : homeSignals.territory_null_reason ? (
           <div style={{ marginBottom: "var(--space-4)" }}>
             <MissingState
               variant="not-loaded"
-              reason={`Territory gate not yet resolvable (${homeSignals.territory_null_reason}) — this home passes by default until it is`}
+              reason={`Whether Base serves this home's utility isn't resolvable yet (${homeSignals.territory_null_reason}) — it passes by default until it is`}
             />
           </div>
         ) : null}
