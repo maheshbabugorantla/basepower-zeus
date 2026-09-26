@@ -1,7 +1,6 @@
 "use client";
 
 import { Panel } from "./ui/Panel";
-import { MissingState } from "./ui/MissingState";
 import type { SignalKey } from "../app/api/top-homes/route";
 import { REASON_META } from "./TopHomesTable";
 
@@ -33,9 +32,16 @@ export const SIGNAL_ORDER: SignalKey[] = [
   "backup_intent",
 ];
 
+// Each slider is an importance level on a 0–10 scale; "equal" starts every
+// signal at the middle (5) so the thumbs sit where people expect and have
+// room to move both ways. Only the ratios matter to the score, so 5s rank
+// exactly like the 1s used server-side.
+export const WEIGHT_MAX = 10;
+export const WEIGHT_EQUAL = 5;
+
 export function equalWeights(): Record<SignalKey, number> {
   const out = {} as Record<SignalKey, number>;
-  for (const key of SIGNAL_ORDER) out[key] = 1;
+  for (const key of SIGNAL_ORDER) out[key] = WEIGHT_EQUAL;
   return out;
 }
 
@@ -70,7 +76,7 @@ export function WeightSliders({ weights, onChange, onReset }: WeightSlidersProps
         </button>
       </div>
       <p style={{ margin: "0 0 var(--space-3) 0", fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)" }}>
-        Team choices, not data. Moving a slider re-ranks the list.
+        Team choices, not data. 0 ignores a signal, 10 makes it count most; % is its share of the score.
       </p>
 
       <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-3)" }}>
@@ -94,34 +100,35 @@ export function WeightSliders({ weights, onChange, onReset }: WeightSlidersProps
                   />
                   <span style={{ fontSize: "var(--type-body-font-size)" }}>{SIGNAL_LABELS[key]}</span>
                 </label>
-                <span style={{ fontFamily: "var(--type-data-font-family)", fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)" }}>
-                  {pct.toFixed(0)}%
+                <span style={{ fontFamily: "var(--type-data-font-family)", fontSize: "var(--type-label-font-size)", whiteSpace: "nowrap" }}>
+                  <span style={{ color: "var(--theme-ink)" }}>{weight}</span>
+                  <span style={{ color: "var(--theme-ink-muted)" }}>
+                    {" "}
+                    · {weight === 0 ? "off" : `${pct.toFixed(0)}% of score`}
+                  </span>
                 </span>
               </div>
               <input
                 id={`weight-${key}`}
                 type="range"
                 min={0}
-                max={100}
+                max={WEIGHT_MAX}
                 step={1}
                 value={weight}
                 onChange={(e) => setWeight(key, Number(e.target.value))}
                 className="weight-slider"
-                aria-label={`${SIGNAL_LABELS[key]} weight`}
+                style={{ ["--fill" as string]: `${(weight / WEIGHT_MAX) * 100}%` }}
+                aria-label={`${SIGNAL_LABELS[key]} importance`}
+                aria-valuetext={weight === 0 ? "off" : `${weight} of ${WEIGHT_MAX}, ${pct.toFixed(0)} percent of the score`}
               />
             </div>
           );
         })}
       </div>
 
-      <div style={{ marginTop: "var(--space-4)" }}>
-        <button type="button" className="btn btn--secondary" disabled aria-disabled="true">
-          Learned weights
-        </button>
-        <div style={{ marginTop: "var(--space-2)" }}>
-          <MissingState variant="not-available" reason="Available after the M4 model runs" />
-        </div>
-      </div>
+      <p style={{ margin: "var(--space-4) 0 0", fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)" }}>
+        Learned weights (from Base&rsquo;s own sign-ups) are not available yet.
+      </p>
     </Panel>
   );
 }

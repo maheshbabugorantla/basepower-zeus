@@ -616,7 +616,12 @@
   width: 100%;
   height: 6px;
   border-radius: var(--rounded-sm);
-  background: var(--theme-divider);
+  /* Track filled up to the thumb (--fill set inline from the value). */
+  background: linear-gradient(
+    to right,
+    var(--theme-brand-accent-text) 0 var(--fill, 50%),
+    var(--theme-divider) var(--fill, 50%) 100%
+  );
   cursor: pointer;
 }
 
@@ -643,7 +648,7 @@
 .weight-slider::-moz-range-track {
   height: 6px;
   border-radius: var(--rounded-sm);
-  background: var(--theme-divider);
+  background: transparent;
 }
 
 .weight-slider:focus-visible {
