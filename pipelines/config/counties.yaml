@@ -14,3 +14,18 @@ travis:
   fips: "48453"
   parcel_adapter: tcad_certified_export
   tax_year: 2026
+
+# Harris (M3-P2): HCAD bulk export (real_acct.txt + jur_exempt_cd.txt)
+# plus HCAD's own public ArcGIS REST parcel layer for geometry. See
+# checks/M3-P2.md and pipelines/sources/hcad_parcels.py's module
+# docstring for source URLs and the load strategy (filtered to
+# single-family homesteads before loading).
+harris:
+  fips: "48201"
+  parcel_adapter: hcad_bulk_export
+  tax_year: 2026
+
+williamson:
+  fips: "48491"
+  parcel_adapter: wcad_property_data_export
+  tax_year: 2026
