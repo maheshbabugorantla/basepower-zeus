@@ -1,0 +1,27 @@
+[project]
+name = "base-power-zeus-pipelines"
+version = "0.1.0"
+description = "Base Power Zeus data pipelines (FastAPI, Vercel Python runtime)"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi==0.115.6",
+    "starlette==0.41.3",
+    "httpx==0.28.1",
+    "psycopg[binary]==3.2.3",
+    "supabase==2.15.1",
+    "pydantic==2.10.4",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==8.3.4",
+    "pytest-asyncio==0.25.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"

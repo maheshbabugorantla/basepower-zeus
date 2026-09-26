@@ -1,0 +1,6 @@
+data/raw/
+checks/
+tickets/
+.claude/
+scripts/
+*.md

@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  scripts:
+    name: scripts (no-mock check, dag, scripts tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: no-mock scan (check 3, 4, 6)
+        run: python3 scripts/no_mock_check.py
+      - name: dag order / cycle / owns-overlap check
+        run: |
+          for milestone_dir in tickets/*/; do
+            python3 scripts/dag.py "$milestone_dir"
+          done
+      - name: scripts tests
+        run: python3 -m unittest discover -s scripts/tests -v
+
+  pipelines:
+    name: pipelines (pytest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: install dependencies
+        working-directory: pipelines
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install -r requirements.txt pytest pytest-asyncio
+      - name: pytest
+        working-directory: pipelines
+        # No secrets are available to CI. Every test in pipelines/tests/
+        # must skip (pytest.mark.skipif) rather than fail when a DB env
+        # var (POSTGRES_URL, SUPABASE_URL, ...) is unset. Exit code 5 means
+        # "no tests collected" (e.g. before any pipeline-dev ticket has
+        # added pipelines/tests/), which is not a failure here.
+        #
+        # set +e around the pytest call: GitHub Actions runs `run:` blocks
+        # under `bash -e`, so without this a non-zero pytest exit would
+        # kill the step before `code=$?` ever ran.
+        run: |
+          set +e
+          python3 -m pytest -v
+          code=$?
+          set -e
+          if [ "$code" -eq 5 ]; then
+            echo "no tests collected yet — treating as pass"
+            exit 0
+          fi
+          exit "$code"
+
+  web:
+    name: web (typecheck, build, tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "npm"
+          cache-dependency-path: web/package-lock.json
+      - name: install dependencies
+        working-directory: web
+        run: npm ci
+      - name: typecheck
+        working-directory: web
+        run: npm run typecheck
+      - name: build
+        working-directory: web
+        # No secrets are available to CI: web/lib/db.ts connects lazily
+        # (nothing at import/build time), so `next build` must succeed
+        # without POSTGRES_URL/SUPABASE_URL set.
+        run: npm run build
+      - name: test
+        working-directory: web
+        run: npm test
