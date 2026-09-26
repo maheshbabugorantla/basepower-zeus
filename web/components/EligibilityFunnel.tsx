@@ -52,7 +52,7 @@ export function EligibilityFunnel({ steps }: { steps: FunnelStep[] }) {
         ))}
       </div>
       <p style={{ fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)", marginBottom: 0 }}>
-        Counts from api.parcel_gate_counts and api.gate_counts (Travis, TCAD). See the Territory gate panel below for the M2 gate itself.
+        From the 2026 Travis Central Appraisal District roll. The next panel shows which of these homes Base can serve.
       </p>
     </Panel>
   );

@@ -69,7 +69,7 @@ export function GateCounts({ rows }: { rows: GateCountRow[] }) {
       {rows.length === 0 || total === 0 ? (
         <MissingState
           variant="not-loaded"
-          reason="core.mv_home_signals has no rows yet — the M1 home/block-group join hasn't run"
+          reason="Home locations aren't loaded yet"
         />
       ) : (
         <>

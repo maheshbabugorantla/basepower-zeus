@@ -47,7 +47,7 @@ describe("GateCounts (structural)", () => {
   it("renders the not-loaded state for an empty gate_counts result, with a written reason", () => {
     const html = renderToStaticMarkup(<GateCounts rows={[]} />);
     expect(html).toContain("missing-state--not-loaded");
-    expect(html.toLowerCase()).toContain("core.mv_home_signals");
+    expect(html.toLowerCase()).toContain("aren&#x27;t loaded yet");
   });
 
   it("renders one horizontal funnel (not cards) with a count per real reason", () => {

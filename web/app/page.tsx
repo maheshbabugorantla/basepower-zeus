@@ -347,10 +347,12 @@ async function getGateCounts(): Promise<GateCounts | null> {
 
 async function getTopHomesCount(): Promise<number | null> {
   try {
-    const rows = await query<{ n: string | number }>(`select count(*) as n from api.top_homes`);
-    return rows[0] ? Number(rows[0].n) : 0;
+    const rows = await query<{ n: string | number | null }>(
+      `select home_count as n from api.gate_counts where reason = 'passed'`
+    );
+    return rows[0] && rows[0].n !== null ? Number(rows[0].n) : null;
   } catch (err) {
-    console.error("page: failed to load api.top_homes count", err);
+    console.error("page: failed to load ranked home count", err);
     return null;
   }
 }
@@ -422,19 +424,19 @@ export default async function HomePage() {
           Ranking readiness
         </h2>
         {gateCounts === null ? (
-          <MissingState variant="not-loaded" reason="core.parcels has no rows yet" />
+          <MissingState variant="not-loaded" reason="County parcel records not loaded yet" />
         ) : (
           <StatList>
             <StatRow
               id="overview-total-parcels"
-              label="Residential parcels (Travis County, TCAD)"
+              label="Parcels on the Travis County roll"
               value={gateCounts.totalParcels.toLocaleString()}
               unit="parcels"
               source={gateCounts.source}
             />
             <StatRow
               id="overview-single-family"
-              label="Single-family (state code A1)"
+              label="Single-family homes"
               value={gateCounts.singleFamilyCount.toLocaleString()}
               unit="parcels"
               source={gateCounts.source}
@@ -448,19 +450,19 @@ export default async function HomePage() {
             />
             <StatRow
               id="overview-gated"
-              label="Gated for ranking (single-family + homestead + parcel geometry)"
+              label="Owner-occupied single-family homes with a mapped lot"
               value={gateCounts.gatedCount === null ? "not loaded" : gateCounts.gatedCount.toLocaleString()}
               unit="homes"
               source={gateCounts.source}
               linkHref="/ranking"
-              linkLabel="See funnel"
+              linkLabel="Who Base can serve"
             />
             <StatRow
               id="overview-top-homes"
-              label="Homes currently ranked"
+              label="Homes ranked (Base can serve them)"
               value={topHomesCount === null ? null : topHomesCount}
               unit="homes"
-              missingReason="api.top_homes could not be read"
+              missingReason="Ranking not available right now"
               linkHref="/ranking"
               linkLabel="See table & map"
             />

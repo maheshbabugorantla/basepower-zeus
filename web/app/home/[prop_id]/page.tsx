@@ -352,7 +352,7 @@ export default async function HomeDetailPage({
       <Panel>
         <MissingState
           variant="not-loaded"
-          reason={`No parcel found for prop_id ${prop_id} — core.parcels may not have loaded this record yet`}
+          reason={`No Travis County parcel with ID ${prop_id}`}
         />
       </Panel>
     );
@@ -460,7 +460,7 @@ export default async function HomeDetailPage({
         {homeSignals === null ? (
           <MissingState
             variant="not-loaded"
-            reason="This home is outside the gated (single-family + homestead + parcel geometry) universe used for scoring, or core.mv_home_signals hasn't refreshed since it was gated"
+            reason="Not scored: only owner-occupied single-family homes with a mapped lot inside Travis County are ranked"
           />
         ) : homeSignals.gate_reason ? (
           <div
@@ -700,7 +700,7 @@ export default async function HomeDetailPage({
             {parcelGeojson ? (
               <ParcelMap geojson={parcelGeojson} />
             ) : (
-              <MissingState variant="not-loaded" reason="No parcel geometry loaded for this prop_id yet" />
+              <MissingState variant="not-loaded" reason="No lot outline on file for this parcel" />
             )}
             <dl style={{ display: "grid", gridTemplateColumns: "max-content 1fr", gap: "var(--space-2) var(--space-4)", marginTop: "var(--space-3)" }}>
               <dt style={{ color: "var(--theme-ink-muted)" }}>State code</dt>

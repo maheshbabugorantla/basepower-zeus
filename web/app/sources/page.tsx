@@ -109,7 +109,7 @@ export default async function SourcesPage() {
                 <DataTableCell>{row.runner}</DataTableCell>
                 <DataTableCell>
                   {row.latest_run_status === null ? (
-                    <MissingState variant="not-loaded" reason="No pipeline run recorded for this source" />
+                    <MissingState variant="not-loaded" reason="No load recorded yet" />
                   ) : (
                     row.latest_run_status
                   )}

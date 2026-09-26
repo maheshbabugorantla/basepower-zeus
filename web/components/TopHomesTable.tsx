@@ -118,7 +118,7 @@ export function TopHomesTable({
     return (
       <MissingState
         variant="not-loaded"
-        reason="api.homes_ranked_weighted returned no rows — no homes have a nonzero weight sum, or no homes have passed the gate yet"
+        reason="No homes to rank — set at least one signal weight above zero"
       />
     );
   }

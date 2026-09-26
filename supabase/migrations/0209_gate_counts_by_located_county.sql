@@ -1,8 +1,9 @@
--- A TCAD parcel whose location (block group, TIGER 2024) falls outside
--- Travis County is counted as its own gate reason, `outside_county`,
--- instead of "passed". Parcels whose TCAD roll county (core.parcels.
--- county_fips) differs from the county their geometry lands in are
--- straddlers along the county line (181 homes: 137 Williamson, 24 Hays,
+-- Every home keeps the county its lot actually sits in (core.mv_home_signals.
+-- county_fips, from the TIGER 2024 block group) — nothing is dropped. The
+-- gate funnel is a Travis County view, so it counts only homes located in
+-- the county of the appraisal roll they came from (core.parcels.county_fips).
+-- TCAD-roll lots that sit across the county line are assigned to their
+-- real county and not displayed until that county is loaded (181 homes: 137 Williamson, 24 Hays,
 -- 13 Burnet, 6 Bastrop, 1 Blanco). Round Rock / Hutto *mailing*
 -- addresses inside Travis are unaffected: postal city ≠ county (Census
 -- geocoder confirmed samples are in Travis County).
@@ -15,12 +16,10 @@ with homes as (
     select
         s.prop_id,
         s.source_ids,
-        case
-            when s.county_fips is distinct from p.county_fips then 'outside_county'
-            else coalesce(s.gate_reason, s.territory_null_reason, 'passed')
-        end as reason
+        coalesce(s.gate_reason, s.territory_null_reason, 'passed') as reason
     from core.mv_home_signals s
     join core.parcels p on p.prop_id = s.prop_id
+    where s.county_fips = p.county_fips
 ),
 counts as (
     select reason, count(distinct prop_id) as home_count
@@ -53,6 +52,7 @@ grant select on api.gate_counts to service_role;
 
 comment on view api.gate_counts is
     'Gate funnel: home count per reason, from core.mv_gate_counts. reason '
-    'is one of: territory_not_base_served, outside_county (parcel on the '
-    'TCAD roll but located across the county line), territories_not_loaded '
-    '/ crosswalk_not_loaded, or passed.';
+    'is one of: territory_not_base_served, territories_not_loaded / '
+    'crosswalk_not_loaded, or passed. Counts only homes located in their '
+    'appraisal-roll county (lots across the county line are excluded here, '
+    'kept in core.mv_home_signals with their real county).';

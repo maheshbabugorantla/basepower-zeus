@@ -91,9 +91,9 @@ async function getFunnelSteps(): Promise<FunnelStep[]> {
   const gatedForScoring = gateRows.reduce((sum, r) => sum + Number(r.home_count), 0);
 
   const values = [
-    { label: "Residential parcels (TCAD, Travis)", value: total },
-    { label: "Single-family (state code A1)", value: Number(pgc.single_family_count) },
-    { label: "Single-family + homestead + parcel geometry (scoreable)", value: gatedForScoring },
+    { label: "Parcels on the Travis County roll", value: total },
+    { label: "Single-family homes", value: Number(pgc.single_family_count) },
+    { label: "Owner-occupied, with a mapped lot", value: gatedForScoring },
   ];
   return values.map((v) => ({ ...v, ratio: v.value / total }));
 }

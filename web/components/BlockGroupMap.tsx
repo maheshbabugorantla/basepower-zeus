@@ -273,12 +273,6 @@ export function BlockGroupMap({
 
       mapLoadedRef.current = true;
       setReady(true);
-      if (typeof window !== "undefined") {
-        // QA/debug hook only (no runtime behavior depends on this) — lets
-        // the headless-Chrome acceptance harness drive block-group
-        // selection deterministically instead of guessing pixel coords.
-        (window as unknown as { __zeusBlockGroupMap?: MapLibreMap }).__zeusBlockGroupMap = map;
-      }
     });
 
     function applyScores() {

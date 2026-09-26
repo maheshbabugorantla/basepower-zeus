@@ -42,15 +42,15 @@ describe.skipIf(!process.env.POSTGRES_URL)("Overview — gated count matches the
     // Same real number, read straight from the stat row's own label — not
     // a substring match anywhere on the page, so relabeling the wrong
     // count as "gated" (the original bug) would still fail this.
-    expect(overviewText).toContain(`Gated for ranking (single-family + homestead + parcel geometry) ${gatedFormatted} homes`);
-    expect(rankingText).toContain(`Single-family + homestead + parcel geometry (scoreable) ${gatedFormatted}`);
+    expect(overviewText).toContain(`Owner-occupied single-family homes with a mapped lot ${gatedFormatted} homes`);
+    expect(rankingText).toContain(`Owner-occupied, with a mapped lot ${gatedFormatted}`);
 
     // The original bug used the (larger, independent) all-homestead count
     // as the "gated" figure. Guard against that regression whenever the
     // two real counts actually differ.
     if (homesteadCount !== gatedCount) {
       expect(overviewText).not.toContain(
-        `Gated for ranking (single-family + homestead + parcel geometry) ${homesteadFormatted} homes`
+        `Owner-occupied single-family homes with a mapped lot ${homesteadFormatted} homes`
       );
     }
   }, 60000);
