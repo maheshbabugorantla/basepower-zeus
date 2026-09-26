@@ -173,6 +173,8 @@ interface RankedRequestBody {
   weights?: unknown;
   countyFips?: unknown;
   blockGroupGeoid?: unknown;
+  situsCity?: unknown;
+  situsZip?: unknown;
   afterScore?: unknown;
   afterPropId?: unknown;
   afterP?: unknown;
@@ -271,6 +273,8 @@ function mapPredictedRow(row: PredictedHomeDbRow): PredictedHomeRow {
 export async function fetchPredictedHomes(params: {
   countyFips: string;
   blockGroupGeoid?: string | null;
+  situsCity?: string | null;
+  situsZip?: string | null;
   afterP?: string | null;
   afterPropId?: string | null;
   pageSize?: number;
@@ -281,6 +285,8 @@ export async function fetchPredictedHomes(params: {
   const {
     countyFips,
     blockGroupGeoid = null,
+    situsCity = null,
+    situsZip = null,
     afterP = null,
     afterPropId = null,
     pageSize = PAGE_SIZE,
@@ -289,25 +295,54 @@ export async function fetchPredictedHomes(params: {
     excludeBackup = true,
   } = params;
 
-  const whereClause = `
-    from core.home_propensity hp
-    join core.mv_home_signals s on s.prop_id = hp.prop_id
-    join core.parcels pc on pc.prop_id = hp.prop_id
-    left join core.parcel_geoms pg on pg.prop_id = hp.prop_id
-    left join core.home_coverage hc on hc.prop_id = hp.prop_id
-    where s.gate_reason is null
-      and s.county_fips = $1
-      and ($2::text is null or s.block_group_geoid = $2)
-      and ($3::boolean = false or coalesce(hc.bucket, 'prospect') not in ('base_customer', 'other_backup'))
-      and ($4::boolean = false or s.yr_built is null or s.yr_built >= ${HIDE_OLD_HOMES_CUTOFF_YEAR})
-  `;
+  // Coordinator perf fix: core.home_propensity carries its own county_fips
+  // (0303b backfill, indexed county_fips/p_install_12m/prop_id) and only
+  // ever holds gated homes (M4-P4 trains/scores the gated population
+  // only), so the primary predicate no longer needs core.mv_home_signals
+  // at all. mv_home_signals (s) is joined only when a predicate or a
+  // returned column actually needs it (block group / pre-2000 filter);
+  // core.parcels (pc) only when a city/ZIP filter or the page's own situs
+  // display columns need it. The count query never joins pc/s unless one
+  // of those filters is active, and never joins core.parcel_geoms at all
+  // (lon/lat are page-only).
+  const needsSignals = blockGroupGeoid !== null || hideOldHomes;
+  const needsParcelsForFilter = situsCity !== null || situsZip !== null;
+
+  function buildFrom(opts: { forPage: boolean }): string {
+    const parts = ["from core.home_propensity hp"];
+    if (needsSignals || opts.forPage) parts.push("join core.mv_home_signals s on s.prop_id = hp.prop_id");
+    if (needsParcelsForFilter || opts.forPage) parts.push("join core.parcels pc on pc.prop_id = hp.prop_id");
+    if (opts.forPage) parts.push("left join core.parcel_geoms pg on pg.prop_id = hp.prop_id");
+    parts.push("left join core.home_coverage hc on hc.prop_id = hp.prop_id");
+    return parts.join("\n    ");
+  }
+
+  function buildWhere(): string {
+    const clauses = ["hp.county_fips = $1"];
+    if (blockGroupGeoid !== null) clauses.push("s.block_group_geoid = $2");
+    if (excludeBackup) clauses.push("coalesce(hc.bucket, 'prospect') not in ('base_customer', 'other_backup')");
+    if (hideOldHomes) clauses.push(`(s.yr_built is null or s.yr_built >= ${HIDE_OLD_HOMES_CUTOFF_YEAR})`);
+    if (situsCity !== null) clauses.push(situsCity === "" ? "pc.situs_city is null" : "pc.situs_city = $3");
+    if (situsZip !== null) clauses.push(situsZip === "" ? "pc.situs_zip is null" : "pc.situs_zip = $4");
+    return clauses.join("\n      and ");
+  }
+
+  const baseParams: unknown[] = [countyFips];
+  // Positional params are fixed slots ($1 county, $2 block group, $3
+  // city, $4 zip) regardless of which predicates are active, so the
+  // cursor/limit params below always start at $5 -- simpler than
+  // renumbering per filter combination.
+  baseParams[1] = blockGroupGeoid;
+  baseParams[2] = situsCity;
+  baseParams[3] = situsZip;
 
   const pageSql = `
     select hp.prop_id, hp.p_install_12m::text as p_install_12m, hp.relative_to_county, hp.reasons, hp.extrapolated_from,
            pc.geo_id, pc.situs_num, pc.situs_street, pc.situs_city, pc.situs_zip, pc.market_value,
            s.block_group_geoid, s.county_fips, s.yr_built,
            extensions.ST_X(pg.centroid) as lon, extensions.ST_Y(pg.centroid) as lat
-    ${whereClause}
+    ${buildFrom({ forPage: true })}
+    where ${buildWhere()}
       and (
         $5::numeric is null
         or hp.p_install_12m < $5::numeric
@@ -317,21 +352,11 @@ export async function fetchPredictedHomes(params: {
     limit $7
   `;
 
-  const countSql = `select count(*) as total ${whereClause}`;
+  const countSql = `select count(*) as total ${buildFrom({ forPage: false })} where ${buildWhere()}`;
 
   const [rows, totalRows] = await Promise.all([
-    query<PredictedHomeDbRow>(pageSql, [
-      countyFips,
-      blockGroupGeoid,
-      excludeBackup,
-      hideOldHomes,
-      afterP,
-      afterPropId,
-      pageSize,
-    ]),
-    withTotal
-      ? query<{ total: string | number }>(countSql, [countyFips, blockGroupGeoid, excludeBackup, hideOldHomes])
-      : Promise.resolve(null),
+    query<PredictedHomeDbRow>(pageSql, [...baseParams, afterP, afterPropId, pageSize]),
+    withTotal ? query<{ total: string | number }>(countSql, baseParams) : Promise.resolve(null),
   ]);
 
   return {
@@ -357,6 +382,12 @@ export async function fetchRankedHomes(params: {
   weights: Record<SignalKey, number>;
   countyFips: string;
   blockGroupGeoid?: string | null;
+  /** Cascading drill-down (city/ZIP/block-group) -- passed straight through
+   * to api.homes_ranked_weighted[_count]'s trailing p_situs_city/
+   * p_situs_zip params (added alongside p_block_group_geoid; default null =
+   * no filter, so an older deployed function without them is unaffected). */
+  situsCity?: string | null;
+  situsZip?: string | null;
   afterScore?: number | null;
   afterPropId?: string | null;
   pageSize?: number;
@@ -375,6 +406,8 @@ export async function fetchRankedHomes(params: {
     weights,
     countyFips,
     blockGroupGeoid = null,
+    situsCity = null,
+    situsZip = null,
     afterScore = null,
     afterPropId = null,
     pageSize = PAGE_SIZE,
@@ -385,15 +418,26 @@ export async function fetchRankedHomes(params: {
 
   const weightsJson = JSON.stringify(weights);
 
+  // Contract check against the landed 0303b migration: api.homes_ranked_
+  // weighted[_count]'s p_situs_city/p_situs_zip are `is null or col =
+  // param` -- there is no way to ask them for "rows where the column IS
+  // NULL" (unlike this route's own predicted-mode SQL, which writes that
+  // clause explicitly). Sending "" (this route's own null-bucket
+  // sentinel, matched literally) would silently return zero rows instead
+  // of the null-city/null-ZIP homes, so it's coerced to "no filter" here
+  // for weighted mode only -- reported as a deviation, not silently done.
+  const sqlSitusCity = situsCity === "" ? null : situsCity;
+  const sqlSitusZip = situsZip === "" ? null : situsZip;
+
   const [rows, totalRows] = await Promise.all([
     query<HomesRankedWeightedDbRow>(
-      `select * from api.homes_ranked_weighted($1::jsonb, $2::text, $3::text, $4::numeric, $5::text, $6::int, $7::boolean)`,
-      [weightsJson, countyFips, blockGroupGeoid, afterScore, afterPropId, pageSize, excludeBackup]
+      `select * from api.homes_ranked_weighted($1::jsonb, $2::text, $3::text, $4::numeric, $5::text, $6::int, $7::boolean, $8::text, $9::text)`,
+      [weightsJson, countyFips, blockGroupGeoid, afterScore, afterPropId, pageSize, excludeBackup, sqlSitusCity, sqlSitusZip]
     ),
     withTotal
       ? query<{ total: string | number }>(
-          `select api.homes_ranked_weighted_count($1::jsonb, $2::text, $3::text, $4::boolean) as total`,
-          [weightsJson, countyFips, blockGroupGeoid, excludeBackup]
+          `select api.homes_ranked_weighted_count($1::jsonb, $2::text, $3::text, $4::boolean, $5::text, $6::text) as total`,
+          [weightsJson, countyFips, blockGroupGeoid, excludeBackup, sqlSitusCity, sqlSitusZip]
         )
       : Promise.resolve(null),
   ]);
@@ -423,6 +467,12 @@ export async function POST(request: Request) {
   const blockGroupGeoid = typeof body.blockGroupGeoid === "string" && body.blockGroupGeoid.length > 0
     ? body.blockGroupGeoid
     : null;
+  // Cascading drill-down (item 3): an empty string means "filter to the
+  // no-city/no-ZIP bucket" (a real, distinct selection); a missing/non-
+  // string value means "no filter at all" -- see fetchPredictedHomes'
+  // own comment for the same convention.
+  const situsCity = typeof body.situsCity === "string" ? body.situsCity : null;
+  const situsZip = typeof body.situsZip === "string" ? body.situsZip : null;
   const afterPropId = typeof body.afterPropId === "string" && body.afterPropId.length > 0
     ? body.afterPropId
     : null;
@@ -447,6 +497,8 @@ export async function POST(request: Request) {
     const { rows, total } = await fetchPredictedHomes({
       countyFips,
       blockGroupGeoid,
+      situsCity,
+      situsZip,
       afterP,
       afterPropId,
       pageSize,
@@ -473,6 +525,8 @@ export async function POST(request: Request) {
     weights,
     countyFips,
     blockGroupGeoid,
+    situsCity,
+    situsZip,
     afterScore,
     afterPropId,
     pageSize,

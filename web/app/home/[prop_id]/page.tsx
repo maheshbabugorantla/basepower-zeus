@@ -145,6 +145,11 @@ async function getHomePropensity(propId: string): Promise<HomePropensityDbRow | 
 interface HomeSignalsRow {
   gate_reason: string | null;
   territory_null_reason: string | null;
+  /** M-utility-gate (0303): 'most_likely_county_utility' (Harris -- a
+   * county-level pin, since every HIFLD territory polygon overlaps for
+   * that county) or 'service_area_polygon' (the normal ST_Within match,
+   * e.g. Travis). Null only when territory_eia_id itself is null. */
+  territory_basis: string | null;
   territory_eia_id: string | null;
   distributor_name: string | null;
   distributor_saidi: string | number | null;
@@ -429,7 +434,7 @@ async function getPermitRuleCitation(permitPath: PermitPathKind): Promise<Permit
 async function getHomeSignals(propId: string): Promise<HomeSignalsRow | null> {
   try {
     const rows = await query<HomeSignalsRow>(
-      `select gate_reason, territory_null_reason, territory_eia_id,
+      `select gate_reason, territory_null_reason, territory_basis, territory_eia_id,
               distributor_name, distributor_saidi, distributor_saidi_year,
               distributor_saidi_early_release, distributor_saidi_null_reason,
               flood_flag, flood_null_reason,
@@ -908,12 +913,32 @@ export default async function HomeDetailPage({
             <strong>Excluded from ranking:</strong>{" "}
             {GATE_REASON_LABEL[homeSignals.gate_reason] ?? homeSignals.gate_reason}
           </div>
+        ) : homeSignals.territory_null_reason === "utility_not_confirmed" ? (
+          // M-utility-gate copy fix: Williamson's every HIFLD territory
+          // polygon overlaps, so which utility actually serves this home
+          // can't be resolved from the polygon alone. The raw code is
+          // passed straight through -- MissingState's own REASON_TEXT map
+          // (components/ui/MissingState.tsx) is the one place every
+          // null_reason code becomes plain text, per CLAUDE.md's "Added
+          // after M2-W3" rule -- never a second hardcoded copy of it here.
+          <div style={{ marginBottom: "var(--space-4)" }}>
+            <MissingState variant="not-loaded" reason={homeSignals.territory_null_reason} />
+          </div>
         ) : homeSignals.territory_null_reason ? (
           <div style={{ marginBottom: "var(--space-4)" }}>
             <MissingState
               variant="not-loaded"
               reason={`Whether Base serves this home's utility isn't resolvable yet (${homeSignals.territory_null_reason}) — it passes by default until it is`}
             />
+          </div>
+        ) : homeSignals.territory_basis === "most_likely_county_utility" && homeSignals.distributor_name ? (
+          // Harris: territory is pinned to the one Base-served utility
+          // that actually covers the county (every HIFLD polygon
+          // overlaps there too), so this is a strong inference, not a
+          // confirmed per-parcel match -- said plainly rather than shown
+          // with the same confidence as Travis's polygon match.
+          <div style={{ marginBottom: "var(--space-4)", fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)" }}>
+            Most likely utility: {homeSignals.distributor_name} — confirm at the address.
           </div>
         ) : null}
 

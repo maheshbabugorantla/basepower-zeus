@@ -34,6 +34,11 @@ const REASON_LABEL: Record<string, string> = {
   territory_not_base_served: "In a utility Base doesn't serve",
   territories_not_loaded: "Utility service areas not loaded yet",
   crosswalk_not_loaded: "Base's served-utilities list not loaded yet",
+  // M-utility-gate (0303): every HIFLD territory polygon overlaps for
+  // this county, so which utility serves a home here can't be confirmed
+  // from the polygon alone -- still ranked/scored, just not counted as
+  // Base-servable until confirmed at the address.
+  utility_not_confirmed: "Utility not confirmed yet",
 };
 
 function labelFor(reason: string): string {
@@ -86,14 +91,15 @@ function marketSegmentClass(market: string): string {
   return "gate-funnel__segment--excluded";
 }
 
-async function fetchMarketSplit(): Promise<MarketGateCountRow[] | null> {
+async function fetchMarketSplit(countyFips: string): Promise<MarketGateCountRow[] | null> {
   try {
     const rows = await query<{ market: string; home_count: string | number }>(
       `select market, sum(home_count) as home_count
        from api.gate_counts_by_market
-       where reason = 'passed'
+       where county_fips = $1 and reason = 'passed'
        group by market
-       order by sum(home_count) desc`
+       order by sum(home_count) desc`,
+      [countyFips]
     );
     return rows.map((r) => ({ market: r.market, homeCount: Number(r.home_count) }));
   } catch (err) {
@@ -102,8 +108,8 @@ async function fetchMarketSplit(): Promise<MarketGateCountRow[] | null> {
   }
 }
 
-async function MarketSplit() {
-  const marketRows = await fetchMarketSplit();
+async function MarketSplit({ countyFips }: { countyFips: string }) {
+  const marketRows = await fetchMarketSplit(countyFips);
   if (!marketRows || marketRows.length === 0) return null;
   const total = marketRows.reduce((sum, r) => sum + r.homeCount, 0);
   if (total === 0) return null;
@@ -146,7 +152,20 @@ async function MarketSplit() {
   );
 }
 
-export function GateCounts({ rows, note }: { rows: GateCountRow[]; note?: string }) {
+export function GateCounts({
+  rows,
+  note,
+  // Default Travis so pre-existing tests/callers that don't pass a county
+  // (this panel used to have no per-county concept at all) keep working;
+  // app/ranking/page.tsx always passes the real selected county.
+  countyFips = "48453",
+}: {
+  rows: GateCountRow[];
+  note?: string;
+  /** County to scope the market-split sub-query to (api.gate_counts_by_market
+   * now carries county_fips, 0303b). */
+  countyFips?: string;
+}) {
   const total = rows.reduce((sum, r) => sum + r.homeCount, 0);
   const hasUnresolvedGate = rows.some((r) => NOT_LOADED_REASONS.has(r.reason));
 
@@ -214,7 +233,7 @@ export function GateCounts({ rows, note }: { rows: GateCountRow[]; note?: string
           </p>
 
           <Suspense fallback={null}>
-            <MarketSplit />
+            <MarketSplit countyFips={countyFips} />
           </Suspense>
         </>
       )}

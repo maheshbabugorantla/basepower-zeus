@@ -9,14 +9,11 @@ import { usePathname, useSearchParams } from "next/navigation";
 // (api.coverage_gaps_bg); anywhere else it exports the ranked-homes list
 // for the selected county.
 //
-// Deviation (reported): only `?county=` is actually on the url today --
-// RankingBoard's mode/weights/hide-toggles are React state, never synced
-// to the URL (out of this ticket's owns paths -- app/ranking/ is another
-// agent's file right now). Every param present on the current url is
-// forwarded verbatim to the export route, so once mode/weights DO land
-// in the URL this link starts reflecting them for free; until then the
-// export uses the route's own defaults (predicted mode, exclude-backup
-// on, pre-2000 shown -- see app/export/homes/route.ts's own comment).
+// M-urlstate (item 4): RankingBoard now syncs mode/weights/backup/pre2000/
+// city/zip/bg into the url (window.history.replaceState), so every param
+// present on the current url -- forwarded here verbatim -- reflects
+// exactly what's on screen; see app/export/homes/route.ts's own comment
+// for the full param contract.
 
 export function ExportButton() {
   const pathname = usePathname();

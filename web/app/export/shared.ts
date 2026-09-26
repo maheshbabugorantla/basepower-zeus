@@ -160,6 +160,31 @@ export function formatWeightedPermitPath(code: string | null): string | null {
   return null;
 }
 
+/** Utility-status column (M-utility-gate): the CSV's plain-language
+ * equivalent of the home page's utility-confirmation copy, driven by
+ * territory_basis / territory_null_reason -- never a raw null_reason
+ * code or "gate"/"territory" jargon (CLAUDE.md's "Added after M2-W3"
+ * rule). Matches web/app/home/[prop_id]/page.tsx's wording exactly. */
+export function formatUtilityStatus(
+  territoryBasis: string | null,
+  territoryNullReason: string | null,
+  distributorName: string | null
+): string {
+  if (territoryNullReason === "utility_not_confirmed") {
+    return "Utility not confirmed — check the address with the utility";
+  }
+  if (territoryNullReason) {
+    return "Not resolvable yet";
+  }
+  if (territoryBasis === "most_likely_county_utility") {
+    return `Most likely utility: ${distributorName ?? "unknown"} — confirm at the address`;
+  }
+  if (territoryBasis === "service_area_polygon") {
+    return "Confirmed Base-served utility match";
+  }
+  return "";
+}
+
 export function csvResponseHeaders(filename: string): HeadersInit {
   return {
     "Content-Type": "text/csv; charset=utf-8",

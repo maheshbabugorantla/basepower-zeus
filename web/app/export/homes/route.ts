@@ -7,6 +7,7 @@ import {
   csvResponseHeaders,
   csvRow,
   formatPredictedReasons,
+  formatUtilityStatus,
   formatWeightedPermitPath,
   formatWeightedReasons,
   isoDate,
@@ -27,21 +28,19 @@ import {
 // query orders on a full tiebreak (score/p desc, prop_id asc), and every
 // number is formatted with a fixed .toFixed rule, never toLocaleString.
 //
-// Deviation from the ticket text (reported, not silently done): the
-// ranking screen's mode/weights/hide-old-homes/hide-existing-backup
-// toggles are React state in RankingBoard, never written to the URL
-// (only `?county=` is -- see app/ranking/page.tsx, app/ranking/
-// RankingBoard.tsx, both read-only to this ticket). This route defines
-// its own query-param contract so the export can still be driven from a
-// URL, and ExportButton forwards the CURRENT url's params verbatim:
+// M-urlstate (item 4): RankingBoard now syncs mode/weights/backup/pre2000/
+// city/zip/bg into the URL (window.history.replaceState), and ExportButton
+// forwards the CURRENT url's params verbatim, so this route's own
+// query-param contract below is exactly what's on screen, not a set of
+// defaults a caller has to know to override by hand:
 //   mode=predicted|weighted   (default predicted, the ranking default)
 //   backup=hide|show          (default hide, matches the ranking screen's default)
 //   pre2000=show|hide         (default show, matches the ranking screen's default)
+//   city=<value>, zip=<value>, bg=<block-group-geoid> (drill-down filters;
+//                              omitted = no filter, empty string = the
+//                              "no value on file" bucket)
 //   w_<signal_key>=<number>   (weighted mode only; any key omitted falls
 //                              back to api.default_weights, then equal=5)
-// Until RankingBoard syncs its own state into the URL, only `county`
-// actually reflects what's on screen; mode/weights/filters export the
-// page's own first-paint values unless a caller sets these params by hand.
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -112,6 +111,8 @@ interface PredictedDbRow {
   extrapolated_from: string | null;
   distributor_name: string | null;
   territory_eia_id: string | null;
+  territory_basis: string | null;
+  territory_null_reason: string | null;
   outage_minutes: string | number | null;
   outage_basis: string | null;
   source_ids: string[] | null;
@@ -128,6 +129,8 @@ interface WeightedDbRow {
   reasons: string[] | null;
   distributor_name: string | null;
   territory_eia_id: string | null;
+  territory_basis: string | null;
+  territory_null_reason: string | null;
   outage_minutes: string | number | null;
   outage_basis: string | null;
   permit_path: string | null;
@@ -173,6 +176,13 @@ export async function GET(request: NextRequest) {
   const mode: "predicted" | "weighted" = params.get("mode") === "weighted" ? "weighted" : "predicted";
   const excludeBackup = params.get("backup") !== "show"; // default hide
   const hideOldHomes = params.get("pre2000") === "hide"; // default show
+  // M-urlstate (item 4): city/ZIP/block-group drill-down, forwarded by
+  // ExportButton from the current url exactly like mode/backup/pre2000
+  // above -- null = no filter, "" = the "no value on file" bucket (same
+  // convention as app/api/top-homes/route.ts's situsCity/situsZip).
+  const blockGroupGeoid = params.get("bg");
+  const situsCity = params.get("city");
+  const situsZip = params.get("zip");
 
   const today = isoDate(new Date());
   const filename = csvFilename(county.name, `ranked-homes-${mode}`, today);
@@ -187,6 +197,22 @@ export async function GET(request: NextRequest) {
       [ids]
     );
     return new Map(rows.map((r) => [r.eia_utility_number, r.plain_language]));
+  }
+
+  // api.homes_ranked_weighted's return table has no territory_basis/
+  // territory_null_reason column (only api.home_detail's underlying
+  // core.mv_home_signals carries those, per 0303) -- looked up here in one
+  // extra PK-batch query per page so weighted-mode CSV rows get the same
+  // utility_status column predicted-mode rows get straight from the join.
+  async function lookupTerritoryBasis(
+    propIds: string[]
+  ): Promise<Map<string, { basis: string | null; nullReason: string | null }>> {
+    if (propIds.length === 0) return new Map();
+    const rows = await query<{ prop_id: string; territory_basis: string | null; territory_null_reason: string | null }>(
+      `select prop_id, territory_basis, territory_null_reason from core.mv_home_signals where prop_id = any($1::text[])`,
+      [propIds]
+    );
+    return new Map(rows.map((r) => [r.prop_id, { basis: r.territory_basis, nullReason: r.territory_null_reason }]));
   }
 
   const encoder = new TextEncoder();
@@ -211,7 +237,8 @@ export async function GET(request: NextRequest) {
             const rows: PredictedDbRow[] = await query<PredictedDbRow>(
               `select hp.prop_id, pc.situs_num, pc.situs_street, pc.situs_city, pc.situs_zip,
                       hp.p_install_12m::text as p_install_12m, hp.relative_to_county, hp.reasons, hp.extrapolated_from,
-                      s.distributor_name, s.territory_eia_id, s.outage_minutes, s.outage_basis,
+                      s.distributor_name, s.territory_eia_id, s.territory_basis, s.territory_null_reason,
+                      s.outage_minutes, s.outage_basis,
                       s.source_ids, hp.source_ids as model_source_ids
                from core.home_propensity hp
                join core.mv_home_signals s on s.prop_id = hp.prop_id
@@ -221,6 +248,9 @@ export async function GET(request: NextRequest) {
                  and s.county_fips = $1
                  and ($2::boolean = false or coalesce(hc.bucket, 'prospect') not in ('base_customer', 'other_backup'))
                  and ($3::boolean = false or s.yr_built is null or s.yr_built >= ${HIDE_OLD_HOMES_CUTOFF_YEAR})
+                 and ($7::text is null or s.block_group_geoid = $7)
+                 and ($8::text is null or coalesce(pc.situs_city, '') = $8)
+                 and ($9::text is null or coalesce(pc.situs_zip, '') = $9)
                  and (
                    $4::numeric is null
                    or hp.p_install_12m < $4::numeric
@@ -228,7 +258,7 @@ export async function GET(request: NextRequest) {
                  )
                order by hp.p_install_12m desc, hp.prop_id asc
                limit $6`,
-              [county.fips, excludeBackup, hideOldHomes, afterP, afterPropId, PAGE_SIZE]
+              [county.fips, excludeBackup, hideOldHomes, afterP, afterPropId, PAGE_SIZE, blockGroupGeoid, situsCity, situsZip]
             );
             if (rows.length === 0) break;
 
@@ -256,7 +286,7 @@ export async function GET(request: NextRequest) {
                     market ?? "",
                     permitPathFromTerritory(row.territory_eia_id) ?? "",
                     row.distributor_name ?? "",
-                    "Confirmed Base-served utility match",
+                    formatUtilityStatus(row.territory_basis, row.territory_null_reason, row.distributor_name),
                     row.extrapolated_from ?? "",
                     sources,
                   ])
@@ -279,18 +309,25 @@ export async function GET(request: NextRequest) {
               `select prop_id, situs_num, situs_street, situs_city, situs_zip, score::text as score,
                       reasons, distributor_name, territory_eia_id, outage_minutes, outage_basis,
                       permit_path, yr_built, source_ids, outage_source_ids
-               from api.homes_ranked_weighted($1::jsonb, $2::text, null, $3::numeric, $4::text, $5::int, $6::boolean)`,
-              [JSON.stringify(weights), county.fips, afterScore, afterPropId, PAGE_SIZE, excludeBackup]
+               from api.homes_ranked_weighted($1::jsonb, $2::text, $7::text, $3::numeric, $4::text, $5::int, $6::boolean, $8::text, $9::text)`,
+              // api.homes_ranked_weighted's p_situs_city/p_situs_zip are
+              // `is null or col = param` -- they can't select "column IS
+              // NULL" rows, so "" (this route's own null-bucket sentinel)
+              // is coerced to "no filter" here, same fix/deviation as
+              // app/api/top-homes/route.ts's fetchRankedHomes.
+              [JSON.stringify(weights), county.fips, afterScore, afterPropId, PAGE_SIZE, excludeBackup, blockGroupGeoid, situsCity || null, situsZip || null]
             );
             if (rows.length === 0) break;
 
             const marketByEiaId = await lookupMarket(rows.map((r: WeightedDbRow) => r.territory_eia_id));
+            const territoryBasisByPropId = await lookupTerritoryBasis(rows.map((r: WeightedDbRow) => r.prop_id));
 
             for (const row of rows) {
               if (emittedRows >= CSV_CAP) break;
               if (hideOldHomes && row.yr_built !== null && row.yr_built < HIDE_OLD_HOMES_CUTOFF_YEAR) continue;
               rank += 1;
               const market = marketByEiaId.get(row.territory_eia_id ?? "");
+              const territoryBasis = territoryBasisByPropId.get(row.prop_id);
               const sources = await resolveSources([...(row.source_ids ?? []), ...(row.outage_source_ids ?? [])]);
               controller.enqueue(
                 encoder.encode(
@@ -309,7 +346,7 @@ export async function GET(request: NextRequest) {
                     market ?? "",
                     formatWeightedPermitPath(row.permit_path) ?? "",
                     row.distributor_name ?? "",
-                    "Confirmed Base-served utility match",
+                    formatUtilityStatus(territoryBasis?.basis ?? null, territoryBasis?.nullReason ?? null, row.distributor_name),
                     "",
                     sources,
                   ])

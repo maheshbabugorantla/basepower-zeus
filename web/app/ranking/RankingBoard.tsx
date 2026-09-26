@@ -8,9 +8,11 @@ import { WeightSliders, equalWeights } from "../../components/WeightSliders";
 import { ScoreExplainer } from "../../components/ScoreExplainer";
 import { Panel } from "../../components/ui/Panel";
 import { MissingState } from "../../components/ui/MissingState";
-import type { SignalKey, PredictedHomeRow } from "../api/top-homes/route";
+import { DataTable, DataTableBody, DataTableCell, DataTableHead, DataTableHeaderCell, DataTableRow } from "../../components/ui/DataTable";
+import { SIGNAL_KEYS, type SignalKey, type PredictedHomeRow } from "../api/top-homes/route";
 import { PredictedHomesTable } from "./PredictedHomesTable";
 import { PredictionProof, type ModelCardData } from "../../components/PredictionProof";
+import { bucketBy, filterRows, countyTotals, type GeoRollupRow, type GeoBucket } from "../../lib/geoRollup";
 
 // M4-W2: predicted (api.home_propensity.p_install_12m) is the ranking
 // DEFAULT; "Team-weighted score" is the alternative, unchanged (M2-W1's)
@@ -63,6 +65,8 @@ const FIRST_PREDICTED_CURSOR: PredictedCursor = { afterP: null, afterPropId: nul
 async function fetchPredictedPage(params: {
   countyFips: string;
   blockGroupGeoid: string | null;
+  situsCity?: string | null;
+  situsZip?: string | null;
   cursor: PredictedCursor;
   pageSize?: number;
   withTotal: boolean;
@@ -77,6 +81,8 @@ async function fetchPredictedPage(params: {
       mode: "predicted",
       countyFips: params.countyFips,
       blockGroupGeoid: params.blockGroupGeoid,
+      situsCity: params.situsCity ?? undefined,
+      situsZip: params.situsZip ?? undefined,
       afterP: params.cursor.afterP,
       afterPropId: params.cursor.afterPropId,
       pageSize: params.pageSize ?? DEFAULT_PAGE_SIZE,
@@ -98,6 +104,8 @@ async function fetchPage(params: {
   countyFips: string;
   weights: Record<SignalKey, number>;
   blockGroupGeoid: string | null;
+  situsCity?: string | null;
+  situsZip?: string | null;
   cursor: Cursor;
   pageSize?: number;
   withTotal: boolean;
@@ -114,6 +122,8 @@ async function fetchPage(params: {
       weights: params.weights,
       countyFips: params.countyFips,
       blockGroupGeoid: params.blockGroupGeoid,
+      situsCity: params.situsCity ?? undefined,
+      situsZip: params.situsZip ?? undefined,
       afterScore: params.cursor.afterScore,
       afterPropId: params.cursor.afterPropId,
       pageSize: params.pageSize ?? DEFAULT_PAGE_SIZE,
@@ -129,6 +139,23 @@ async function fetchPage(params: {
  * A block group GEOID (state 2 + county 3 + tract 6 + block group 1, e.g.
  * 484530329001) as people read it on a census map: "Tract 329, block group 1".
  */
+// M-drilldown (item 3): a <select>'s value is always a plain string, so
+// the city/ZIP filter's real states (null = "All", "" = the no-value
+// bucket, anything else = an exact value) need distinct sentinel strings
+// that can never collide with a real city name or ZIP.
+const ALL_VALUE = "__all__";
+const NULL_BUCKET_VALUE = "__none__";
+
+function toSelectValue(key: string): string {
+  return key === "" ? NULL_BUCKET_VALUE : key;
+}
+
+function fromSelectValue(value: string): string | null {
+  if (value === ALL_VALUE) return null;
+  if (value === NULL_BUCKET_VALUE) return "";
+  return value;
+}
+
 function blockGroupLabel(geoid: string): string {
   if (!/^\d{12}$/.test(geoid)) return `Block group ${geoid}`;
   const tractRaw = geoid.slice(5, 11);
@@ -146,6 +173,14 @@ export function RankingBoard({
   modelCard = null,
   countyName = "Travis",
   countyFips = TRAVIS_COUNTY_FIPS,
+  geoRollup = [],
+  initialMode = "predicted",
+  initialWeights = null,
+  initialCity = null,
+  initialZip = null,
+  initialBlockGroupGeoid = null,
+  initialHideOldHomes = false,
+  initialHideExistingBackup = true,
 }: {
   rows: TopHomeRow[];
   /** Real gate-passed county home count (api.homes_ranked_weighted_count), server-rendered. */
@@ -163,24 +198,44 @@ export function RankingBoard({
   /** M3-W1: the county the ranking/map/table are scoped to — follows
    * the top-bar county switcher via app/ranking/page.tsx's `?county=`. */
   countyFips?: string;
+  /** M-drilldown (item 3): api.home_geo_rollup rows for this county,
+   * cascaded client-side into the City -> ZIP -> Neighborhood dropdowns. */
+  geoRollup?: GeoRollupRow[];
+  /** M-urlstate (item 4): every initial* prop below is read from the URL
+   * server-side (app/ranking/page.tsx) so the first paint already matches
+   * what's in the address bar -- these are only the React state seeds;
+   * the effect below keeps the URL in sync with state after that. */
+  initialMode?: RankingMode;
+  initialWeights?: Record<SignalKey, number> | null;
+  initialCity?: string | null;
+  initialZip?: string | null;
+  initialBlockGroupGeoid?: string | null;
+  initialHideOldHomes?: boolean;
+  initialHideExistingBackup?: boolean;
 }) {
   // M4-W2: predicted is the default ranking mode; "weighted" is the
   // team-adjustment alternative (unchanged M2-W1 behavior).
-  const [mode, setMode] = useState<RankingMode>("predicted");
-  const [weights, setWeights] = useState<Record<SignalKey, number>>(defaultWeights ?? equalWeights());
+  const [mode, setMode] = useState<RankingMode>(initialMode);
+  const [weights, setWeights] = useState<Record<SignalKey, number>>(initialWeights ?? defaultWeights ?? equalWeights());
   // M2-P8: "Hide homes built before 2000" — a team choice, not a Base
   // rule, default OFF. Filtered in the /api/top-homes route on yr_built
   // (a column the ranking function already returns on every row), never
   // a second request-time scan of core.parcels.
-  const [hideOldHomes, setHideOldHomes] = useState(false);
+  const [hideOldHomes, setHideOldHomes] = useState(initialHideOldHomes);
   // M2-P11: "Hide homes that already have backup" -- default ON (a home
   // already known to have its own battery/generator/other-installer permit
   // is excluded from outreach ranking by default; toggle restores them).
   // Wired straight through to api.homes_ranked_weighted's p_exclude_backup.
-  const [hideExistingBackup, setHideExistingBackup] = useState(true);
+  const [hideExistingBackup, setHideExistingBackup] = useState(initialHideExistingBackup);
+
+  // M-drilldown (item 3): city/ZIP filter state -- null = "All", ""
+  // (empty string) = the "no value on file" bucket, same convention as
+  // lib/geoRollup.ts / app/api/top-homes/route.ts's situsCity/situsZip.
+  const [selectedCity, setSelectedCity] = useState<string | null>(initialCity);
+  const [selectedZip, setSelectedZip] = useState<string | null>(initialZip);
 
   // County-wide vs. block-group-scoped ranking.
-  const [selectedGeoid, setSelectedGeoid] = useState<string | null>(null);
+  const [selectedGeoid, setSelectedGeoid] = useState<string | null>(initialBlockGroupGeoid);
   const [cursors, setCursors] = useState<Cursor[]>([FIRST_CURSOR]);
   const [pageIndex, setPageIndex] = useState(0);
   const [rows, setRows] = useState<TopHomeRow[]>(initialRows);
@@ -252,12 +307,14 @@ export function RankingBoard({
       setError(null);
       try {
         const [page, dotsPage] = await Promise.all([
-          fetchPage({ countyFips, weights, blockGroupGeoid: selectedGeoid, cursor: FIRST_CURSOR, withTotal: true, hideOldHomes, excludeBackup: hideExistingBackup }),
+          fetchPage({ countyFips, weights, blockGroupGeoid: selectedGeoid, situsCity: selectedCity, situsZip: selectedZip, cursor: FIRST_CURSOR, withTotal: true, hideOldHomes, excludeBackup: hideExistingBackup }),
           selectedGeoid
             ? fetchPage({
                 countyFips,
                 weights,
                 blockGroupGeoid: selectedGeoid,
+                situsCity: selectedCity,
+                situsZip: selectedZip,
                 cursor: FIRST_CURSOR,
                 pageSize: DOTS_PAGE_SIZE,
                 withTotal: false,
@@ -295,7 +352,7 @@ export function RankingBoard({
 
     return () => clearTimeout(debounceTimer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, weights, selectedGeoid, hideOldHomes, hideExistingBackup]);
+  }, [mode, weights, selectedGeoid, selectedCity, selectedZip, hideOldHomes, hideExistingBackup]);
 
   const isFirstPredictedRun = useRef(true);
   const predictedSeqRef = useRef(0);
@@ -324,6 +381,8 @@ export function RankingBoard({
           fetchPredictedPage({
             countyFips,
             blockGroupGeoid: selectedGeoid,
+            situsCity: selectedCity,
+            situsZip: selectedZip,
             cursor: FIRST_PREDICTED_CURSOR,
             withTotal: true,
             hideOldHomes,
@@ -333,6 +392,8 @@ export function RankingBoard({
             ? fetchPredictedPage({
                 countyFips,
                 blockGroupGeoid: selectedGeoid,
+                situsCity: selectedCity,
+                situsZip: selectedZip,
                 cursor: FIRST_PREDICTED_CURSOR,
                 pageSize: DOTS_PAGE_SIZE,
                 withTotal: false,
@@ -355,7 +416,7 @@ export function RankingBoard({
     }, DEBOUNCE_MS);
 
     return () => clearTimeout(debounceTimer);
-  }, [mode, selectedGeoid, hideOldHomes, hideExistingBackup]);
+  }, [mode, selectedGeoid, selectedCity, selectedZip, hideOldHomes, hideExistingBackup]);
 
   useEffect(() => {
     return () => {
@@ -371,6 +432,8 @@ export function RankingBoard({
       const page = await fetchPredictedPage({
         countyFips,
         blockGroupGeoid: selectedGeoid,
+        situsCity: selectedCity,
+        situsZip: selectedZip,
         cursor,
         withTotal: false,
         hideOldHomes,
@@ -415,7 +478,7 @@ export function RankingBoard({
     setLoading(true);
     setError(null);
     try {
-      const page = await fetchPage({ countyFips, weights, blockGroupGeoid: selectedGeoid, cursor, withTotal: false, hideOldHomes, excludeBackup: hideExistingBackup });
+      const page = await fetchPage({ countyFips, weights, blockGroupGeoid: selectedGeoid, situsCity: selectedCity, situsZip: selectedZip, cursor, withTotal: false, hideOldHomes, excludeBackup: hideExistingBackup });
       if (mySeq !== requestSeqRef.current) return;
       setRows(page.rows);
       setPageIndex(nextIndex);
@@ -463,6 +526,69 @@ export function RankingBoard({
     setSelectedGeoid((current) => (current === geoid ? null : geoid));
     setHoveredPropId(null);
   }
+
+  // M-drilldown (item 3): City -> ZIP -> Neighborhood cascade -- picking a
+  // higher level clears every level below it (a new city may not even
+  // contain the previously-selected ZIP/block group).
+  function handleSelectCity(city: string | null) {
+    setSelectedCity(city);
+    setSelectedZip(null);
+    setSelectedGeoid(null);
+    setHoveredPropId(null);
+  }
+
+  function handleSelectZip(zip: string | null) {
+    setSelectedZip(zip);
+    setSelectedGeoid(null);
+    setHoveredPropId(null);
+  }
+
+  // M-urlstate (item 4): keep mode/weights/backup/pre2000/city/zip/bg in
+  // the URL so a reload -- and the CSV export, which forwards the current
+  // url's params (ExportButton) -- reproduce exactly what's on screen.
+  // window.history.replaceState (not router.replace) so this never
+  // re-runs the force-dynamic server render on every slider tick.
+  //
+  // Built from window.location directly, not usePathname()/useSearchParams()
+  // -- those need a Suspense boundary (this component has none, and
+  // adding one just for this would be its own risk) and would re-render
+  // every consumer of them on every keystroke. Debounced on the existing
+  // 250 ms timer: a raw per-keystroke replaceState call hits browser rate
+  // limits (Safari throws SecurityError past ~100 calls/30s, which one
+  // slider drag alone can reach) and would fire well before the weights
+  // state has settled anyway.
+  const isFirstUrlSync = useRef(true);
+  useEffect(() => {
+    if (isFirstUrlSync.current) {
+      isFirstUrlSync.current = false;
+      return;
+    }
+    const syncTimer = setTimeout(() => {
+      const params = new URLSearchParams(window.location.search);
+      params.set("mode", mode);
+      if (mode === "weighted") {
+        for (const key of SIGNAL_KEYS) params.set(`w_${key}`, String(weights[key] ?? 0));
+      } else {
+        for (const key of SIGNAL_KEYS) params.delete(`w_${key}`);
+      }
+      params.set("backup", hideExistingBackup ? "hide" : "show");
+      params.set("pre2000", hideOldHomes ? "hide" : "show");
+      if (selectedCity !== null) params.set("city", selectedCity);
+      else params.delete("city");
+      if (selectedZip !== null) params.set("zip", selectedZip);
+      else params.delete("zip");
+      if (selectedGeoid !== null) params.set("bg", selectedGeoid);
+      else params.delete("bg");
+      const next = `${window.location.pathname}?${params.toString()}`;
+      if (`${window.location.pathname}${window.location.search}` !== next) {
+        window.history.replaceState(window.history.state, "", next);
+      }
+    }, DEBOUNCE_MS);
+    return () => clearTimeout(syncTimer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, weights, hideExistingBackup, hideOldHomes, selectedCity, selectedZip, selectedGeoid]);
+
+  const countyTop10 = countyTotals(geoRollup).top10Count;
 
   const rangeStart = pageIndex * DEFAULT_PAGE_SIZE + 1;
   const predictedRangeStart = predictedPageIndex * DEFAULT_PAGE_SIZE + 1;
@@ -642,7 +768,72 @@ export function RankingBoard({
               ? "Click a home to see the full score breakdown below."
               : "Ranked by the model's predicted 12-month likelihood."}
           </p>
-          {selectedGeoid ? (
+
+          {(() => {
+            const rowsForCity = selectedCity !== null ? filterRows(geoRollup, { city: selectedCity }) : geoRollup;
+            const rowsForZip = selectedZip !== null ? filterRows(rowsForCity, { zip: selectedZip }) : rowsForCity;
+            const cityBuckets = bucketBy(geoRollup, (r) => r.situsCity ?? "");
+            const zipBuckets = bucketBy(rowsForCity, (r) => r.situsZip ?? "");
+            const bgBuckets = bucketBy(rowsForZip, (r) => r.blockGroupGeoid);
+            return (
+              <div
+                data-testid="geo-drilldown"
+                style={{ display: "flex", flexWrap: "wrap", gap: "var(--space-3)", marginTop: "var(--space-2)" }}
+              >
+                <label style={{ display: "flex", flexDirection: "column", gap: "2px", fontSize: "var(--type-label-font-size)" }}>
+                  City
+                  <select
+                    data-testid="drilldown-city"
+                    value={selectedCity ?? ALL_VALUE}
+                    onChange={(e) => handleSelectCity(fromSelectValue(e.target.value))}
+                  >
+                    <option value={ALL_VALUE}>All ({geoRollup.reduce((s, r) => s + r.homeCount, 0).toLocaleString()} homes)</option>
+                    {cityBuckets.map((b) => (
+                      <option key={b.key || NULL_BUCKET_VALUE} value={toSelectValue(b.key)}>
+                        {(b.key || "No city on file")} ({b.homeCount.toLocaleString()} homes)
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label style={{ display: "flex", flexDirection: "column", gap: "2px", fontSize: "var(--type-label-font-size)" }}>
+                  ZIP
+                  <select
+                    data-testid="drilldown-zip"
+                    value={selectedZip ?? ALL_VALUE}
+                    onChange={(e) => handleSelectZip(fromSelectValue(e.target.value))}
+                  >
+                    <option value={ALL_VALUE}>All ({rowsForCity.reduce((s, r) => s + r.homeCount, 0).toLocaleString()} homes)</option>
+                    {zipBuckets.map((b) => (
+                      <option key={b.key || NULL_BUCKET_VALUE} value={toSelectValue(b.key)}>
+                        {(b.key || "No ZIP on file")} ({b.homeCount.toLocaleString()} homes)
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label style={{ display: "flex", flexDirection: "column", gap: "2px", fontSize: "var(--type-label-font-size)" }}>
+                  Neighborhood
+                  <select
+                    data-testid="drilldown-blockgroup"
+                    value={selectedGeoid ?? ALL_VALUE}
+                    onChange={(e) => handleSelectGeoid(fromSelectValue(e.target.value))}
+                  >
+                    <option value={ALL_VALUE}>All ({rowsForZip.reduce((s, r) => s + r.homeCount, 0).toLocaleString()} homes)</option>
+                    {bgBuckets.map((b) => (
+                      <option key={b.key} value={b.key}>
+                        {blockGroupLabel(b.key)} ({b.homeCount.toLocaleString()} homes)
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+            );
+          })()}
+          <p style={{ margin: "var(--space-1) 0 0 0", fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)" }}>
+            Dropdown counts include homes that already have backup, so they won&rsquo;t match the list total when
+            &ldquo;Hide homes that already have backup&rdquo; is on.
+          </p>
+
+          {selectedCity !== null || selectedZip !== null || selectedGeoid !== null ? (
             <div
               data-testid="selected-blockgroup-chip"
               style={{
@@ -654,12 +845,14 @@ export function RankingBoard({
                 fontSize: "var(--type-label-font-size)",
               }}
             >
-              <span className="chip">{blockGroupLabel(selectedGeoid)}</span>
+              {selectedCity !== null ? <span className="chip">{selectedCity || "No city on file"}</span> : null}
+              {selectedZip !== null ? <span className="chip">{selectedZip || "No ZIP on file"}</span> : null}
+              {selectedGeoid !== null ? <span className="chip">{blockGroupLabel(selectedGeoid)}</span> : null}
               <button
                 type="button"
                 className="btn btn--secondary"
-                onClick={() => handleSelectGeoid(null)}
-                aria-label="Clear block group selection and show all homes"
+                onClick={() => handleSelectCity(null)}
+                aria-label="Clear city/ZIP/neighborhood selection and show all homes"
                 data-testid="clear-blockgroup"
                 style={{ whiteSpace: "nowrap" }}
               >
@@ -673,7 +866,67 @@ export function RankingBoard({
             <MissingState variant="not-loaded" reason={(mode === "weighted" ? error : predictedError) ?? ""} />
           </div>
         ) : null}
-        {mode === "predicted" ? (
+        {mode === "predicted" && selectedGeoid === null ? (
+          // M-drilldown (item 3): until a single neighborhood is chosen,
+          // the list shows a bucket row per city (or per ZIP, once a city
+          // is chosen) instead of individual homes -- clicking a row
+          // drills down exactly like picking it from the select above.
+          // Bucket averages/likelihoods are predicted-mode-only: a
+          // weighted score is a live per-request computation, so there is
+          // no per-bucket average to show in weighted mode (the dropdowns
+          // above still filter the homes list there instead).
+          (() => {
+            const level: "city" | "zip" | "blockGroup" = selectedCity === null ? "city" : selectedZip === null ? "zip" : "blockGroup";
+            const rowsForCity = selectedCity !== null ? filterRows(geoRollup, { city: selectedCity }) : geoRollup;
+            const rowsForZip = selectedZip !== null ? filterRows(rowsForCity, { zip: selectedZip }) : rowsForCity;
+            const buckets: GeoBucket[] =
+              level === "city"
+                ? bucketBy(geoRollup, (r) => r.situsCity ?? "")
+                : level === "zip"
+                  ? bucketBy(rowsForCity, (r) => r.situsZip ?? "")
+                  : bucketBy(rowsForZip, (r) => r.blockGroupGeoid);
+            const labelFor = (key: string) =>
+              level === "blockGroup" ? blockGroupLabel(key) : key || (level === "city" ? "No city on file" : "No ZIP on file");
+            const onPick = (key: string) =>
+              level === "city" ? handleSelectCity(key) : level === "zip" ? handleSelectZip(key) : handleSelectGeoid(key);
+
+            if (buckets.length === 0) {
+              return <MissingState variant="not-loaded" reason="No homes to rank yet" />;
+            }
+            return (
+              <div style={{ flex: "1 1 auto", minHeight: 0, overflow: "auto" }} data-testid="geo-bucket-table">
+                <DataTable>
+                  <DataTableHead>
+                    <DataTableRow>
+                      <DataTableHeaderCell>{level === "city" ? "City" : level === "zip" ? "ZIP" : "Neighborhood"}</DataTableHeaderCell>
+                      <DataTableHeaderCell>Homes</DataTableHeaderCell>
+                      <DataTableHeaderCell>Avg. likelihood</DataTableHeaderCell>
+                      <DataTableHeaderCell>Best likelihood</DataTableHeaderCell>
+                      <DataTableHeaderCell>Share of county&rsquo;s top 10%</DataTableHeaderCell>
+                    </DataTableRow>
+                  </DataTableHead>
+                  <DataTableBody>
+                    {buckets.map((b) => (
+                      <DataTableRow
+                        key={b.key || NULL_BUCKET_VALUE}
+                        className="data-table__row--hoverable"
+                        onClick={() => onPick(b.key)}
+                        style={{ cursor: "pointer" }}
+                        data-testid="geo-bucket-row"
+                      >
+                        <DataTableCell>{labelFor(b.key)}</DataTableCell>
+                        <DataTableCell>{b.homeCount.toLocaleString()}</DataTableCell>
+                        <DataTableCell>{b.avgP === null ? <MissingState variant="not-loaded" reason="Not scored" /> : `${(b.avgP * 100).toFixed(1)}%`}</DataTableCell>
+                        <DataTableCell>{b.maxP === null ? <MissingState variant="not-loaded" reason="Not scored" /> : `${(b.maxP * 100).toFixed(1)}%`}</DataTableCell>
+                        <DataTableCell>{countyTop10 > 0 ? `${((b.top10Count / countyTop10) * 100).toFixed(1)}%` : <MissingState variant="not-loaded" reason="Not scored" />}</DataTableCell>
+                      </DataTableRow>
+                    ))}
+                  </DataTableBody>
+                </DataTable>
+              </div>
+            );
+          })()
+        ) : mode === "predicted" ? (
           <>
             <div style={{ flex: "1 1 auto", minHeight: 0, overflow: "auto" }}>
               <PredictedHomesTable
