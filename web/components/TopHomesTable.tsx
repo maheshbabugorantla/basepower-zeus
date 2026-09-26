@@ -46,14 +46,17 @@ export interface TopHomeRow {
 }
 
 /** api.top_homes_weighted's reason keys -> a short label + DESIGN.md signal
- * category for the chip dot. outage/flood are both "will this home lose
- * power" exposure signals -> the outage (grid-off red) category. empower/
- * age65/electric_heat are household-need signals -> household (sky).
+ * category for the chip dot. outage is a "will this home lose power"
+ * exposure signal -> the outage (grid-off red) category. flood is an
+ * INSTALLABILITY signal (0204_flood_direction.sql: the score favors
+ * homes OUTSIDE a FEMA flood zone, per PRODUCT.md/the spec's Signals
+ * table) -> install (deep blue), not outage red. empower/age65/
+ * electric_heat are household-need signals -> household (sky).
  * backup_intent (a demonstrated interest in battery/generator backup) ->
- * install (deep blue), the closest of the four named categories. */
+ * install (deep blue) too. */
 export const REASON_META: Record<string, { label: string; signal: SignalName }> = {
   outage: { label: "Outage exposure", signal: "outage" },
-  flood: { label: "Flood risk", signal: "outage" },
+  flood: { label: "Outside flood zone", signal: "install" },
   empower: { label: "Medical need", signal: "household" },
   age65: { label: "Age 65+", signal: "household" },
   electric_heat: { label: "Electric heat", signal: "household" },

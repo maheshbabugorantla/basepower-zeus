@@ -528,7 +528,7 @@ export default async function HomeDetailPage({
             </div>
 
             <div>
-              <dt style={{ color: "var(--theme-ink-muted)", fontSize: "var(--type-label-font-size)" }}>Flood risk</dt>
+              <dt style={{ color: "var(--theme-ink-muted)", fontSize: "var(--type-label-font-size)" }}>Installability: flood zone</dt>
               <dd style={{ margin: "var(--space-1) 0 0 0" }}>
                 {homeSignals.flood_flag === null ? (
                   <MissingState variant="not-loaded" reason={homeSignals.flood_null_reason ?? "Flood zones not loaded"} />

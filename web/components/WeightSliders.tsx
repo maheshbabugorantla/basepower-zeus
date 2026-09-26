@@ -17,7 +17,7 @@ import { REASON_META } from "./TopHomesTable";
 
 export const SIGNAL_LABELS: Record<SignalKey, string> = {
   outage: "Outage exposure",
-  flood: "Flood risk",
+  flood: "Outside flood zone",
   empower: "Medical need",
   age65: "Age 65+",
   electric_heat: "Electric heat",
