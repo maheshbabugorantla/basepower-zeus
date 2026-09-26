@@ -310,12 +310,10 @@ export async function GET(request: NextRequest) {
                       reasons, distributor_name, territory_eia_id, outage_minutes, outage_basis,
                       permit_path, yr_built, source_ids, outage_source_ids
                from api.homes_ranked_weighted($1::jsonb, $2::text, $7::text, $3::numeric, $4::text, $5::int, $6::boolean, $8::text, $9::text)`,
-              // api.homes_ranked_weighted's p_situs_city/p_situs_zip are
-              // `is null or col = param` -- they can't select "column IS
-              // NULL" rows, so "" (this route's own null-bucket sentinel)
-              // is coerced to "no filter" here, same fix/deviation as
-              // app/api/top-homes/route.ts's fetchRankedHomes.
-              [JSON.stringify(weights), county.fips, afterScore, afterPropId, PAGE_SIZE, excludeBackup, blockGroupGeoid, situsCity || null, situsZip || null]
+              // Verified against 0303b: p_situs_city/p_situs_zip use
+              // `coalesce(t.situs_city, '') = p_situs_city`, so "" (this
+              // route's own null-bucket sentinel) matches correctly.
+              [JSON.stringify(weights), county.fips, afterScore, afterPropId, PAGE_SIZE, excludeBackup, blockGroupGeoid, situsCity, situsZip]
             );
             if (rows.length === 0) break;
 

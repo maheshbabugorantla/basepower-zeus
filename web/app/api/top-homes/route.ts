@@ -418,26 +418,19 @@ export async function fetchRankedHomes(params: {
 
   const weightsJson = JSON.stringify(weights);
 
-  // Contract check against the landed 0303b migration: api.homes_ranked_
-  // weighted[_count]'s p_situs_city/p_situs_zip are `is null or col =
-  // param` -- there is no way to ask them for "rows where the column IS
-  // NULL" (unlike this route's own predicted-mode SQL, which writes that
-  // clause explicitly). Sending "" (this route's own null-bucket
-  // sentinel, matched literally) would silently return zero rows instead
-  // of the null-city/null-ZIP homes, so it's coerced to "no filter" here
-  // for weighted mode only -- reported as a deviation, not silently done.
-  const sqlSitusCity = situsCity === "" ? null : situsCity;
-  const sqlSitusZip = situsZip === "" ? null : situsZip;
-
+  // Verified against the landed 0303b migration: api.homes_ranked_weighted
+  // [_count]'s p_situs_city/p_situs_zip use `coalesce(t.situs_city, '') =
+  // p_situs_city`, so "" (this route's own null-bucket sentinel) matches
+  // the null-city/null-ZIP homes correctly -- no client-side coercion needed.
   const [rows, totalRows] = await Promise.all([
     query<HomesRankedWeightedDbRow>(
       `select * from api.homes_ranked_weighted($1::jsonb, $2::text, $3::text, $4::numeric, $5::text, $6::int, $7::boolean, $8::text, $9::text)`,
-      [weightsJson, countyFips, blockGroupGeoid, afterScore, afterPropId, pageSize, excludeBackup, sqlSitusCity, sqlSitusZip]
+      [weightsJson, countyFips, blockGroupGeoid, afterScore, afterPropId, pageSize, excludeBackup, situsCity, situsZip]
     ),
     withTotal
       ? query<{ total: string | number }>(
           `select api.homes_ranked_weighted_count($1::jsonb, $2::text, $3::text, $4::boolean, $5::text, $6::text) as total`,
-          [weightsJson, countyFips, blockGroupGeoid, excludeBackup, sqlSitusCity, sqlSitusZip]
+          [weightsJson, countyFips, blockGroupGeoid, excludeBackup, situsCity, situsZip]
         )
       : Promise.resolve(null),
   ]);
