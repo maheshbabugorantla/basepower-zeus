@@ -1,10 +1,10 @@
-import { query, getSupabase } from "../../../../lib/db";
+import { query, getStorageReader } from "../../../../lib/db";
 
 // Storage bucket `raw` (M0-S1) is private. The Sources page links here
 // instead of at Storage directly; this route looks up the manifest row's
 // storage_key by its api.sources id, mints a short-lived signed URL
-// server-side with the service-role key (SUPABASE_SECRET_KEY, never sent
-// to the browser), and 302-redirects to it.
+// server-side with the publishable key under a SELECT-only bucket policy
+// (migration 0211), and 302-redirects to it.
 
 export const dynamic = "force-dynamic";
 
@@ -27,7 +27,7 @@ export async function GET(
 
   const { storage_key } = rows[0];
 
-  const { data, error } = await getSupabase()
+  const { data, error } = await getStorageReader()
     .storage.from("raw")
     .createSignedUrl(storage_key, SIGNED_URL_TTL_SECONDS);
 

@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 // tickets (M0-W1, M0-W2) once api schema views exist, and is skipped here
 // whenever POSTGRES_URL/SUPABASE_URL aren't set, exactly as CI runs.
 
-const ENV_KEYS = ["POSTGRES_URL", "SUPABASE_URL", "SUPABASE_SECRET_KEY"] as const;
+const ENV_KEYS = ["POSTGRES_URL", "POSTGRES_URL_READONLY", "SUPABASE_URL", "SUPABASE_PUBLISHABLE_KEY"] as const;
 let saved: Record<string, string | undefined> = {};
 
 beforeEach(() => {
@@ -30,9 +30,9 @@ describe("lib/db.ts", () => {
     expect(() => getPool()).toThrow(/POSTGRES_URL/);
   });
 
-  it("getSupabase() throws a clear error when SUPABASE_URL/SUPABASE_SECRET_KEY are unset", async () => {
-    const { getSupabase } = await import("../lib/db");
-    expect(() => getSupabase()).toThrow(/SUPABASE_URL/);
+  it("getStorageReader() throws a clear error when SUPABASE_URL/SUPABASE_PUBLISHABLE_KEY are unset", async () => {
+    const { getStorageReader } = await import("../lib/db");
+    expect(() => getStorageReader()).toThrow(/SUPABASE_URL/);
   });
 
   it("module import never connects or throws at import time", async () => {

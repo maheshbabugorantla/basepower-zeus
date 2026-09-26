@@ -75,8 +75,9 @@ and `web/components/ui/`; do not invent new ones.
   any other project or domain. Never run `vercel` from the repo root.
 - **Env var names (values never appear in code, logs, or commits):**
   `SUPABASE_URL`, `SUPABASE_SECRET_KEY` (service-role, `sb_secret_`
-  format), `SUPABASE_PUBLISHABLE_KEY` (never for data), `POSTGRES_URL`,
-  `POSTGRES_URL_NON_POOLING`, `CRON_SECRET`, `ERCOT_USERNAME`,
+  format; pipelines only), `SUPABASE_PUBLISHABLE_KEY` (web: signing raw-file
+  links only), `POSTGRES_URL`, `POSTGRES_URL_NON_POOLING` (pipelines only),
+  `POSTGRES_URL_READONLY` (web only; role `zeus_web_ro`, read-only), `CRON_SECRET`, `ERCOT_USERNAME`,
   `ERCOT_PASSWORD`, `ERCOT_SUBSCRIPTION_KEY`, `CENSUS_API_KEY`,
   `GOOGLE_MAPS_API_KEY`, `GEMINI_API_KEY` + `BRIEF_MODEL` (server-only
   "why this home" summaries), `TYPESAFE_AI_JEV_API_KEY` (labeling model

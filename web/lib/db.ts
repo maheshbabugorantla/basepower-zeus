@@ -8,11 +8,13 @@ import "server-only";
 // Two supported paths, chosen lazily (nothing connects at import time, so
 // this module can be imported freely in code paths that never run in CI
 // without secrets):
-//   1. POSTGRES_URL set: a pg Pool against the Supabase transaction pooler
-//      (port 6543). No named/prepared statements are issued anywhere in
-//      this module, so it is compatible with pgbouncer transaction mode.
-//   2. POSTGRES_URL unset, SUPABASE_URL + SUPABASE_SECRET_KEY set: a
-//      supabase-js client using the service-role key.
+//   1. POSTGRES_URL_READONLY set: a pg Pool against the Supabase transaction
+//      pooler (port 6543) as role zeus_web_ro (migration 0210): SELECT/
+//      EXECUTE grants only, every session read-only. The web app never holds
+//      a write-capable Postgres login. No named/prepared statements are
+//      issued, so it is compatible with pgbouncer transaction mode.
+//   2. Storage: getStorageReader() signs raw-file download links with the
+//      publishable key (read-only bucket policy, migration 0211).
 //
 // Later tickets query only the `api` schema (views), never `ops`/`core`
 // directly, so provenance (source_id on every row) stays enforced in one
@@ -25,19 +27,17 @@ let pool: Pool | undefined;
 let supabase: SupabaseClient | undefined;
 
 /**
- * Lazily-created pg Pool against POSTGRES_URL (the Supabase transaction
+ * Lazily-created pg Pool against POSTGRES_URL_READONLY (the Supabase transaction
  * pooler). Throws only when actually used without the env var set — never
  * at import time.
  */
 export function getPool(): Pool {
   if (pool) return pool;
 
-  const connectionString = process.env.POSTGRES_URL;
+  // Read-only login only — deliberately no fallback to the owner URL.
+  const connectionString = process.env.POSTGRES_URL_READONLY;
   if (!connectionString) {
-    throw new Error(
-      "getPool() called but POSTGRES_URL is not set. Use getSupabase() " +
-        "instead, or set POSTGRES_URL in the environment."
-    );
+    throw new Error("getPool() called but POSTGRES_URL_READONLY is not set.");
   }
 
   // Serverless-safe limits: every Vercel instance gets its own pool, and the
@@ -58,19 +58,20 @@ export function getPool(): Pool {
 }
 
 /**
- * Lazily-created supabase-js client using the service-role key. Never use
- * SUPABASE_PUBLISHABLE_KEY (or any NEXT_PUBLIC_ key) here — this client
- * bypasses RLS, so it must never run in browser code.
+ * Lazily-created supabase-js client for Storage reads only, using the
+ * publishable key. Its only use is signing short-lived download links for
+ * raw source files; migration 0211 grants anon SELECT on bucket `raw` and
+ * nothing else, so this client cannot write or delete. The web app holds no
+ * service-role key.
  */
-export function getSupabase(): SupabaseClient {
+export function getStorageReader(): SupabaseClient {
   if (supabase) return supabase;
 
   const url = process.env.SUPABASE_URL;
-  const key = process.env.SUPABASE_SECRET_KEY;
+  const key = process.env.SUPABASE_PUBLISHABLE_KEY;
   if (!url || !key) {
     throw new Error(
-      "getSupabase() called but SUPABASE_URL / SUPABASE_SECRET_KEY are not " +
-        "set. Use getPool() instead, or set both env vars."
+      "getStorageReader() called but SUPABASE_URL / SUPABASE_PUBLISHABLE_KEY are not set."
     );
   }
 
@@ -82,9 +83,8 @@ export function getSupabase(): SupabaseClient {
 
 /**
  * Run a read query against the `api` schema via the pg Pool. Prefer this
- * for server components / route handlers that already know POSTGRES_URL is
- * configured; fall back to getSupabase() where a Supabase-specific feature
- * (e.g. Storage) is needed instead.
+ * for server components / route handlers that already know POSTGRES_URL_READONLY is
+ * configured; use getStorageReader() only for raw-file download links
  */
 export async function query<T = unknown>(
   text: string,
