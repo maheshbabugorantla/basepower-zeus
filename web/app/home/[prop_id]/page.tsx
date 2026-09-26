@@ -8,6 +8,7 @@ import { PermitLabel } from "../../../components/PermitLabel";
 import { ParcelMap } from "../../../components/ParcelMap";
 import { SolarPanel } from "../../../components/SolarPanel";
 import { ScoreExplainer } from "../../../components/ScoreExplainer";
+import { PropensityBadge, type PropensityReason } from "../../../components/PropensityBadge";
 import { PermitPath, type PermitPathKind, type PermitPathStatsRow, type PermitRulesCitation } from "../../../components/PermitPath";
 import {
   DataTable,
@@ -94,6 +95,31 @@ interface TopHomeRankRow {
   rank: string | number;
   total: string | number;
   score: string | number;
+}
+
+// M4-W2: api.home_propensity -- the predictive headline. One row per
+// gated home (or none for a home outside the gated population), never
+// synthesized here.
+interface HomePropensityDbRow {
+  p_install_12m: string | number;
+  relative_to_county: string | number | null;
+  reasons: PropensityReason[];
+  extrapolated_from: string | null;
+}
+
+async function getHomePropensity(propId: string): Promise<HomePropensityDbRow | null> {
+  try {
+    const rows = await query<HomePropensityDbRow>(
+      `select p_install_12m, relative_to_county, reasons, extrapolated_from
+       from api.home_propensity
+       where prop_id = $1`,
+      [propId]
+    );
+    return rows[0] ?? null;
+  } catch (err) {
+    console.error("home-detail: failed to load api.home_propensity", err);
+    return null;
+  }
 }
 
 // M2-W1: core.mv_home_signals (0201_m2.sql) — every M2 per-home gate +
@@ -575,7 +601,7 @@ export default async function HomeDetailPage({
   const incomeAge = homeSignals?.block_group_geoid ? await getIncomeAge(homeSignals.block_group_geoid) : null;
   const permitSourceIds = home.permits.map((p) => p.source_id).filter((s): s is string => !!s);
 
-  const [sourcesById, scoreContext, topHomeRank, parcelGeojson, rulesHaveRun, texasOutagePercentile, permitPathStatsRow, permitRuleRow] = await Promise.all([
+  const [sourcesById, scoreContext, homePropensity, parcelGeojson, rulesHaveRun, texasOutagePercentile, permitPathStatsRow, permitRuleRow] = await Promise.all([
     getSourcesByIds(
       Array.from(
         new Set([
@@ -588,7 +614,10 @@ export default async function HomeDetailPage({
       )
     ),
     getScoreContext(home.prop_id),
-    getTopHomeRank(home.prop_id),
+    // M4-W2 perf: replaces getTopHomeRank (api.top_homes_weighted, which
+    // scores every gated Travis home on every call, ~1.6s on prod) with a
+    // primary-key lookup on api.home_propensity for this one home.
+    getHomePropensity(home.prop_id),
     getParcelGeojson(home.prop_id),
     classifierHasRun(),
     homeSignals?.outage_minutes !== null && homeSignals?.outage_minutes !== undefined && homeSignals?.outage_year
@@ -633,8 +662,6 @@ export default async function HomeDetailPage({
   const stateCode = home.imprv_state_cd ?? home.land_state_cd;
   const parcelSourceId = home.source_ids?.[0];
 
-  const score = scoreContext?.score === null || scoreContext?.score === undefined ? null : Number(scoreContext.score);
-
   return (
     <div style={{ display: "grid", gap: "var(--space-6)" }}>
       <nav aria-label="Breadcrumb" className="breadcrumb">
@@ -663,25 +690,9 @@ export default async function HomeDetailPage({
               Travis CAD property {home.prop_id}
             </div>
           </div>
-          <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "var(--space-1)" }}>
-            <span style={{ fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)" }}>Score (equal weights)</span>
-            {topHomeRank ? (
-              <>
-                <span
-                  style={{
-                    fontFamily: "var(--type-figure-font-family)",
-                    fontSize: "var(--type-figure-font-size)",
-                    fontWeight: "var(--type-figure-font-weight)",
-                  }}
-                >
-                  {Number(topHomeRank.score).toFixed(3)}
-                </span>
-                <span style={{ fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)" }}>
-                  #{Number(topHomeRank.rank)} in Travis County at equal weights
-                </span>
-              </>
-            ) : (
-              <a href="/ranking" style={{ fontSize: "var(--type-label-font-size)", maxWidth: "220px", textAlign: "right" }}>
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "var(--space-1)", textAlign: "right" }}>
+            {homePropensity ? null : (
+              <a href="/ranking" style={{ fontSize: "var(--type-label-font-size)", maxWidth: "220px" }}>
                 See where it ranks
               </a>
             )}
@@ -692,6 +703,34 @@ export default async function HomeDetailPage({
           {home.is_single_family ? <span className="chip">Single-family home</span> : null}
           {home.is_homestead ? <span className="chip">Owner-occupied (homestead)</span> : null}
         </div>
+      </Panel>
+
+      <Panel>
+        <h2
+          style={{
+            fontFamily: "var(--type-heading-font-family)",
+            fontSize: "var(--type-heading-font-size)",
+            fontWeight: "var(--type-heading-font-weight)",
+            marginTop: 0,
+          }}
+        >
+          Likelihood of adding backup in the next 12 months
+        </h2>
+        {homePropensity === null ? (
+          <MissingState
+            variant="not-loaded"
+            reason="Not scored: only owner-occupied single-family homes with a mapped lot inside Travis County are scored"
+          />
+        ) : (
+          <PropensityBadge
+            pInstall12m={Number(homePropensity.p_install_12m)}
+            relativeToCounty={homePropensity.relative_to_county === null ? null : Number(homePropensity.relative_to_county)}
+            countyName="Travis"
+            extrapolatedFrom={homePropensity.extrapolated_from}
+            reasons={homePropensity.reasons}
+            showReasons
+          />
+        )}
       </Panel>
 
       <Panel>

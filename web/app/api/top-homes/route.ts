@@ -169,14 +169,175 @@ export function sanitizeWeights(input: unknown): Record<SignalKey, number> {
 }
 
 interface RankedRequestBody {
+  mode?: unknown;
   weights?: unknown;
   countyFips?: unknown;
   blockGroupGeoid?: unknown;
   afterScore?: unknown;
   afterPropId?: unknown;
+  afterP?: unknown;
   pageSize?: unknown;
   hideOldHomes?: unknown;
   excludeBackup?: unknown;
+}
+
+// ---------------------------------------------------------------------------
+// M4-W2: predicted mode -- the ranking default. Reads only
+// core.home_propensity (never api.homes_ranked_weighted /
+// api.homes_ranked_weighted_count, which recompute percentiles across all
+// ~155k gated homes on every call, ~1.6-1.85s measured on prod). Joined by
+// primary key only: core.mv_home_signals (gate/county/block-group/
+// yr_built), core.parcels (situs fields), core.parcel_geoms (centroid),
+// core.home_coverage (exclude-backup bucket) -- the identical
+// exclude-backup predicate api.homes_ranked_weighted uses (0217_anchor_
+// cte.sql), copied verbatim so "hide homes that already have backup"
+// means the same thing in both ranking modes.
+// ---------------------------------------------------------------------------
+
+export interface PropensityReason {
+  feature: string;
+  direction: "raises" | "lowers";
+  value: number | null;
+}
+
+export interface PredictedHomeRow {
+  propId: string;
+  situsNum: string | null;
+  situsStreet: string | null;
+  situsCity: string | null;
+  situsZip: string | null;
+  marketValue: number | null;
+  blockGroupGeoid: string;
+  countyFips: string | null;
+  pInstall12m: number;
+  /** Exact-precision text of p_install_12m, for the next page's keyset cursor only -- never for display (Number() on it would round the boundary value and could repeat/skip a row). */
+  pInstall12mCursor: string;
+  relativeToCounty: number | null;
+  reasons: PropensityReason[];
+  extrapolatedFrom: string | null;
+  yrBuilt: number | null;
+  lon: number | null;
+  lat: number | null;
+}
+
+interface PredictedHomeDbRow {
+  prop_id: string;
+  p_install_12m: string;
+  relative_to_county: string | number | null;
+  reasons: PropensityReason[] | null;
+  extrapolated_from: string | null;
+  geo_id: string | null;
+  situs_num: string | null;
+  situs_street: string | null;
+  situs_city: string | null;
+  situs_zip: string | null;
+  market_value: string | number | null;
+  block_group_geoid: string | null;
+  county_fips: string | null;
+  yr_built: number | null;
+  lon: string | number | null;
+  lat: string | number | null;
+}
+
+function mapPredictedRow(row: PredictedHomeDbRow): PredictedHomeRow {
+  return {
+    propId: row.prop_id,
+    situsNum: row.situs_num,
+    situsStreet: row.situs_street,
+    situsCity: row.situs_city,
+    situsZip: row.situs_zip,
+    marketValue: toNumberOrNull(row.market_value),
+    blockGroupGeoid: row.block_group_geoid ?? "",
+    countyFips: row.county_fips,
+    pInstall12m: Number(row.p_install_12m),
+    pInstall12mCursor: row.p_install_12m,
+    relativeToCounty: toNumberOrNull(row.relative_to_county),
+    reasons: row.reasons ?? [],
+    extrapolatedFrom: row.extrapolated_from,
+    yrBuilt: row.yr_built,
+    lon: toNumberOrNull(row.lon),
+    lat: toNumberOrNull(row.lat),
+  };
+}
+
+/**
+ * Predicted-mode page + (optionally) total. Every filter mirrors
+ * api.homes_ranked_weighted's own WHERE clause exactly (gate_reason,
+ * county, block group, exclude-backup, yr_built) so switching ranking
+ * modes never changes which homes are eligible -- only their order.
+ * yr_built is filtered in SQL (not post-fetch), so a full page always
+ * comes back and the total is exact.
+ */
+export async function fetchPredictedHomes(params: {
+  countyFips: string;
+  blockGroupGeoid?: string | null;
+  afterP?: string | null;
+  afterPropId?: string | null;
+  pageSize?: number;
+  withTotal?: boolean;
+  hideOldHomes?: boolean;
+  excludeBackup?: boolean;
+}): Promise<{ rows: PredictedHomeRow[]; total: number | null }> {
+  const {
+    countyFips,
+    blockGroupGeoid = null,
+    afterP = null,
+    afterPropId = null,
+    pageSize = PAGE_SIZE,
+    withTotal = false,
+    hideOldHomes = false,
+    excludeBackup = true,
+  } = params;
+
+  const whereClause = `
+    from core.home_propensity hp
+    join core.mv_home_signals s on s.prop_id = hp.prop_id
+    join core.parcels pc on pc.prop_id = hp.prop_id
+    left join core.parcel_geoms pg on pg.prop_id = hp.prop_id
+    left join core.home_coverage hc on hc.prop_id = hp.prop_id
+    where s.gate_reason is null
+      and s.county_fips = $1
+      and ($2::text is null or s.block_group_geoid = $2)
+      and ($3::boolean = false or coalesce(hc.bucket, 'prospect') not in ('base_customer', 'other_backup'))
+      and ($4::boolean = false or s.yr_built is null or s.yr_built >= ${HIDE_OLD_HOMES_CUTOFF_YEAR})
+  `;
+
+  const pageSql = `
+    select hp.prop_id, hp.p_install_12m::text as p_install_12m, hp.relative_to_county, hp.reasons, hp.extrapolated_from,
+           pc.geo_id, pc.situs_num, pc.situs_street, pc.situs_city, pc.situs_zip, pc.market_value,
+           s.block_group_geoid, s.county_fips, s.yr_built,
+           extensions.ST_X(pg.centroid) as lon, extensions.ST_Y(pg.centroid) as lat
+    ${whereClause}
+      and (
+        $5::numeric is null
+        or hp.p_install_12m < $5::numeric
+        or (hp.p_install_12m = $5::numeric and hp.prop_id > $6::text)
+      )
+    order by hp.p_install_12m desc, hp.prop_id asc
+    limit $7
+  `;
+
+  const countSql = `select count(*) as total ${whereClause}`;
+
+  const [rows, totalRows] = await Promise.all([
+    query<PredictedHomeDbRow>(pageSql, [
+      countyFips,
+      blockGroupGeoid,
+      excludeBackup,
+      hideOldHomes,
+      afterP,
+      afterPropId,
+      pageSize,
+    ]),
+    withTotal
+      ? query<{ total: string | number }>(countSql, [countyFips, blockGroupGeoid, excludeBackup, hideOldHomes])
+      : Promise.resolve(null),
+  ]);
+
+  return {
+    rows: rows.map(mapPredictedRow),
+    total: totalRows ? Number(totalRows[0].total) : null,
+  };
 }
 
 /**
@@ -256,15 +417,11 @@ export async function POST(request: Request) {
     body = {};
   }
 
-  const weights = sanitizeWeights(body.weights);
   const countyFips = typeof body.countyFips === "string" && body.countyFips.length > 0
     ? body.countyFips
     : TRAVIS_COUNTY_FIPS;
   const blockGroupGeoid = typeof body.blockGroupGeoid === "string" && body.blockGroupGeoid.length > 0
     ? body.blockGroupGeoid
-    : null;
-  const afterScore = typeof body.afterScore === "number" && Number.isFinite(body.afterScore)
-    ? body.afterScore
     : null;
   const afterPropId = typeof body.afterPropId === "string" && body.afterPropId.length > 0
     ? body.afterPropId
@@ -277,6 +434,36 @@ export async function POST(request: Request) {
   // same as api.homes_ranked_weighted's own p_exclude_backup default;
   // only an explicit `false` turns it off.
   const excludeBackup = body.excludeBackup !== false;
+
+  // M4-W2: the ranking UI's default is predicted, but every pre-existing
+  // caller of this route (RankingBoard's own weighted-mode fetch, and
+  // other tickets' tests) never sends `mode` and expects the original
+  // weighted behavior -- so the route's own default stays "weighted";
+  // only an explicit mode: "predicted" (RankingBoard's fetchPredictedPage,
+  // and the ranking page's default UI state) takes this branch.
+  if (body.mode === "predicted") {
+    const afterP = typeof body.afterP === "string" && body.afterP.length > 0 ? body.afterP : null;
+    const withTotal = afterP === null && afterPropId === null;
+    const { rows, total } = await fetchPredictedHomes({
+      countyFips,
+      blockGroupGeoid,
+      afterP,
+      afterPropId,
+      pageSize,
+      withTotal,
+      hideOldHomes,
+      excludeBackup,
+    });
+    return NextResponse.json(
+      { mode: "predicted", rows, total },
+      { headers: { "Cache-Control": "no-store" } }
+    );
+  }
+
+  const weights = sanitizeWeights(body.weights);
+  const afterScore = typeof body.afterScore === "number" && Number.isFinite(body.afterScore)
+    ? body.afterScore
+    : null;
   // Page 1 (no keyset cursor yet) also returns the total row count for
   // this filter — the route recomputes it whenever weights/selection
   // change (a fresh page-1 request), never on Next/Previous.
@@ -295,7 +482,7 @@ export async function POST(request: Request) {
   });
 
   return NextResponse.json(
-    { rows, weights, total },
+    { mode: "weighted", rows, weights, total },
     { headers: { "Cache-Control": "no-store" } }
   );
 }
