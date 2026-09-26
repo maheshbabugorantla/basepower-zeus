@@ -85,7 +85,7 @@ with batch as (
     select p.prop_id, p.county_fips, p.source_id as parcel_source_id
     from core.parcels p
     where p.county_fips = %(county_fips)s
-      and (%(after_prop_id)s is null or p.prop_id > %(after_prop_id)s)
+      and p.prop_id > coalesce(%(after_prop_id)s::text, '')
     order by p.prop_id
     limit %(limit)s
 ),
@@ -438,6 +438,7 @@ def run_county(*, county_fips: str, runner: Runner, backfill: bool = False, curs
                 filter_drops={}, cursor=state,
             )
         except Exception as exc:
+            conn.rollback()
             runs.finish(conn, run_id, status="failed", error=str(exc), cursor=state)
             raise
     return state
