@@ -76,7 +76,7 @@ describe.skipIf(!process.env.POSTGRES_URL)("Overview — outage exposure panel",
       const html = renderToStaticMarkup(await HomePage());
 
       expect(html).toContain("CenterPoint Energy");
-      expect(html).toContain("arriving in M3");
+      expect(html).toContain("coming when that county is loaded");
     },
     20000
   );

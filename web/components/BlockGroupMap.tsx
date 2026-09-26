@@ -479,7 +479,7 @@ function MapLegend({ selected }: { selected: boolean }) {
             backgroundImage: `repeating-linear-gradient(45deg, ${NOT_LOADED_HATCH_STRIPE} 0, ${NOT_LOADED_HATCH_STRIPE} 1px, transparent 1px, transparent 4px)`,
           }}
         />
-        <span>No gated homes / not scored</span>
+        <span>No homes Base can serve here</span>
       </div>
 
       {selected ? (

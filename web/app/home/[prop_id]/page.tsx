@@ -550,7 +550,7 @@ export default async function HomeDetailPage({
                       <span>
                         {homeSignals.distributor_name ?? "This distributor"}'s customers averaged{" "}
                         <span style={{ fontFamily: "var(--type-data-font-family)", fontWeight: 600 }}>
-                          {Number(homeSignals.distributor_saidi).toLocaleString(undefined, { maximumFractionDigits: 1 })}
+                          {Number(homeSignals.distributor_saidi).toLocaleString(undefined, { maximumFractionDigits: 2 })}
                         </span>{" "}
                         minutes without power in {homeSignals.distributor_saidi_year} (SAIDI, incl. major events)
                       </span>
@@ -709,7 +709,7 @@ export default async function HomeDetailPage({
                     <span style={{ fontFamily: "var(--type-data-font-family)", fontWeight: 600 }}>
                       {Number(homeSignals.backup_intent_rate).toFixed(2)}
                     </span>{" "}
-                    battery/generator permits per 1,000 gated homes in this block group (36 months, same for all homes in block group)
+                    battery or generator permits per 1,000 owner-occupied homes in this neighborhood (36 months, same for all homes in block group)
                   </span>
                 )}
               </dd>

@@ -64,8 +64,13 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
         <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
       </head>
       <body>
+        <a href="#main" className="skip-link">
+          Skip to content
+        </a>
         <TopBar freshness={freshness} />
         <main
+          id="main"
+          tabIndex={-1}
           style={{
             padding: "var(--space-6)",
           }}

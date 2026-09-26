@@ -460,7 +460,7 @@ export default async function HomePage() {
             <StatRow
               id="overview-top-homes"
               label="Homes ranked (Base can serve them)"
-              value={topHomesCount === null ? null : topHomesCount}
+              value={topHomesCount === null ? null : topHomesCount.toLocaleString()}
               unit="homes"
               missingReason="Ranking not available right now"
               linkHref="/ranking"

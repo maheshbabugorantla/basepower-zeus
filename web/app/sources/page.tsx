@@ -32,6 +32,52 @@ interface SourceRow {
   latest_run_status: "running" | "success" | "failed" | null;
 }
 
+const DATASET_NAMES: Record<string, string> = {
+  acs: "Census ACS 2024: age and home heating by neighborhood",
+  austin_energy_service_area: "Austin Energy service area (City of Austin)",
+  austin_permits: "City of Austin building permits",
+  base_service_areas: "Base Power pricing page (served utilities)",
+  eaglei: "EAGLE-I power outages by county, 2025",
+  eaglei_mcc: "EAGLE-I customers per county",
+  eia861_reliability: "EIA-861 utility reliability (outage minutes)",
+  empower: "HHS emPOWER: power-dependent Medicare devices by ZIP",
+  fema_flood: "FEMA flood hazard zones",
+  retail_market: "Retail choice by utility (from Base's pages)",
+  tcad_export: "Travis CAD 2026 certified appraisal roll",
+  tcad_geometry: "Travis County parcel outlines",
+  territories: "Electric utility service territories (HIFLD)",
+  tiger_bg: "Census TIGER 2024 block group boundaries",
+  utility_crosswalk: "Base-served utilities matched to EIA IDs",
+  zcta: "Census ZIP code areas",
+};
+
+function datasetName(source: string): string {
+  return DATASET_NAMES[source] ?? source.replace(/_/g, " ");
+}
+
+function hostOf(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return url;
+  }
+}
+
+function fetchedOn(value: string | Date): string {
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return String(value);
+  return d.toISOString().slice(0, 16).replace("T", " ") + " UTC";
+}
+
+function sizeOf(bytes: string | number): string {
+  const n = Number(bytes);
+  if (!Number.isFinite(n)) return String(bytes);
+  if (n >= 1e9) return `${(n / 1e9).toFixed(1)} GB`;
+  if (n >= 1e6) return `${(n / 1e6).toFixed(1)} MB`;
+  if (n >= 1e3) return `${(n / 1e3).toFixed(0)} KB`;
+  return `${n} B`;
+}
+
 function truncateSha(sha256: string): string {
   return sha256.length > 16 ? `${sha256.slice(0, 16)}…` : sha256;
 }
@@ -62,65 +108,74 @@ export default async function SourcesPage() {
           reason="No pipeline has recorded a source manifest row yet"
         />
       ) : (
-        <DataTable>
-          <DataTableHead>
-            <DataTableRow>
-              <DataTableHeaderCell>Dataset</DataTableHeaderCell>
-              <DataTableHeaderCell>URL</DataTableHeaderCell>
-              <DataTableHeaderCell>Retrieved</DataTableHeaderCell>
-              <DataTableHeaderCell>SHA-256</DataTableHeaderCell>
-              <DataTableHeaderCell>Bytes</DataTableHeaderCell>
-              <DataTableHeaderCell>Rows</DataTableHeaderCell>
-              <DataTableHeaderCell>Runner</DataTableHeaderCell>
-              <DataTableHeaderCell>Latest run</DataTableHeaderCell>
-              <DataTableHeaderCell>Raw file</DataTableHeaderCell>
-            </DataTableRow>
-          </DataTableHead>
-          <DataTableBody>
-            {rows.map((row) => (
-              <DataTableRow key={row.source_id}>
-                <DataTableCell>{row.source}</DataTableCell>
-                <DataTableCell>
-                  <a href={row.url} target="_blank" rel="noreferrer noopener">
-                    {row.url}
-                  </a>
-                </DataTableCell>
-                <DataTableCell>
-                  <span style={{ fontFamily: "var(--type-data-font-family)" }}>
-                    {String(row.retrieved_at)}
-                  </span>
-                </DataTableCell>
-                <DataTableCell>
-                  <span title={row.sha256} style={{ fontFamily: "var(--type-data-font-family)" }}>
-                    <code>{truncateSha(row.sha256)}</code>
-                  </span>
-                  <CopyShaButton sha256={row.sha256} />
-                </DataTableCell>
-                <DataTableCell>
-                  <span style={{ fontFamily: "var(--type-data-font-family)" }}>{row.bytes}</span>
-                </DataTableCell>
-                <DataTableCell>
-                  {row.rows === null ? (
-                    <MissingState variant="not-loaded" reason="Row count not recorded by this run" />
-                  ) : (
-                    <span style={{ fontFamily: "var(--type-data-font-family)" }}>{row.rows}</span>
-                  )}
-                </DataTableCell>
-                <DataTableCell>{row.runner}</DataTableCell>
-                <DataTableCell>
-                  {row.latest_run_status === null ? (
-                    <MissingState variant="not-loaded" reason="No load recorded yet" />
-                  ) : (
-                    row.latest_run_status
-                  )}
-                </DataTableCell>
-                <DataTableCell>
-                  <a href={`/sources/raw/${row.source_id}`}>View raw file</a>
-                </DataTableCell>
-              </DataTableRow>
-            ))}
-          </DataTableBody>
-        </DataTable>
+        <>
+          <p style={{ margin: "0 0 var(--space-4)", color: "var(--theme-ink-muted)", maxWidth: "70ch", textWrap: "pretty" }}>
+            Every number in Zeus comes from one of these downloaded files. Each file is kept unchanged, with the time
+            it was fetched and a SHA-256 fingerprint, so anyone can check it against the publisher&rsquo;s copy.
+          </p>
+          <div style={{ overflowX: "auto" }}>
+            <DataTable>
+              <DataTableHead>
+                <DataTableRow>
+                  <DataTableHeaderCell>Dataset</DataTableHeaderCell>
+                  <DataTableHeaderCell>Published by</DataTableHeaderCell>
+                  <DataTableHeaderCell>Fetched</DataTableHeaderCell>
+                  <DataTableHeaderCell>Size</DataTableHeaderCell>
+                  <DataTableHeaderCell>Rows loaded</DataTableHeaderCell>
+                  <DataTableHeaderCell>Fingerprint</DataTableHeaderCell>
+                  <DataTableHeaderCell>File</DataTableHeaderCell>
+                </DataTableRow>
+              </DataTableHead>
+              <DataTableBody>
+                {rows.map((row) => (
+                  <DataTableRow key={row.source_id}>
+                    <DataTableCell>
+                      <span style={{ fontWeight: 500 }} data-source={row.source}>{datasetName(row.source)}</span>
+                      {row.latest_run_status && row.latest_run_status !== "success" ? (
+                        <div style={{ fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)" }}>
+                          Last load: {row.latest_run_status}
+                        </div>
+                      ) : null}
+                    </DataTableCell>
+                    <DataTableCell>
+                      <a href={row.url} target="_blank" rel="noreferrer noopener" title={row.url}>
+                        {hostOf(row.url)}
+                      </a>
+                    </DataTableCell>
+                    <DataTableCell>
+                      <span style={{ fontFamily: "var(--type-data-font-family)", whiteSpace: "nowrap" }}>
+                        {fetchedOn(row.retrieved_at)}
+                      </span>
+                    </DataTableCell>
+                    <DataTableCell>
+                      <span style={{ fontFamily: "var(--type-data-font-family)", whiteSpace: "nowrap" }}>{sizeOf(row.bytes)}</span>
+                    </DataTableCell>
+                    <DataTableCell>
+                      {row.rows === null ? (
+                        <MissingState variant="not-loaded" reason="Row count not recorded for this file" />
+                      ) : (
+                        <span style={{ fontFamily: "var(--type-data-font-family)" }}>{Number(row.rows).toLocaleString()}</span>
+                      )}
+                    </DataTableCell>
+                    <DataTableCell>
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: "var(--space-2)", whiteSpace: "nowrap" }}>
+                        <code title={row.sha256} style={{ fontFamily: "var(--type-data-font-family)" }}>
+                          {truncateSha(row.sha256)}
+                        </code>
+                        <CopyShaButton sha256={row.sha256} />
+                      </span>
+                    </DataTableCell>
+                    <DataTableCell>
+                      <a href={`/sources/raw/${row.source_id}`} style={{ whiteSpace: "nowrap" }}>
+                        Download
+                      </a>
+                    </DataTableCell>
+                  </DataTableRow>
+                ))}
+              </DataTableBody>
+            </DataTable>
+          </div>
+        </>
       )}
     </Panel>
   );

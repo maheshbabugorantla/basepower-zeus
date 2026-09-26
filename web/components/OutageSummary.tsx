@@ -75,7 +75,7 @@ function DistributorRow({ row }: { row: DistributorReliabilityRow }) {
   if (!row.inLoadedCounty) {
     return (
       <p style={textStyle("var(--theme-ink-muted)")}>
-        {row.baseName} ({row.county} County) — arriving in M3.
+        {row.baseName} ({row.county} County): coming when that county is loaded.
       </p>
     );
   }

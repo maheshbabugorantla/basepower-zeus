@@ -37,7 +37,7 @@ describe.skipIf(!process.env.POSTGRES_URL)("Sources page", () => {
         expect(html).toContain(row.source);
         expect(html).toContain(row.sha256.slice(0, 16));
       }
-      expect(html).toContain("View raw file");
+      expect(html).toContain("Download");
       // "missing-state--not-loaded" is a real, correct rendering whenever
       // a real row's own `rows` count wasn't recorded by its pipeline run
       // (DESIGN.md "The Missing Is Grey Rule") — only assert its absence

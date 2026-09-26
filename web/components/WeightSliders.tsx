@@ -45,6 +45,28 @@ export function equalWeights(): Record<SignalKey, number> {
   return out;
 }
 
+/**
+ * Each signal's share of the score as whole percents that always add up to
+ * exactly 100 (largest-remainder rounding), so six equal weights read
+ * 17/17/17/17/16/16, never six 17s summing to 102.
+ */
+function roundedShares(weights: Record<SignalKey, number>, total: number): Record<SignalKey, number> {
+  const out = {} as Record<SignalKey, number>;
+  if (total <= 0) {
+    for (const key of SIGNAL_ORDER) out[key] = 0;
+    return out;
+  }
+  const raw = SIGNAL_ORDER.map((key) => ({ key, exact: ((weights[key] ?? 0) / total) * 100 }));
+  for (const r of raw) out[r.key] = Math.floor(r.exact);
+  let left = 100 - raw.reduce((sum, r) => sum + out[r.key], 0);
+  for (const r of [...raw].sort((a, b) => (b.exact % 1) - (a.exact % 1))) {
+    if (left <= 0) break;
+    out[r.key] += 1;
+    left -= 1;
+  }
+  return out;
+}
+
 export interface WeightSlidersProps {
   weights: Record<SignalKey, number>;
   onChange: (weights: Record<SignalKey, number>) => void;
@@ -53,6 +75,7 @@ export interface WeightSlidersProps {
 
 export function WeightSliders({ weights, onChange, onReset }: WeightSlidersProps) {
   const total = SIGNAL_ORDER.reduce((sum, key) => sum + (weights[key] ?? 0), 0);
+  const shares = roundedShares(weights, total);
 
   function setWeight(key: SignalKey, value: number) {
     onChange({ ...weights, [key]: value });
@@ -76,14 +99,14 @@ export function WeightSliders({ weights, onChange, onReset }: WeightSlidersProps
         </button>
       </div>
       <p style={{ margin: "0 0 var(--space-3) 0", fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)" }}>
-        Team choices, not data. 0 ignores a signal, 10 makes it count most; % is its share of the score.
+        Team choices, not data. 0 ignores a signal, 10 makes it count most; % is its share of the score. Dot colors match the signal tags in the list.
       </p>
 
       <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-3)" }}>
         {SIGNAL_ORDER.map((key) => {
           const meta = REASON_META[key];
           const weight = weights[key] ?? 0;
-          const pct = total > 0 ? (weight / total) * 100 : 0;
+          const pct = shares[key];
           return (
             <div key={key} style={{ display: "flex", flexDirection: "column", gap: "var(--space-1)" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -104,7 +127,7 @@ export function WeightSliders({ weights, onChange, onReset }: WeightSlidersProps
                   <span style={{ color: "var(--theme-ink)" }}>{weight}</span>
                   <span style={{ color: "var(--theme-ink-muted)" }}>
                     {" "}
-                    · {weight === 0 ? "off" : `${pct.toFixed(0)}% of score`}
+                    · {weight === 0 ? "off" : `${pct}% of score`}
                   </span>
                 </span>
               </div>
@@ -119,7 +142,7 @@ export function WeightSliders({ weights, onChange, onReset }: WeightSlidersProps
                 className="weight-slider"
                 style={{ ["--fill" as string]: `${(weight / WEIGHT_MAX) * 100}%` }}
                 aria-label={`${SIGNAL_LABELS[key]} importance`}
-                aria-valuetext={weight === 0 ? "off" : `${weight} of ${WEIGHT_MAX}, ${pct.toFixed(0)} percent of the score`}
+                aria-valuetext={weight === 0 ? "off" : `${weight} of ${WEIGHT_MAX}, ${pct} percent of the score`}
               />
             </div>
           );
