@@ -1,11 +1,12 @@
 import { Panel } from "./ui/Panel";
-import { MissingState } from "./ui/MissingState";
+import { StatList, StatRow } from "./ui/StatRow";
 
-// M1-W1: the ranking page's Quality panel. Reads api.join_rate,
-// api.classifier_precision (per label) and api.parcel_gate_counts. Every
-// null value renders that view's own written reason via MissingState —
-// "not loaded"/"not yet labelled" — never a 0, blank, or dash
-// (DESIGN.md "The Missing Is Grey Rule").
+// The ranking page's data-quality panel, written for a GTM reader: each
+// row says what was checked, the figure, and one plain line on what it
+// means. Reads api.join_rate, api.classifier_precision (per label) and
+// api.parcel_gate_counts. A null value renders "not available" with a
+// plain reason — never a 0, blank, or dash (DESIGN.md "The Missing Is
+// Grey Rule"). No pipeline, ticket, or table names on screen.
 
 export interface ClassifierPrecisionRow {
   label: string;
@@ -30,12 +31,35 @@ export interface QualityPanelData {
   } | null;
 }
 
-function missingReasonLabel(reason: string): string {
-  // api.classifier_precision's reason is "no_claude_labels_yet" — DESIGN's
-  // ticket text calls this state "not yet labelled".
-  if (reason === "no_claude_labels_yet") return "Not yet labelled by M1-H1";
-  if (reason === "no_permits_loaded_yet") return "Permits pipeline has not loaded any rows yet";
-  return reason;
+const LABEL_NOUN: Record<string, string> = {
+  battery: "Home-battery permits",
+  generator: "Generator permits",
+};
+
+function plainReason(reason: string | null): string {
+  if (reason === "no_claude_labels_yet") return "Not checked yet";
+  if (reason === "no_permits_loaded_yet") return "Permits not loaded yet";
+  return "Not available";
+}
+
+function pct(x: number): string {
+  return `${(x * 100).toFixed(0)}%`;
+}
+
+function Note({ children }: { children: React.ReactNode }) {
+  return (
+    <p
+      style={{
+        margin: "calc(-1 * var(--space-2)) 0 var(--space-2)",
+        fontFamily: "var(--type-body-font-family)",
+        fontSize: "var(--type-label-font-size)",
+        color: "var(--theme-ink-muted)",
+        textWrap: "pretty",
+      }}
+    >
+      {children}
+    </p>
+  );
 }
 
 export function QualityPanel({ data }: { data: QualityPanelData }) {
@@ -46,75 +70,69 @@ export function QualityPanel({ data }: { data: QualityPanelData }) {
           fontFamily: "var(--type-heading-font-family)",
           fontSize: "var(--type-heading-font-size)",
           fontWeight: "var(--type-heading-font-weight)",
-          marginTop: 0,
+          margin: "0 0 var(--space-1)",
         }}
       >
-        Quality
+        How far to trust this list
       </h2>
+      <p
+        style={{
+          margin: "0 0 var(--space-2)",
+          fontFamily: "var(--type-body-font-family)",
+          fontSize: "var(--type-label-font-size)",
+          color: "var(--theme-ink-muted)",
+        }}
+      >
+        Spot checks on the data behind the ranking.
+      </p>
 
-      <section style={{ marginBottom: "var(--space-3)" }}>
-        <h3 style={{ fontFamily: "var(--type-label-font-family)", fontSize: "var(--type-label-font-size)" }}>
-          Permit join rate
-        </h3>
-        {data.joinRate === null ? (
-          <MissingState
-            variant="not-loaded"
-            reason={
-              data.joinRateNullReason ? missingReasonLabel(data.joinRateNullReason) : "Join rate not available"
-            }
-          />
-        ) : (
-          <p style={{ margin: 0, fontFamily: "var(--type-body-font-family)", fontSize: "var(--type-body-font-size)" }}>
-            Permit join rate {(data.joinRate * 100).toFixed(1)}% ({data.matchedToParcels.toLocaleString()} of{" "}
-            {data.permitsWithTcadId.toLocaleString()})
-          </p>
-        )}
-      </section>
+      <StatList>
+        <StatRow
+          id="quality-permit-match"
+          label="City permits matched to a home"
+          value={data.joinRate === null ? null : pct(data.joinRate)}
+          unit="of permits"
+          missingReason={plainReason(data.joinRateNullReason)}
+        />
+        {data.joinRate !== null ? (
+          <Note>
+            {data.matchedToParcels.toLocaleString()} of {data.permitsWithTcadId.toLocaleString()} Austin permits
+            were tied to a Travis County home. Unmatched permits simply don&rsquo;t count toward any home.
+          </Note>
+        ) : null}
 
-      <section style={{ marginBottom: "var(--space-3)" }}>
-        <h3 style={{ fontFamily: "var(--type-label-font-family)", fontSize: "var(--type-label-font-size)" }}>
-          Classifier precision
-        </h3>
-        <ul style={{ margin: 0, paddingLeft: "var(--space-4)" }}>
-          {data.precisionByLabel.map((row) => (
-            <li
-              key={row.label}
-              style={{ fontFamily: "var(--type-body-font-family)", fontSize: "var(--type-body-font-size)" }}
-            >
-              {row.precision === null ? (
-                <>
-                  <span style={{ textTransform: "capitalize" }}>{row.label}</span> precision:{" "}
-                  <MissingState
-                    variant="not-loaded"
-                    reason={row.precisionNullReason ? missingReasonLabel(row.precisionNullReason) : "not yet labelled"}
-                  />
-                </>
-              ) : (
-                <span style={{ textTransform: "capitalize" }}>
-                  {row.label} precision {(row.precision * 100).toFixed(1)}% ({row.truePositiveCount}/
-                  {row.claudeLabelledCount} Claude labels)
-                </span>
-              )}
-            </li>
-          ))}
-        </ul>
-      </section>
+        {data.precisionByLabel.map((row) => (
+          <div key={row.label}>
+            <StatRow
+              id={`quality-precision-${row.label}`}
+              label={`${LABEL_NOUN[row.label] ?? row.label} spotted correctly`}
+              value={row.precision === null ? null : pct(row.precision)}
+              unit="correct"
+              missingReason={plainReason(row.precisionNullReason)}
+            />
+            {row.precision !== null ? (
+              <Note>
+                We double-checked {row.claudeLabelledCount} flagged permits against their full permit text; {row.truePositiveCount} really were{" "}
+                {row.label === "battery" ? "a home battery" : row.label === "generator" ? "a backup generator" : row.label}.
+              </Note>
+            ) : null}
+          </div>
+        ))}
 
-      <section>
-        <h3 style={{ fontFamily: "var(--type-label-font-family)", fontSize: "var(--type-label-font-size)" }}>
-          Parcel gate counts
-        </h3>
-        {data.gateCounts === null ? (
-          <MissingState variant="not-loaded" reason="core.parcels has no rows yet — M1-P1 has not loaded" />
-        ) : (
-          <p style={{ margin: 0, fontFamily: "var(--type-body-font-family)", fontSize: "var(--type-body-font-size)" }}>
-            {data.gateCounts.totalParcels.toLocaleString()} parcels — {data.gateCounts.singleFamilyCount.toLocaleString()}{" "}
-            single-family, {data.gateCounts.notSingleFamilyCount.toLocaleString()} not single-family;{" "}
-            {data.gateCounts.homesteadCount.toLocaleString()} homestead, {data.gateCounts.notHomesteadCount.toLocaleString()}{" "}
-            not homestead
-          </p>
-        )}
-      </section>
+        <StatRow
+          id="quality-homes"
+          label="Single-family homes on file"
+          value={data.gateCounts === null ? null : data.gateCounts.singleFamilyCount.toLocaleString()}
+          unit="homes"
+          missingReason="County parcel records not loaded yet"
+        />
+        {data.gateCounts !== null ? (
+          <Note>
+            Out of {data.gateCounts.totalParcels.toLocaleString()} Travis County parcels in the 2026 appraisal
+            roll. Apartments, land and commercial parcels are left out.
+          </Note>
+        ) : null}
+      </StatList>
     </Panel>
   );
 }

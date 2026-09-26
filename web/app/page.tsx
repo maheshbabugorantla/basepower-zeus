@@ -71,11 +71,10 @@ interface DistributorReliabilityDbRow {
 /**
  * Per-distributor EIA-861 reliability (SAIDI incl. major events), latest
  * year first, for the Base-served distributors in DISTRIBUTOR_CANDIDATES.
- * `in_loaded_county` is a single indexed spatial EXISTS check per
- * candidate against core.block_groups for TRAVIS_COUNTY_FIPS (not a full
- * table scan — measured at 11ms via EXPLAIN ANALYZE for all 3 candidates,
- * well under the 50ms Overview budget), so a distributor whose territory
- * doesn't reach a loaded county's homes (CenterPoint/Harris, currently)
+ * `in_loaded_county` is an index probe on precomputed per-home territory
+ * (core.mv_home_signals, index from migration 0208) — no request-time
+ * spatial join — so a distributor with no loaded homes in the county
+ * (CenterPoint/Harris, currently)
  * is reported as such instead of being silently included or excluded.
  */
 async function getDistributorReliability(): Promise<DistributorReliabilityRow[]> {
@@ -91,9 +90,9 @@ async function getDistributorReliability(): Promise<DistributorReliabilityRow[]>
          ur.saidi_incl_major_null_reason,
          ur.early_release,
          exists (
-           select 1 from core.block_groups bg
-           where bg.county_fips = $1
-             and extensions.ST_Intersects(bg.geom, t.geom)
+           select 1 from core.mv_home_signals h
+           where h.county_fips = $1
+             and h.territory_eia_id = t.eia_id::text
          ) as in_loaded_county,
          s.source, s.url, s.retrieved_at, s.sha256, s.storage_key, s.runner,
          s.latest_run_id, s.latest_run_rows_in, s.latest_run_rows_loaded

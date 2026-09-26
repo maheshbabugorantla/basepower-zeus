@@ -34,6 +34,6 @@ describe.skipIf(!process.env.POSTGRES_URL)("Overview — no duplicated unit", ()
 
     expect(text).not.toMatch(/without power\s+without power/i);
     // The real unit string must still be present exactly once, contiguously.
-    expect(text).toContain("customer-hours without power");
+    expect(text).toContain("minutes without power per customer");
   }, 20000);
 });
