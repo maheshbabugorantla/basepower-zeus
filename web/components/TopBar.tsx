@@ -91,7 +91,14 @@ export function TopBar({
 
       <FreshnessSummary rows={freshness} />
       <ThemeToggle />
-      <ExportButton />
+      {/* M5-W1: ExportButton calls useSearchParams() (it needs the
+          current url's params to build the export link), so it needs
+          the same Suspense boundary CountySwitcherInner already has --
+          without it, `next build` fails to statically bail out this
+          page. */}
+      <Suspense fallback={null}>
+        <ExportButton />
+      </Suspense>
     </header>
   );
 }
