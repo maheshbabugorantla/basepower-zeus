@@ -424,7 +424,7 @@ Homes pass three gates, then get a weighted average of percentile ranks across w
 | Signal | Definition | Level | Source | Added in |
 | --- | --- | --- | --- | --- |
 | Backup intent | Generator + battery permits in the last 36 months per 1,000 single-family homes | Block group | Austin permits | M1 |
-| Outage exposure | 2024 customer-hours without power per customer; longest continuous event | County | EAGLE-I | M0, M3 |
+| Outage exposure | The home's distributor reliability: SAIDI (minutes without power per customer per year, with major event days) and SAIFI, latest EIA-861 year; assigned via the service-territory polygon containing the parcel. EAGLE-I county data, normalized per customer (e.g. Travis 2025 ≈ 3.8 h), adds event detail (longest event, Beryl peak). Never show a county total as a home's value. | Distributor (per home) + county | EIA-861, EAGLE-I | M2, M3 |
 | Medical need | Electricity-dependent beneficiaries per 1,000 Medicare beneficiaries | ZIP → block group | HHS emPOWER | M2 |
 | Older residents | Share of population aged 65+ | Block group | ACS | M2 |
 | Winter load | Share of homes heated by electricity | Block group | ACS | M2 |
