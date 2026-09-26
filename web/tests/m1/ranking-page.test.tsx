@@ -23,25 +23,22 @@ describe.skipIf(!process.env.POSTGRES_URL)("RankingPage", () => {
       // api.top_homes_weighted (score v1, equal weights for the
       // server-rendered first paint), not the retired v0 api.top_homes
       // view — see 0201_m2.sql / app/ranking/page.tsx.
-      // First paint uses the evidence-based defaults (api.default_weights).
-      const defaults = await query<{ signal_key: string; weight: string | number }>(
-        `select signal_key, weight from api.default_weights`
-      );
-      const weights = Object.fromEntries(defaults.map((d) => [d.signal_key, Number(d.weight)]));
-      const topHomes = await query<{ prop_id: string }>(
-        `select prop_id from api.homes_ranked_weighted($1::jsonb, $2::text, null, null, null, 10)`,
-        [JSON.stringify(weights), "48453"]
+      // First paint is the predicted ranking (M4-W2): the most likely homes
+      // from api.home_propensity. Homes that already have backup are hidden by
+      // default, so check that the page links real top-predicted homes.
+      const topPredicted = await query<{ prop_id: string }>(
+        `select prop_id from api.home_propensity where county_fips = $1
+         order by p_install_12m desc, prop_id limit 50`,
+        ["48453"]
       );
 
       const html = renderToStaticMarkup(await RankingPage());
 
-      if (topHomes.length === 0) {
+      if (topPredicted.length === 0) {
         expect(html).toContain("missing-state--not-loaded");
-        expect(html).toContain("Not loaded");
       } else {
-        for (const row of topHomes) {
-          expect(html).toContain(`/home/${row.prop_id}`);
-        }
+        const linked = topPredicted.filter((row) => html.includes(`/home/${row.prop_id}`));
+        expect(linked.length).toBeGreaterThanOrEqual(10);
       }
     },
     60000
