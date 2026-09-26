@@ -1,9 +1,9 @@
-import Link from "next/link";
 import { query } from "../lib/db";
 import { Panel } from "../components/ui/Panel";
-import { Figure } from "../components/ui/Figure";
 import { MissingState } from "../components/ui/MissingState";
+import type { ProvenancePopoverProps } from "../components/ui/ProvenancePopover";
 import { OutageSummary, type OutageSummaryData } from "../components/OutageSummary";
+import { StatRow, StatList } from "../components/ui/StatRow";
 
 // M0-W1: server component. `force-dynamic` is required, not decorative —
 // this page must query api.county_outage at request time (the EAGLE-I
@@ -92,14 +92,81 @@ interface GateCountsRow {
   total_parcels: string | number;
   single_family_count: string | number;
   homestead_count: string | number;
+  gated_count: string | number;
+  source: string | null;
+  url: string | null;
+  retrieved_at: string | Date | null;
+  sha256: string | null;
+  storage_key: string | null;
+  runner: "cron" | "cli" | null;
+  latest_run_id: string | null;
+  latest_run_rows_in: number | null;
+  latest_run_rows_loaded: number | null;
 }
 
-async function getGateCounts(): Promise<GateCountsRow | null> {
+interface GateCounts {
+  totalParcels: number;
+  singleFamilyCount: number;
+  homesteadCount: number;
+  /**
+   * M1-W3-b fix #1 (data bug): the number of parcels *gated for ranking*,
+   * not "homestead parcels" (which is a much larger, independent gate —
+   * see api.parcel_gate_counts). Gated means single-family (state code
+   * A1) AND homestead, the exact predicate app/ranking/page.tsx's
+   * eligibility funnel uses for its "Single-family + homestead" step, so
+   * this number always agrees with the Ranking screen's funnel.
+   */
+  gatedCount: number;
+  source: (Omit<ProvenancePopoverProps, "children" | "id">) | null;
+}
+
+async function getGateCounts(): Promise<GateCounts | null> {
   try {
     const rows = await query<GateCountsRow>(
-      `select total_parcels, single_family_count, homestead_count from api.parcel_gate_counts`
+      `select
+         pgc.total_parcels,
+         pgc.single_family_count,
+         pgc.homestead_count,
+         (select count(*)
+            from core.parcels
+            where (imprv_state_cd like 'A1%' or land_state_cd like 'A1%')
+              and hs_exempt = 'T') as gated_count,
+         s.source, s.url, s.retrieved_at, s.sha256, s.storage_key, s.runner,
+         s.latest_run_id, s.latest_run_rows_in, s.latest_run_rows_loaded
+       from api.parcel_gate_counts pgc
+       left join api.sources s on s.source_id = pgc.source_ids[1]`
     );
-    return rows[0] ?? null;
+    const row = rows[0];
+    if (!row) return null;
+
+    const hasSource =
+      row.source !== null &&
+      row.url !== null &&
+      row.retrieved_at !== null &&
+      row.sha256 !== null &&
+      row.storage_key !== null &&
+      row.runner !== null;
+
+    return {
+      totalParcels: Number(row.total_parcels),
+      singleFamilyCount: Number(row.single_family_count),
+      homesteadCount: Number(row.homestead_count),
+      gatedCount: Number(row.gated_count),
+      source: hasSource
+        ? {
+            dataset: row.source as string,
+            url: row.url as string,
+            retrievedAt:
+              row.retrieved_at instanceof Date ? row.retrieved_at.toISOString() : (row.retrieved_at as string),
+            sha256: row.sha256 as string,
+            runId: row.latest_run_id ?? "none",
+            runner: row.runner as "cron" | "cli",
+            rowsIn: row.latest_run_rows_in,
+            rowsLoaded: row.latest_run_rows_loaded,
+            rawFileHref: `/storage/${row.storage_key}`,
+          }
+        : null,
+    };
   } catch (err) {
     console.error("page: failed to load api.parcel_gate_counts", err);
     return null;
@@ -178,31 +245,51 @@ export default async function HomePage() {
         >
           Ranking readiness
         </h2>
-        <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-3)" }}>
-          <p style={{ margin: 0, maxWidth: "70ch" }}>
-            {gateCounts === null ? (
-              <MissingState variant="not-loaded" reason="core.parcels has no rows yet" />
-            ) : (
-              <>
-                Of <Figure value={Number(gateCounts.total_parcels).toLocaleString()} unit="parcels" /> in
-                Travis County, <Figure value={Number(gateCounts.single_family_count).toLocaleString()} unit="are single-family" /> and{" "}
-                <Figure value={Number(gateCounts.homestead_count).toLocaleString()} unit="are homestead" /> (independent
-                gates — see the Ranking funnel for their intersection).
-              </>
-            )}
-          </p>
-          <p style={{ margin: 0, maxWidth: "70ch" }}>
-            {topHomesCount === null ? (
-              <MissingState variant="not-loaded" reason="api.top_homes could not be read" />
-            ) : (
-              <>
-                <Figure value={topHomesCount} unit="homes currently ranked" /> — see the full{" "}
-                <Link href="/ranking">Ranking</Link> screen for the eligibility funnel, map and
-                top-homes table.
-              </>
-            )}
-          </p>
-        </div>
+        {gateCounts === null ? (
+          <MissingState variant="not-loaded" reason="core.parcels has no rows yet" />
+        ) : (
+          <StatList>
+            <StatRow
+              id="overview-total-parcels"
+              label="Residential parcels (Travis County, TCAD)"
+              value={gateCounts.totalParcels.toLocaleString()}
+              unit="parcels"
+              source={gateCounts.source}
+            />
+            <StatRow
+              id="overview-single-family"
+              label="Single-family (state code A1)"
+              value={gateCounts.singleFamilyCount.toLocaleString()}
+              unit="parcels"
+              source={gateCounts.source}
+            />
+            <StatRow
+              id="overview-homestead"
+              label="Homestead (owner-occupied)"
+              value={gateCounts.homesteadCount.toLocaleString()}
+              unit="parcels"
+              source={gateCounts.source}
+            />
+            <StatRow
+              id="overview-gated"
+              label="Gated for ranking (single-family + homestead)"
+              value={gateCounts.gatedCount.toLocaleString()}
+              unit="homes"
+              source={gateCounts.source}
+              linkHref="/ranking"
+              linkLabel="See funnel"
+            />
+            <StatRow
+              id="overview-top-homes"
+              label="Homes currently ranked"
+              value={topHomesCount === null ? null : topHomesCount}
+              unit="homes"
+              missingReason="api.top_homes could not be read"
+              linkHref="/ranking"
+              linkLabel="See table & map"
+            />
+          </StatList>
+        )}
       </Panel>
 
       <Panel>
@@ -216,16 +303,19 @@ export default async function HomePage() {
         >
           Provenance
         </h2>
-        <p style={{ margin: 0, maxWidth: "70ch" }}>
-          {sourcesLoadedCount === null ? (
-            <MissingState variant="not-loaded" reason="api.sources could not be read" />
-          ) : (
-            <>
-              <Figure value={sourcesLoadedCount} unit="source files loaded" /> so far. Every number on
-              screen traces to one of them — see <Link href="/sources">Sources</Link> for the full
-              manifest with retrieval time and SHA-256.
-            </>
-          )}
+        <StatList>
+          <StatRow
+            id="overview-sources-loaded"
+            label="Source files loaded"
+            value={sourcesLoadedCount}
+            unit="files"
+            missingReason="api.sources could not be read"
+            linkHref="/sources"
+            linkLabel="Full manifest"
+          />
+        </StatList>
+        <p style={{ margin: "var(--space-3) 0 0 0", maxWidth: "70ch", color: "var(--theme-ink-muted)" }}>
+          Every number on screen traces to one of them, with retrieval time and SHA-256.
         </p>
       </Panel>
     </div>

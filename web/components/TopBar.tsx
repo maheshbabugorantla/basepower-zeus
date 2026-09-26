@@ -40,7 +40,8 @@ export function TopBar({ freshness }: { freshness: SourceFreshnessRow[] }) {
       <div className="top-bar__spacer" />
 
       <div role="group" aria-label="County" className="county-switcher">
-        <button type="button" aria-pressed="true" className="county-switcher__button">
+        <span className="county-switcher__label">County</span>
+        <button type="button" aria-pressed="true" className="county-switcher__button county-switcher__button--active">
           Travis
         </button>
       </div>

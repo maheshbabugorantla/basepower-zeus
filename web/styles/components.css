@@ -262,23 +262,42 @@
   font-weight: 600;
 }
 
+/* M1-W3-b fix #5: this is a read-only segmented control ("County: Travis"),
+ * not a call-to-action — it must not read as a solid dark primary button. */
 .county-switcher {
   display: flex;
-  border: 1px solid var(--color-control-border);
+  align-items: center;
+  gap: var(--space-2);
+  border: 1px solid var(--theme-divider);
   border-radius: var(--rounded-sm);
-  overflow: hidden;
+  padding: 0 var(--space-1) 0 var(--space-3);
+  background-color: var(--theme-surface);
+  height: 36px;
+}
+
+.county-switcher__label {
+  font-family: var(--type-label-font-family);
+  font-size: var(--type-label-font-size);
+  color: var(--theme-ink-muted);
 }
 
 .county-switcher__button {
-  height: 36px;
+  height: 28px;
   padding: 0 var(--space-3);
   border: none;
-  background-color: var(--component-button-primary-background-color);
-  color: var(--component-button-primary-text-color);
+  border-radius: var(--rounded-sm);
+  background-color: transparent;
+  color: var(--theme-ink);
   font-family: var(--type-label-font-family);
   font-size: var(--type-label-font-size);
   font-weight: var(--type-label-font-weight);
   cursor: default;
+}
+
+.county-switcher__button--active {
+  background-color: var(--color-brand-subtle);
+  color: var(--theme-brand-accent-text);
+  font-weight: 600;
 }
 
 .export-button-wrap {
@@ -377,6 +396,78 @@
   height: 8px;
   background-color: var(--theme-brand-accent-text);
   border-radius: var(--rounded-sm);
+}
+
+/* ---------------------------------------------------------------------- */
+/* Top-homes table (Ranking screen) — compact, no wrap, no h-scroll        */
+/* ---------------------------------------------------------------------- */
+
+.data-table--top-homes td {
+  vertical-align: top;
+}
+
+.top-homes-address {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.top-homes-zip {
+  font-family: var(--type-label-font-family);
+  font-size: var(--type-label-font-size);
+  color: var(--theme-ink-muted);
+}
+
+.top-homes-score {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.top-homes-score__bar-track {
+  display: inline-block;
+  width: 36px;
+  height: 6px;
+  min-width: 36px;
+  border-radius: var(--rounded-sm);
+  background-color: var(--theme-divider);
+  overflow: hidden;
+}
+
+.top-homes-score__bar-fill {
+  display: block;
+  height: 100%;
+  background-color: var(--theme-brand-accent-text);
+  border-radius: var(--rounded-sm);
+}
+
+/* ---------------------------------------------------------------------- */
+/* Stat list (Overview panels — DESIGN.md figure-in-panel, not mid-sentence) */
+/* ---------------------------------------------------------------------- */
+
+.stat-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.stat-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--space-4);
+  padding: var(--space-3) 0;
+}
+
+.stat-row + .stat-row {
+  border-top: 1px solid var(--theme-divider);
+}
+
+.stat-row__value {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
 }
 
 /* ---------------------------------------------------------------------- */

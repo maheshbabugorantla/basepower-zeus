@@ -47,15 +47,38 @@ export function ThemeToggle() {
     writeStoredTheme(next);
   }
 
+  const label = theme === "dark" ? "Switch to light theme" : "Switch to dark theme";
+
   return (
     <button
       type="button"
       className="btn btn--secondary"
       aria-pressed={theme === "dark"}
+      aria-label={label}
       onClick={toggle}
-      title={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+      title={label}
     >
-      {theme === "dark" ? "Dark" : "Light"}
+      {theme === "dark" ? (
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+          <path
+            d="M13.5 9.7A5.8 5.8 0 0 1 6.3 2.5a5.8 5.8 0 1 0 7.2 7.2Z"
+            stroke="currentColor"
+            strokeWidth="1.3"
+            strokeLinejoin="round"
+          />
+        </svg>
+      ) : (
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+          <circle cx="8" cy="8" r="3.3" stroke="currentColor" strokeWidth="1.3" />
+          <path
+            d="M8 1.3v1.6M8 13.1v1.6M14.7 8h-1.6M2.9 8H1.3M12.7 3.3l-1.1 1.1M4.4 11.6l-1.1 1.1M12.7 12.7l-1.1-1.1M4.4 4.4 3.3 3.3"
+            stroke="currentColor"
+            strokeWidth="1.3"
+            strokeLinecap="round"
+          />
+        </svg>
+      )}
+      <span aria-hidden="true">{theme === "dark" ? "Dark" : "Light"}</span>
     </button>
   );
 }

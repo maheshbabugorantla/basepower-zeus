@@ -52,7 +52,7 @@ export function QualityPanel({ data }: { data: QualityPanelData }) {
         Quality
       </h2>
 
-      <section style={{ marginBottom: "var(--space-4)" }}>
+      <section style={{ marginBottom: "var(--space-3)" }}>
         <h3 style={{ fontFamily: "var(--type-label-font-family)", fontSize: "var(--type-label-font-size)" }}>
           Permit join rate
         </h3>
@@ -64,30 +64,35 @@ export function QualityPanel({ data }: { data: QualityPanelData }) {
             }
           />
         ) : (
-          <span style={{ fontFamily: "var(--type-data-font-family)" }}>
-            {(data.joinRate * 100).toFixed(1)}% ({data.matchedToParcels} of {data.permitsWithTcadId} permits with a
-            tcad_id matched to a parcel)
-          </span>
+          <p style={{ margin: 0, fontFamily: "var(--type-body-font-family)", fontSize: "var(--type-body-font-size)" }}>
+            Permit join rate {(data.joinRate * 100).toFixed(1)}% ({data.matchedToParcels.toLocaleString()} of{" "}
+            {data.permitsWithTcadId.toLocaleString()})
+          </p>
         )}
       </section>
 
-      <section style={{ marginBottom: "var(--space-4)" }}>
+      <section style={{ marginBottom: "var(--space-3)" }}>
         <h3 style={{ fontFamily: "var(--type-label-font-family)", fontSize: "var(--type-label-font-size)" }}>
           Classifier precision
         </h3>
         <ul style={{ margin: 0, paddingLeft: "var(--space-4)" }}>
           {data.precisionByLabel.map((row) => (
-            <li key={row.label}>
-              <span style={{ textTransform: "capitalize" }}>{row.label}</span>:{" "}
+            <li
+              key={row.label}
+              style={{ fontFamily: "var(--type-body-font-family)", fontSize: "var(--type-body-font-size)" }}
+            >
               {row.precision === null ? (
-                <MissingState
-                  variant="not-loaded"
-                  reason={row.precisionNullReason ? missingReasonLabel(row.precisionNullReason) : "not yet labelled"}
-                />
+                <>
+                  <span style={{ textTransform: "capitalize" }}>{row.label}</span> precision:{" "}
+                  <MissingState
+                    variant="not-loaded"
+                    reason={row.precisionNullReason ? missingReasonLabel(row.precisionNullReason) : "not yet labelled"}
+                  />
+                </>
               ) : (
-                <span style={{ fontFamily: "var(--type-data-font-family)" }}>
-                  {(row.precision * 100).toFixed(1)}% ({row.truePositiveCount} of {row.claudeLabelledCount} hand-labelled
-                  permits)
+                <span style={{ textTransform: "capitalize" }}>
+                  {row.label} precision {(row.precision * 100).toFixed(1)}% ({row.truePositiveCount}/
+                  {row.claudeLabelledCount} Claude labels)
                 </span>
               )}
             </li>
@@ -102,12 +107,12 @@ export function QualityPanel({ data }: { data: QualityPanelData }) {
         {data.gateCounts === null ? (
           <MissingState variant="not-loaded" reason="core.parcels has no rows yet — M1-P1 has not loaded" />
         ) : (
-          <span style={{ fontFamily: "var(--type-data-font-family)" }}>
+          <p style={{ margin: 0, fontFamily: "var(--type-body-font-family)", fontSize: "var(--type-body-font-size)" }}>
             {data.gateCounts.totalParcels.toLocaleString()} parcels — {data.gateCounts.singleFamilyCount.toLocaleString()}{" "}
             single-family, {data.gateCounts.notSingleFamilyCount.toLocaleString()} not single-family;{" "}
             {data.gateCounts.homesteadCount.toLocaleString()} homestead, {data.gateCounts.notHomesteadCount.toLocaleString()}{" "}
             not homestead
-          </span>
+          </p>
         )}
       </section>
     </Panel>
