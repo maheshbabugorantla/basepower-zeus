@@ -7,6 +7,7 @@ import { ProvenancePopover } from "../../../components/ui/ProvenancePopover";
 import { PermitLabel } from "../../../components/PermitLabel";
 import { ParcelMap } from "../../../components/ParcelMap";
 import { SolarPanel } from "../../../components/SolarPanel";
+import { ScoreExplainer } from "../../../components/ScoreExplainer";
 import {
   DataTable,
   DataTableBody,
@@ -361,6 +362,10 @@ function ProvenanceFor({
 function NotRecorded() {
   return <span style={{ color: "var(--theme-ink-muted)" }}>Not recorded</span>;
 }
+
+// Same as WeightSliders' equalWeights() (a client module, so not callable
+// here): every signal at the mid-point of the 0–10 scale.
+const EQUAL_WEIGHTS = { outage: 5, flood: 5, empower: 5, age65: 5, electric_heat: 5, backup_intent: 5 };
 
 export default async function HomeDetailPage({
   params,
@@ -717,6 +722,22 @@ export default async function HomeDetailPage({
           </dl>
         ) : null}
       </Panel>
+
+      {homeSignals && homeSignals.gate_reason === null ? (
+        <Panel>
+          <h2
+            style={{
+              fontFamily: "var(--type-heading-font-family)",
+              fontSize: "var(--type-heading-font-size)",
+              fontWeight: "var(--type-heading-font-weight)",
+              marginTop: 0,
+            }}
+          >
+            How the score is built
+          </h2>
+          <ScoreExplainer propId={home.prop_id} weights={EQUAL_WEIGHTS} />
+        </Panel>
+      ) : null}
 
       <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 320px", gap: "var(--space-6)", alignItems: "start" }}>
         <Panel>

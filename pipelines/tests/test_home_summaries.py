@@ -110,85 +110,126 @@ def test_grounding_guard_rejects_a_real_reply_with_an_invented_number():
     assert hs.grounding_guard_passes(rejected_reply, facts_text) is False
 
 
-def test_process_one_falls_back_to_template_when_guard_fails(monkeypatch):
-    """The failure path (guard rejects the reply) stores/returns the
-    deterministic template, never the ungrounded reply. The real DB row,
-    real facts and real breakdown are untouched; only the Gemini network
-    call itself is replaced with a fixed, deliberately ungrounded string
-    so the failure path is exercised deterministically (Gemini's own
-    output is not reproducible on demand) — no fact or DB row here is
-    fabricated, only the simulated failure of the external network call.
-    The prop_id's real pre-generated row (written for this ticket's
-    backfill) is snapshotted before and restored after, so this test
-    never leaves the real backfill row overwritten by the simulated
-    failure."""
-    prop_id = REAL_PROP_IDS[0]
-
-    with db.connect(pooled=False) as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                "select summary, is_template, guard_failed, model, prompt_version, facts_hash, "
-                "source_ids, generated_at from core.home_summary where prop_id = %s",
-                (prop_id,),
-            )
-            snapshot = cur.fetchone()
-
-    def fake_call_gemini(facts_text, *, api_key, model, timeout=hs.GEMINI_TIMEOUT_S):
-        return "This home also had 999999999 total incidents."
-
-    monkeypatch.setattr(hs, "call_gemini", fake_call_gemini)
-    # Force regeneration even if a prior real run already stored a row.
-    with db.connect(pooled=False) as conn:
-        with conn.cursor() as cur:
-            cur.execute("update core.home_summary set facts_hash = 'force-regen' where prop_id = %s", (prop_id,))
-
-    try:
-        result = hs.process_one(prop_id, api_key="unused", model="unused")
-        assert result["skipped"] is False
-        assert result["is_template"] is True
-        assert result["guard_failed"] is True
-
-        with db.connect(pooled=False) as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "select summary, is_template, guard_failed, model from core.home_summary where prop_id = %s",
-                    (prop_id,),
-                )
-                summary, is_template, guard_failed, model = cur.fetchone()
-        assert is_template is True
-        assert guard_failed is True
-        assert model is None
-        assert "999999999" not in summary
-    finally:
-        if snapshot is not None:
-            with db.connect(pooled=False) as conn:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        """
-                        insert into core.home_summary
-                            (prop_id, summary, is_template, guard_failed, model, prompt_version,
-                             facts_hash, source_ids, generated_at)
-                        values (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                        on conflict (prop_id) do update set
-                            summary = excluded.summary, is_template = excluded.is_template,
-                            guard_failed = excluded.guard_failed, model = excluded.model,
-                            prompt_version = excluded.prompt_version, facts_hash = excluded.facts_hash,
-                            source_ids = excluded.source_ids, generated_at = excluded.generated_at
-                        """,
-                        (prop_id, *snapshot),
-                    )
-
-
 @pytest.mark.skipif(
-    not (os.environ.get("GEMINI_API_KEY") and os.environ.get("BRIEF_MODEL")),
-    reason="GEMINI_API_KEY/BRIEF_MODEL not configured",
+    not (os.environ.get("GEMINI_API_KEY") and os.environ.get("BRIEF_MODEL") and os.environ.get("TYPESAFE_AI_JEV_API_KEY")),
+    reason="GEMINI_API_KEY/BRIEF_MODEL/TYPESAFE_AI_JEV_API_KEY not configured",
 )
 def test_process_one_is_idempotent_on_unchanged_facts():
     prop_id = REAL_PROP_IDS[1]
     api_key = hs.gemini_api_key()
     model = hs.brief_model()
 
-    first = hs.process_one(prop_id, api_key=api_key, model=model)
+    jev_key = hs.jev_api_key()
+    first = hs.process_one(prop_id, api_key=api_key, model=model, jev_key=jev_key)
     assert first["skipped"] in (True, False)
-    second = hs.process_one(prop_id, api_key=api_key, model=model)
+    second = hs.process_one(prop_id, api_key=api_key, model=model, jev_key=jev_key)
     assert second == {"prop_id": prop_id, "skipped": True, "reason": "unchanged_facts_hash"}
+
+
+# ---------------------------------------------------------------------------
+# Typed contracts. Live model output is never matched against prose
+# patterns: a Gemini reply must parse into hs.Briefing and a Jev answer into
+# hs.Verdict. The retry policy is tested with typed inputs built only from
+# real fact lines (build_fact_line over real breakdown rows).
+# ---------------------------------------------------------------------------
+
+
+def _real_briefing(prop_id: str) -> tuple[hs.Briefing, str]:
+    facts_text, breakdown, ctx = _real_facts_and_breakdown(prop_id)
+    available = [r for r in breakdown if r.available and r.contribution is not None]
+    lines = [hs.build_fact_line(r, ctx) for r in sorted(available, key=lambda r: (-float(r.contribution), r.key))]
+    lines = [ln for ln in lines if ln][:3]
+    assert len(lines) == 3, "expected 3 real fact lines"
+    return hs.Briefing(lead_reason=lines[0], supporting_reason=lines[1], neighborhood_context=lines[2]), facts_text
+
+
+# Real prompt-v1 Gemini replies (core.home_summary, 2026-09-26), verbatim.
+REAL_BROKEN_V1_REPLIES = [
+    "Your home was flagged because it sits",
+    "Drafting Options:**\n    *   *Draft",
+    "sentences):**\n    *   *",
+]
+
+
+@pytest.mark.parametrize("reply", REAL_BROKEN_V1_REPLIES)
+def test_briefing_schema_rejects_real_broken_v1_replies(reply):
+    with pytest.raises(hs.ValidationError):
+        hs.Briefing(lead_reason=reply, supporting_reason=reply, neighborhood_context=reply)
+
+
+def test_retry_policy_accepts_after_typed_failure_and_feeds_it_back():
+    briefing, facts_text = _real_briefing(REAL_PROP_IDS[0])
+    seen_feedback: list[hs.FailureMode | None] = []
+
+    def generate(feedback):
+        seen_feedback.append(feedback)
+        if len(seen_feedback) == 1:
+            raise hs.GenerationFailed(hs.FailureMode.CUT_OFF)
+        return briefing
+
+    accepted, verdict, mode, attempts = hs.generate_briefing(
+        facts_text,
+        generate=generate,
+        judge=lambda b: hs.Verdict(mode=hs.FailureMode.OK, confidence=0.9, judge_model="jev-test"),
+    )
+    assert accepted == briefing
+    assert mode is hs.FailureMode.OK and attempts == 2
+    assert seen_feedback == [None, hs.FailureMode.CUT_OFF]
+
+
+def test_retry_policy_falls_back_after_repeated_judge_rejection():
+    briefing, facts_text = _real_briefing(REAL_PROP_IDS[0])
+    accepted, verdict, mode, attempts = hs.generate_briefing(
+        facts_text,
+        generate=lambda fb: briefing,
+        judge=lambda b: hs.Verdict(mode=hs.FailureMode.HOUSEHOLD_OVERCLAIM, confidence=0.8, judge_model="jev-test"),
+    )
+    assert accepted is None
+    assert mode is hs.FailureMode.HOUSEHOLD_OVERCLAIM and attempts == hs.MAX_ATTEMPTS
+
+
+def test_retry_policy_never_accepts_unjudged_text():
+    briefing, facts_text = _real_briefing(REAL_PROP_IDS[0])
+
+    def judge(b):
+        raise hs.GenerationFailed(hs.FailureMode.JUDGE_UNAVAILABLE)
+
+    accepted, verdict, mode, attempts = hs.generate_briefing(facts_text, generate=lambda fb: briefing, judge=judge)
+    assert accepted is None and mode is hs.FailureMode.JUDGE_UNAVAILABLE
+
+
+def test_retry_policy_rejects_ungrounded_numbers_before_judging():
+    briefing, facts_text = _real_briefing(REAL_PROP_IDS[0])
+    absent = next(str(n) for n in range(987654, 987700) if str(n) not in facts_text)
+    ungrounded = briefing.model_copy(update={"supporting_reason": briefing.supporting_reason[:-1] + f" across {absent} homes."})
+    judged: list[hs.Briefing] = []
+    accepted, verdict, mode, attempts = hs.generate_briefing(
+        facts_text,
+        generate=lambda fb: ungrounded,
+        judge=lambda b: judged.append(b) or hs.Verdict(mode=hs.FailureMode.OK, confidence=1.0, judge_model="jev-test"),
+    )
+    assert accepted is None and mode is hs.FailureMode.UNGROUNDED and judged == []
+
+
+@pytest.mark.skipif(
+    not (os.environ.get("GEMINI_API_KEY") and os.environ.get("BRIEF_MODEL")),
+    reason="GEMINI_API_KEY/BRIEF_MODEL not configured",
+)
+def test_live_gemini_reply_is_a_typed_briefing():
+    facts_text, _, _ = _real_facts_and_breakdown(REAL_PROP_IDS[0])
+    try:
+        result = hs.call_gemini(facts_text, api_key=hs.gemini_api_key(), model=hs.brief_model())
+    except hs.GenerationFailed as exc:
+        # A typed failure is a valid outcome of the contract; anything else is a bug.
+        assert isinstance(exc.mode, hs.FailureMode)
+        return
+    assert isinstance(result, hs.Briefing)
+
+
+@pytest.mark.skipif(not os.environ.get("TYPESAFE_AI_JEV_API_KEY"), reason="TYPESAFE_AI_JEV_API_KEY not configured")
+def test_live_jev_answer_is_a_typed_verdict():
+    briefing, facts_text = _real_briefing(REAL_PROP_IDS[0])
+    verdict = hs.judge_briefing(briefing, facts_text, api_key=hs.jev_api_key())
+    assert isinstance(verdict, hs.Verdict)
+    assert verdict.mode in set(hs.JEV_FAILURE_MODES)
+    assert 0.0 <= verdict.confidence <= 1.0

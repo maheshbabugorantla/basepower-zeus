@@ -46,25 +46,14 @@ export function equalWeights(): Record<SignalKey, number> {
 }
 
 /**
- * Each signal's share of the score as whole percents that always add up to
- * exactly 100 (largest-remainder rounding), so six equal weights read
- * 17/17/17/17/16/16, never six 17s summing to 102.
+ * Each signal's share of the score, to one decimal ("16.7%"), so equal
+ * weights read identically instead of 17/17/17/17/16/16. Trailing ".0" is
+ * dropped ("25%", "100%").
  */
-function roundedShares(weights: Record<SignalKey, number>, total: number): Record<SignalKey, number> {
-  const out = {} as Record<SignalKey, number>;
-  if (total <= 0) {
-    for (const key of SIGNAL_ORDER) out[key] = 0;
-    return out;
-  }
-  const raw = SIGNAL_ORDER.map((key) => ({ key, exact: ((weights[key] ?? 0) / total) * 100 }));
-  for (const r of raw) out[r.key] = Math.floor(r.exact);
-  let left = 100 - raw.reduce((sum, r) => sum + out[r.key], 0);
-  for (const r of [...raw].sort((a, b) => (b.exact % 1) - (a.exact % 1))) {
-    if (left <= 0) break;
-    out[r.key] += 1;
-    left -= 1;
-  }
-  return out;
+function formatShare(weight: number, total: number): string {
+  if (total <= 0) return "0";
+  const pct = Math.round(((weight / total) * 100) * 10) / 10;
+  return Number.isInteger(pct) ? String(pct) : pct.toFixed(1);
 }
 
 export interface WeightSlidersProps {
@@ -75,7 +64,6 @@ export interface WeightSlidersProps {
 
 export function WeightSliders({ weights, onChange, onReset }: WeightSlidersProps) {
   const total = SIGNAL_ORDER.reduce((sum, key) => sum + (weights[key] ?? 0), 0);
-  const shares = roundedShares(weights, total);
 
   function setWeight(key: SignalKey, value: number) {
     onChange({ ...weights, [key]: value });
@@ -106,7 +94,7 @@ export function WeightSliders({ weights, onChange, onReset }: WeightSlidersProps
         {SIGNAL_ORDER.map((key) => {
           const meta = REASON_META[key];
           const weight = weights[key] ?? 0;
-          const pct = shares[key];
+          const pct = formatShare(weight, total);
           return (
             <div key={key} style={{ display: "flex", flexDirection: "column", gap: "var(--space-1)" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -123,12 +111,16 @@ export function WeightSliders({ weights, onChange, onReset }: WeightSlidersProps
                   />
                   <span style={{ fontSize: "var(--type-body-font-size)" }}>{SIGNAL_LABELS[key]}</span>
                 </label>
-                <span style={{ fontFamily: "var(--type-data-font-family)", fontSize: "var(--type-label-font-size)", whiteSpace: "nowrap" }}>
-                  <span style={{ color: "var(--theme-ink)" }}>{weight}</span>
-                  <span style={{ color: "var(--theme-ink-muted)" }}>
-                    {" "}
-                    · {weight === 0 ? "off" : `${pct}% of score`}
-                  </span>
+                <span style={{ fontSize: "var(--type-label-font-size)", whiteSpace: "nowrap", color: "var(--theme-ink-muted)" }}>
+                  <span style={{ fontFamily: "var(--type-data-font-family)", color: "var(--theme-ink)", fontWeight: 600 }}>{weight}</span>
+                  {" · "}
+                  {weight === 0 ? (
+                    "off"
+                  ) : (
+                    <>
+                      <span style={{ fontFamily: "var(--type-data-font-family)" }}>{pct}%</span> of score
+                    </>
+                  )}
                 </span>
               </div>
               <input

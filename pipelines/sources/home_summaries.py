@@ -45,15 +45,18 @@ import os
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any, Literal
+from enum import Enum
+from typing import Annotated, Any, Callable, Literal
 
 import httpx
 import psycopg
+from psycopg.types.json import Jsonb
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError
 
 from pipelines.core import config, db, runs
 
 SOURCE = "home_summaries"
-PROMPT_VERSION = 1
+PROMPT_VERSION = 3
 TRAVIS_COUNTY_FIPS = "48453"
 TOP_N = 500
 # The 3 real homes pipelines/tests/test_home_summaries.py's live-DB tests
@@ -339,47 +342,214 @@ def build_template_sentence(breakdown: list[BreakdownRow], ctx: HomeContext) -> 
 # ---------------------------------------------------------------------------
 
 
+class FailureMode(str, Enum):
+    """Every way a generated briefing can be rejected. Jev picks one of the
+    first seven; the last three come from our own typed checks."""
+
+    OK = "ok"
+    CUT_OFF = "cut_off"
+    UNGROUNDED = "ungrounded"
+    WRONG_VOICE = "wrong_voice"
+    HOUSEHOLD_OVERCLAIM = "household_overclaim"
+    FORMATTING = "formatting"
+    OFF_TASK = "off_task"
+    SCHEMA_INVALID = "schema_invalid"
+    JUDGE_UNAVAILABLE = "judge_unavailable"
+    GEMINI_ERROR = "gemini_error"
+
+
+JEV_FAILURE_MODES: dict[FailureMode, str] = {
+    FailureMode.OK: "Complete, grounded in the facts, third person about this home, plain prose",
+    FailureMode.CUT_OFF: "Ends mid-sentence or is clearly unfinished",
+    FailureMode.UNGROUNDED: "States a number or claim not supported by the facts",
+    FailureMode.WRONG_VOICE: "Addresses the homeowner as you/your instead of briefing the rep about this home",
+    FailureMode.HOUSEHOLD_OVERCLAIM: "Presents a neighborhood (block group or ZIP) figure as a trait of this specific household",
+    FailureMode.FORMATTING: "Contains headings, lists, markdown, or drafting notes",
+    FailureMode.OFF_TASK: "Not a briefing about why this home ranks for outreach",
+}
+
+
+_SENTENCE = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=20, max_length=320, pattern=r"^[^\n*#`]+[.!?]$"),
+]
+
+
+class Briefing(BaseModel):
+    """The response template Gemini fills (structured output). Each field
+    is one complete plain sentence; anything else fails validation."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    lead_reason: _SENTENCE
+    supporting_reason: _SENTENCE
+    neighborhood_context: _SENTENCE
+
+    def text(self) -> str:
+        return " ".join([self.lead_reason, self.supporting_reason, self.neighborhood_context])
+
+
+class Verdict(BaseModel):
+    """Jev's typed answer for one briefing."""
+
+    mode: FailureMode
+    confidence: float = Field(ge=0.0, le=1.0)
+    judge_model: str
+
+
+class GenerationFailed(Exception):
+    def __init__(self, mode: FailureMode, detail: str = "") -> None:
+        super().__init__(f"{mode.value}: {detail}")
+        self.mode = mode
+
+
 PROMPT_INSTRUCTIONS = (
-    "You are writing 2-3 short sentences a Base Power sales rep could say out loud on a "
-    "call, explaining why this specific home was flagged for outreach. Use ONLY the facts "
-    "listed below — do not invent any number, name, or detail not listed. Never mention or "
-    "estimate a dollar amount. Be plain and concrete, not salesy. Facts:\n"
+    "Fill in a short briefing for a Base Power outreach rep about the home described in "
+    "the facts: why it ranks well for a home-battery conversation. Refer to it as \"this "
+    "home\" (third person; never \"you\" or \"your\"). Facts marked as block-group or ZIP "
+    "figures describe the neighborhood: say \"in this neighborhood\", never that this "
+    "household has that trait. Do not present being outside a flood zone as a reason for "
+    "outreach. Use ONLY the facts: no invented numbers, names or details, and no dollar "
+    "amounts. Each field is exactly one complete plain sentence.\n"
 )
 
+# Gemini's responseSchema, derived from the Briefing field names.
+RESPONSE_SCHEMA = {
+    "type": "OBJECT",
+    "properties": {
+        "lead_reason": {"type": "STRING", "description": "The strongest fact about this home, one sentence."},
+        "supporting_reason": {"type": "STRING", "description": "The next strongest fact, one sentence."},
+        "neighborhood_context": {"type": "STRING", "description": "One sentence of neighborhood context from block-group or ZIP facts."},
+    },
+    "required": list(Briefing.model_fields),
+    "propertyOrdering": list(Briefing.model_fields),
+}
 
-def call_gemini(facts_text: str, *, api_key: str, model: str, timeout: float = GEMINI_TIMEOUT_S) -> str:
+
+def call_gemini(
+    facts_text: str,
+    *,
+    api_key: str,
+    model: str,
+    feedback: FailureMode | None = None,
+    timeout: float = GEMINI_TIMEOUT_S,
+) -> Briefing:
+    """One Gemini call that must return a valid Briefing. Raises
+    GenerationFailed with a typed mode otherwise: CUT_OFF (did not finish
+    or invalid JSON), SCHEMA_INVALID (JSON that fails Briefing), or
+    GEMINI_ERROR (transport). `feedback` names the previous attempt's
+    failure mode so the retry can correct it."""
     url = GEMINI_ENDPOINT.format(model=model)
+    prompt = PROMPT_INSTRUCTIONS
+    if feedback is not None:
+        prompt += f"The previous attempt was rejected as '{feedback.value}': {JEV_FAILURE_MODES.get(feedback, feedback.value)}. Fix that.\n"
     body = {
-        "contents": [{"parts": [{"text": PROMPT_INSTRUCTIONS + facts_text}]}],
-        # thinkingBudget=0: gemini-3.x "thinking" models otherwise spend most
-        # of maxOutputTokens on an internal, non-quotable thought trace before
-        # any visible text — observed truncating a 2-3 sentence reply to a few
-        # words at maxOutputTokens=220 (finishReason MAX_TOKENS, ~200 thought
-        # tokens). This task needs no multi-step reasoning, so thinking is
-        # disabled outright rather than raising the token budget.
+        "contents": [{"parts": [{"text": prompt + "Facts:\n" + facts_text}]}],
         "generationConfig": {
             "temperature": 0.2,
-            "maxOutputTokens": 300,
+            "maxOutputTokens": 400,
             "thinkingConfig": {"thinkingBudget": 0},
+            "responseMimeType": "application/json",
+            "responseSchema": RESPONSE_SCHEMA,
         },
     }
-    last_exc: Exception | None = None
     for attempt in range(GEMINI_MAX_RETRIES):
         try:
             resp = httpx.post(url, params={"key": api_key}, json=body, timeout=timeout)
-            if resp.status_code == 429:
-                time.sleep(min(2 ** attempt, 8))
-                continue
-            resp.raise_for_status()
-            data = resp.json()
-            return data["candidates"][0]["content"]["parts"][0]["text"].strip()
-        except Exception as exc:  # noqa: BLE001 — any failure falls back to the template
-            last_exc = exc
-            if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 429:
-                time.sleep(min(2 ** attempt, 8))
-                continue
-            break
-    raise RuntimeError(f"Gemini call failed after retries: {last_exc}")
+        except httpx.HTTPError as exc:
+            raise GenerationFailed(FailureMode.GEMINI_ERROR, type(exc).__name__) from exc
+        if resp.status_code == 429:
+            time.sleep(min(2 ** attempt, 8))
+            continue
+        if resp.status_code >= 400:
+            raise GenerationFailed(FailureMode.GEMINI_ERROR, f"HTTP {resp.status_code}")
+        cand = resp.json()["candidates"][0]
+        if cand.get("finishReason") not in (None, "STOP"):
+            raise GenerationFailed(FailureMode.CUT_OFF, str(cand.get("finishReason")))
+        raw = "".join(p["text"] for p in cand.get("content", {}).get("parts", []) if p.get("text") and not p.get("thought"))
+        try:
+            return Briefing.model_validate_json(raw)
+        except ValidationError as exc:
+            # Unparseable JSON means the object was cut off; parseable-but-invalid means it broke the template.
+            mode = FailureMode.CUT_OFF if any(e["type"] == "json_invalid" for e in exc.errors()) else FailureMode.SCHEMA_INVALID
+            raise GenerationFailed(mode, str(exc.errors()[0].get("msg"))) from exc
+    raise GenerationFailed(FailureMode.GEMINI_ERROR, "rate limited")
+
+
+# ---------------------------------------------------------------------------
+# Judge: TypeSafe Jev returns a typed failure mode for each candidate.
+# ---------------------------------------------------------------------------
+
+JEV_ENDPOINT = "https://api.typesafe.ai/v1/systemone"
+JEV_MODEL = "jev-latest"
+JEV_OK_MIN_CONFIDENCE = 0.5
+MAX_ATTEMPTS = 3
+
+
+def jev_api_key() -> str:
+    return _require_env("TYPESAFE_AI_JEV_API_KEY")
+
+
+def judge_briefing(briefing: Briefing, facts_text: str, *, api_key: str, timeout: float = 30.0) -> Verdict:
+    """Asks Jev one Choice question over the typed briefing and the facts;
+    returns a typed Verdict. Raises GenerationFailed(JUDGE_UNAVAILABLE) on
+    any transport or shape problem."""
+    try:
+        resp = httpx.post(
+            JEV_ENDPOINT,
+            headers={"Authorization": f"Bearer {api_key}"},
+            json={
+                "model": JEV_MODEL,
+                "state": {"facts": facts_text, "briefing": briefing.model_dump()},
+                "questions": {
+                    "failure_mode": {
+                        "type": "choice",
+                        "instructions": "Judge this outreach briefing (`briefing`, read in field order) written from `facts` for a Base Power rep.",
+                        "criteria": {m.value: d for m, d in JEV_FAILURE_MODES.items()},
+                    }
+                },
+            },
+            timeout=timeout,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        ans = data["answers"]["failure_mode"]
+        return Verdict(mode=FailureMode(ans["choice"]), confidence=ans["confidence"], judge_model=data.get("model", JEV_MODEL))
+    except (httpx.HTTPError, KeyError, ValueError, ValidationError) as exc:
+        raise GenerationFailed(FailureMode.JUDGE_UNAVAILABLE, type(exc).__name__) from exc
+
+
+def generate_briefing(
+    facts_text: str,
+    *,
+    generate: Callable[[FailureMode | None], Briefing],
+    judge: Callable[[Briefing], Verdict],
+    max_attempts: int = MAX_ATTEMPTS,
+) -> tuple[Briefing | None, Verdict | None, FailureMode, int]:
+    """The retry policy, independent of any network call so it is tested
+    deterministically with typed inputs. Each attempt: generate a typed
+    Briefing, apply the number guard, then Jev. Retries feed the last
+    failure mode back into generation. Returns (accepted briefing or None,
+    last verdict, last failure mode, attempts used)."""
+    feedback: FailureMode | None = None
+    last_verdict: Verdict | None = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            briefing = generate(feedback)
+        except GenerationFailed as exc:
+            feedback = exc.mode
+            continue
+        if not grounding_guard_passes(briefing.text(), facts_text):
+            feedback = FailureMode.UNGROUNDED
+            continue
+        try:
+            last_verdict = judge(briefing)
+        except GenerationFailed as exc:
+            return None, None, exc.mode, attempt  # never accept unjudged text
+        if last_verdict.mode is FailureMode.OK and last_verdict.confidence >= JEV_OK_MIN_CONFIDENCE:
+            return briefing, last_verdict, FailureMode.OK, attempt
+        feedback = last_verdict.mode
+    return None, last_verdict, feedback or FailureMode.GEMINI_ERROR, max_attempts
 
 
 # ---------------------------------------------------------------------------
@@ -387,7 +557,7 @@ def call_gemini(facts_text: str, *, api_key: str, model: str, timeout: float = G
 # ---------------------------------------------------------------------------
 
 
-def process_one(prop_id: str, *, api_key: str, model: str) -> dict[str, Any]:
+def process_one(prop_id: str, *, api_key: str, model: str, jev_key: str | None = None) -> dict[str, Any]:
     """Idempotent: skips (returns {"skipped": True}) if a stored row's
     facts_hash + prompt_version already match — never re-billed for an
     unchanged home. Otherwise generates (or falls back to the template)
@@ -409,30 +579,24 @@ def process_one(prop_id: str, *, api_key: str, model: str) -> dict[str, Any]:
         if existing is not None and existing[0] == this_hash and existing[1] == PROMPT_VERSION:
             return {"prop_id": prop_id, "skipped": True, "reason": "unchanged_facts_hash"}
 
-        is_template = False
-        guard_failed = False
-        used_model: str | None = model
-        try:
-            reply = call_gemini(facts_text, api_key=api_key, model=model)
-            if not reply or not grounding_guard_passes(reply, facts_text):
-                is_template = True
-                guard_failed = True
-                summary = build_template_sentence(breakdown, ctx)
-                used_model = None
-            else:
-                summary = reply
-        except Exception:
-            is_template = True
-            summary = build_template_sentence(breakdown, ctx)
-            used_model = None
+        briefing, verdict, final_mode, attempts = generate_briefing(
+            facts_text,
+            generate=lambda fb: call_gemini(facts_text, api_key=api_key, model=model, feedback=fb),
+            judge=lambda b: judge_briefing(b, facts_text, api_key=jev_key or jev_api_key()),
+        )
+        is_template = briefing is None
+        guard_failed = is_template
+        used_model: str | None = None if is_template else model
+        summary = build_template_sentence(breakdown, ctx) if briefing is None else briefing.text()
 
         with conn.cursor() as cur:
             cur.execute(
                 """
                 insert into core.home_summary
                     (prop_id, summary, is_template, guard_failed, model, prompt_version,
-                     facts_hash, source_ids, generated_at)
-                values (%s, %s, %s, %s, %s, %s, %s, %s, now())
+                     facts_hash, source_ids, judge_verdict, judge_confidence, judge_model,
+                     attempts, briefing, generated_at)
+                values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now())
                 on conflict (prop_id) do update set
                     summary = excluded.summary,
                     is_template = excluded.is_template,
@@ -440,15 +604,25 @@ def process_one(prop_id: str, *, api_key: str, model: str) -> dict[str, Any]:
                     model = excluded.model,
                     prompt_version = excluded.prompt_version,
                     facts_hash = excluded.facts_hash,
+                    judge_verdict = excluded.judge_verdict,
+                    judge_confidence = excluded.judge_confidence,
+                    judge_model = excluded.judge_model,
+                    attempts = excluded.attempts,
+                    briefing = excluded.briefing,
                     source_ids = excluded.source_ids,
                     generated_at = excluded.generated_at
                 """,
                 (
                     prop_id, summary, is_template, guard_failed, used_model, PROMPT_VERSION,
                     this_hash, ctx.source_ids or [],
+                    final_mode.value,
+                    verdict.confidence if verdict else None,
+                    verdict.judge_model if verdict else None,
+                    attempts,
+                    Jsonb(briefing.model_dump()) if briefing else None,
                 ),
             )
-    return {"prop_id": prop_id, "skipped": False, "is_template": is_template, "guard_failed": guard_failed}
+    return {"prop_id": prop_id, "skipped": False, "is_template": is_template, "guard_failed": guard_failed, "mode": final_mode.value, "attempts": attempts}
 
 
 # ---------------------------------------------------------------------------
@@ -459,6 +633,7 @@ def process_one(prop_id: str, *, api_key: str, model: str) -> dict[str, Any]:
 def run(*, runner: Runner, backfill: bool = False, cursor: dict[str, Any] | None = None) -> None:
     api_key = gemini_api_key()
     model = brief_model()
+    jev_key = jev_api_key()
 
     with db.connect(pooled=False) as run_conn:
         target_ids = select_target_prop_ids(run_conn, backfill=backfill)
@@ -478,7 +653,7 @@ def run(*, runner: Runner, backfill: bool = False, cursor: dict[str, Any] | None
     error: str | None = None
     try:
         with ThreadPoolExecutor(max_workers=CONCURRENCY) as pool:
-            futures = {pool.submit(process_one, pid, api_key=api_key, model=model): pid for pid in todo}
+            futures = {pool.submit(process_one, pid, api_key=api_key, model=model, jev_key=jev_key): pid for pid in todo}
             for future in as_completed(futures):
                 pid = futures[future]
                 result = future.result()

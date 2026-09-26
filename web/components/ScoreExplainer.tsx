@@ -258,9 +258,9 @@ export function ScoreExplainer({ propId, weights }: ScoreExplainerProps) {
         <DataTableHead>
           <DataTableRow>
             <DataTableHeaderCell>Signal</DataTableHeaderCell>
-            <DataTableHeaderCell>Raw value</DataTableHeaderCell>
-            <DataTableHeaderCell>Percentile</DataTableHeaderCell>
-            <DataTableHeaderCell>Contribution</DataTableHeaderCell>
+            <DataTableHeaderCell>This home</DataTableHeaderCell>
+            <DataTableHeaderCell>Percentile in Travis</DataTableHeaderCell>
+            <DataTableHeaderCell>Adds to score</DataTableHeaderCell>
           </DataTableRow>
         </DataTableHead>
         <DataTableBody>
@@ -269,9 +269,16 @@ export function ScoreExplainer({ propId, weights }: ScoreExplainerProps) {
               <DataTableCell>{s.label}</DataTableCell>
               <DataTableCell>
                 {s.available && s.rawValue !== null ? (
-                  <span style={{ fontFamily: "var(--type-data-font-family)" }}>
-                    {formatNumber(s.rawValue, s.key === "backup_intent" ? 2 : 1)} {s.rawUnit}
-                  </span>
+                  s.key === "flood" ? (
+                    <span>{s.rawValue > 0 ? "Inside a FEMA high-risk flood zone" : "Outside FEMA high-risk flood zones"}</span>
+                  ) : (
+                    <span>
+                      <span style={{ fontFamily: "var(--type-data-font-family)", fontWeight: 600 }}>
+                        {formatNumber(s.rawValue, s.key === "backup_intent" ? 2 : 1)}
+                      </span>{" "}
+                      {s.rawUnit}
+                    </span>
+                  )
                 ) : (
                   <MissingState variant="not-loaded" reason={s.nullReason ?? "Not loaded"} />
                 )}
@@ -282,7 +289,7 @@ export function ScoreExplainer({ propId, weights }: ScoreExplainerProps) {
                     {(s.percentile * 100).toFixed(0)}th
                   </span>
                 ) : (
-                  <span style={{ color: "var(--theme-ink-muted)" }}>—</span>
+                  <span style={{ color: "var(--theme-ink-muted)" }}>No data</span>
                 )}
               </DataTableCell>
               <DataTableCell>
