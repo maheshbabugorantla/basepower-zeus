@@ -29,7 +29,7 @@ colors:
   signal-grid-edge: "#aa8422"
   signal-install: "#06507e"
   signal-household: "#68baed"
-  signal-household-edge: "#06507e"
+  signal-household-edge: "#54524f"
   # States
   not-loaded-bg: "#e6e4e0"
   not-loaded-ink: "#54524f"
@@ -45,6 +45,12 @@ colors:
   dark-ink: "#f0eeeb"
   dark-ink-muted: "#a9a8a7"
   dark-brand: "#b2dd79"
+  # Dark score ramp, low -> high (lightness rises so high scores stand out on dark canvas)
+  dark-score-1: "#1e4d2b"
+  dark-score-2: "#4f7a3c"
+  dark-score-3: "#77a45a"
+  dark-score-4: "#b2dd79"
+  dark-score-5: "#d6f0b4"
 typography:
   title:
     fontFamily: "Geist, ui-sans-serif, system-ui, sans-serif"
@@ -158,12 +164,12 @@ Hex values are Base's own, extracted from the live site. Contrast was checked ag
 - **Divider** #d8d7d5 is for hairlines between rows and panels. It is decorative, so it is never the only edge of an input.
 
 ### Tertiary: data colors
-- **Score ramp**: #d6f0b4 → #b2dd79 → #77a45a → #1e4d2b → #102a17. A single hue with monotonic lightness, so it reads for every kind of color vision. It is used for the choropleth and score bars only.
+- **Score ramp**: #d6f0b4 → #b2dd79 → #77a45a → #1e4d2b → #102a17. A single hue with monotonic lightness, so it reads for every kind of color vision. It is used for the choropleth and score bars only. In dark mode the lightness direction flips (`dark-score-1` to `dark-score-5`, #1e4d2b → #d6f0b4), so the highest scores are the brightest and never fade into the canvas. #4f7a3c is the one step that is not a Base color: it sits between Base green-90 and green-60.
 - **Signals**:
   - outage exposure: Grid-off red #bf5249;
   - grid value: Gold #f7c33c, with a #aa8422 edge;
   - installability: Deep blue #06507e;
-  - household fit: Sky #68baed, with a #06507e edge.
+  - household fit: Sky #68baed, with a #54524f edge.
 
   The minimum pairwise ΔE is 39.6 under simulated deuteranopia, protanopia and tritanopia. Light fills always carry their edge color and a text label.
 
@@ -207,7 +213,7 @@ The interface is flat at rest: panels sit on the canvas separated by surface col
 
 ### Cards / Containers
 - A **panel** is a white surface with a 12px radius and 24px padding. Panels never nest.
-- Stats never become a grid of identical cards. A headline figure lives inside a sentence ("Travis County homes averaged **4.2 customer-hours** without power in 2024") with its provenance link beside it.
+- Stats never become a grid of identical cards. A headline figure lives inside a sentence (pattern: "Travis County homes averaged **‹value› customer-hours** without power in 2024", where ‹value› always comes from `api.county_outage`; never write a literal number into a component, test or skeleton) with its provenance link beside it.
 
 ### Inputs / Fields
 - **Weight sliders:**
