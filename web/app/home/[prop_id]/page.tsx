@@ -9,6 +9,8 @@ import { ParcelMap } from "../../../components/ParcelMap";
 import { SolarPanel } from "../../../components/SolarPanel";
 import { ScoreExplainer } from "../../../components/ScoreExplainer";
 import { PropensityBadge, type PropensityReason } from "../../../components/PropensityBadge";
+import { SegmentChip } from "../../../components/SegmentChip";
+import { segmentForReasons } from "../../../lib/segments";
 import { PermitPath, type PermitPathKind, type PermitPathStatsRow, type PermitRulesCitation } from "../../../components/PermitPath";
 import { GridValue } from "../../../components/GridValue";
 import { COUNTY_CANDIDATES } from "../../../lib/counties";
@@ -810,7 +812,7 @@ export default async function HomeDetailPage({
   return (
     <div style={{ display: "grid", gap: "var(--space-6)" }}>
       <nav aria-label="Breadcrumb" className="breadcrumb">
-        <Link href="/ranking">Ranking</Link>
+        <Link href="/ranking">Neighborhoods</Link>
         <span className="breadcrumb__separator" aria-hidden="true">
           /
         </span>
@@ -876,6 +878,29 @@ export default async function HomeDetailPage({
             showReasons
           />
         )}
+        {homePropensity !== null && segmentForReasons(homePropensity.reasons) !== null ? (
+          (() => {
+            const segment = segmentForReasons(homePropensity.reasons)!;
+            return (
+              <div style={{ display: "grid", gap: "var(--space-2)", marginTop: "var(--space-4)" }} data-testid="home-outreach">
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--space-2)", alignItems: "center" }}>
+                  <span style={{ fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)" }}>
+                    Outreach segment
+                  </span>
+                  <SegmentChip segment={segment} />
+                  <Link href={`/audiences?county=${home.county_fips ?? ""}`} style={{ fontSize: "var(--type-label-font-size)" }}>
+                    See all segments
+                  </Link>
+                </div>
+                <p className="segment-card__message">&ldquo;{segment.message}&rdquo;</p>
+                <p className="team-copy-note" style={{ margin: 0 }}>
+                  Suggested opening line and channel ({segment.channel.toLowerCase()}) are the team&rsquo;s copy, not
+                  data. Why this segment: {segment.drivenBy.toLowerCase()}.
+                </p>
+              </div>
+            );
+          })()
+        ) : null}
       </Panel>
 
       <Panel>

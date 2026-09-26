@@ -12,6 +12,8 @@ import {
 } from "../../components/ui/DataTable";
 import { MissingState } from "../../components/ui/MissingState";
 import { PropensityBadge } from "../../components/PropensityBadge";
+import { SegmentChip } from "../../components/SegmentChip";
+import { segmentForReasons } from "../../lib/segments";
 import type { PredictedHomeRow } from "../api/top-homes/route";
 
 // M4-W2: the default ranking view -- one row per home, ordered by
@@ -97,6 +99,9 @@ export function PredictedHomesTable({
                     {addressLine || row.propId}
                   </Link>
                   {row.situsZip ? <div className="top-homes-zip">{row.situsZip}</div> : null}
+                  <div style={{ marginTop: "var(--space-1)" }}>
+                    <SegmentChip segment={segmentForReasons(row.reasons)} />
+                  </div>
                 </DataTableCell>
                 <DataTableCell>
                   <PropensityBadge

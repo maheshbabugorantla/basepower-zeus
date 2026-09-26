@@ -28,6 +28,11 @@ export interface PermitQuarterRow {
   baseN: number;
 }
 
+/** Days to one decimal at most ("66.7", "14"), never a float artifact like 66.7000000000001. */
+function formatDays(days: number): string {
+  return Number.isInteger(days) ? String(days) : days.toFixed(1);
+}
+
 export function PermitTimelinePanel({ rows }: { rows: PermitQuarterRow[] }) {
   if (rows.length === 0) {
     return <MissingState variant="not-loaded" reason="not published -- no permit-timeline figures yet" />;
@@ -52,7 +57,7 @@ export function PermitTimelinePanel({ rows }: { rows: PermitQuarterRow[] }) {
                 <span style={{ color: "var(--theme-ink-muted)" }}>not published</span>
               ) : (
                 <span>
-                  {r.otherMedianDays} ({r.otherP90Days ?? "—"}){" "}
+                  {formatDays(r.otherMedianDays)} ({r.otherP90Days === null ? "—" : formatDays(r.otherP90Days)}){" "}
                   <span style={{ color: "var(--theme-ink-muted)", fontSize: "var(--type-label-font-size)" }}>
                     n={r.otherN}
                   </span>
@@ -64,7 +69,7 @@ export function PermitTimelinePanel({ rows }: { rows: PermitQuarterRow[] }) {
                 <span style={{ color: "var(--theme-ink-muted)" }}>not published</span>
               ) : (
                 <span>
-                  {r.baseMedianDays} ({r.baseP90Days ?? "—"}){" "}
+                  {formatDays(r.baseMedianDays)} ({r.baseP90Days === null ? "—" : formatDays(r.baseP90Days)}){" "}
                   <span style={{ color: "var(--theme-ink-muted)", fontSize: "var(--type-label-font-size)" }}>
                     n={r.baseN}
                   </span>

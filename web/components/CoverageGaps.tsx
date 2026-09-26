@@ -33,6 +33,19 @@ export interface CoverageGapsProps {
   bucketCounts: CoverageBucketCount[];
 }
 
+// GTM P0 fix: the zone colors describe BLOCK GROUPS, but these counts are
+// HOME buckets (api.coverage_bucket_counts). The old legend printed each
+// home count next to its zone name, so "Demand proven, Base absent: 1,705
+// homes" read as 1,705 open prospects when it counts homes that already
+// have another installer's backup. Each row now names the zone and, under
+// it, says exactly what its count counts.
+const HOME_BUCKET_DESCRIPTION: Record<ZoneBucket, string> = {
+  covered_by_base: "homes already Base customers",
+  demand_absent: "homes with another installer's backup",
+  untapped: "homes with no backup on file",
+  not_observable: "homes outside city permit data",
+};
+
 export function CoverageLegend({ bucketCounts }: CoverageGapsProps) {
   const homesByZone = new Map<ZoneBucket, number>();
   for (const row of bucketCounts) {
@@ -40,21 +53,31 @@ export function CoverageLegend({ bucketCounts }: CoverageGapsProps) {
   }
   const order: ZoneBucket[] = ["covered_by_base", "demand_absent", "untapped", "not_observable"];
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-2)" }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-3)" }}>
       {order.map((bucket) => {
         const meta = ZONE_BUCKET_META[bucket];
-        const count = homesByZone.get(bucket) ?? 0;
+        const count = homesByZone.get(bucket);
         return (
-          <div key={bucket} style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }} data-testid={`coverage-legend-${bucket}`}>
+          <div key={bucket} style={{ display: "flex", alignItems: "flex-start", gap: "var(--space-2)" }} data-testid={`coverage-legend-${bucket}`}>
             <span
               aria-hidden="true"
-              style={{ width: 14, height: 14, minWidth: 14, borderRadius: "var(--rounded-sm)", backgroundColor: meta.color, border: "1px solid var(--color-control-border)" }}
+              style={{ width: 14, height: 14, minWidth: 14, marginTop: 3, borderRadius: "var(--rounded-sm)", backgroundColor: meta.color, border: "1px solid var(--color-control-border)" }}
             />
-            <span style={{ flex: "1 1 auto" }}>{meta.label}</span>
-            <span style={{ fontFamily: "var(--type-data-font-family)", fontWeight: 600 }}>
-              {count.toLocaleString()}
+            <span style={{ display: "grid", gap: 2 }}>
+              <span>{meta.label}</span>
+              <span style={{ color: "var(--theme-ink-muted)", fontSize: "var(--type-label-font-size)" }}>
+                {count === undefined ? (
+                  "not loaded"
+                ) : (
+                  <>
+                    <span style={{ fontFamily: "var(--type-data-font-family)", fontWeight: 600, color: "var(--theme-ink)" }}>
+                      {count.toLocaleString("en-US")}
+                    </span>{" "}
+                    {HOME_BUCKET_DESCRIPTION[bucket]}
+                  </>
+                )}
+              </span>
             </span>
-            <span style={{ color: "var(--theme-ink-muted)", fontSize: "var(--type-label-font-size)" }}>homes</span>
           </div>
         );
       })}

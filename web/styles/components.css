@@ -785,3 +785,81 @@ button:focus-visible,
 .skip-link:focus-visible {
   top: var(--space-2);
 }
+
+/* ---------------------------------------------------------------------- */
+/* Decision header (GTM P0): question, answer, evidence link               */
+/* ---------------------------------------------------------------------- */
+
+.decision-header {
+  display: grid;
+  gap: var(--space-1);
+  max-width: 80ch;
+}
+
+.decision-header__eyebrow {
+  font-family: var(--type-label-font-family);
+  font-size: var(--type-label-font-size);
+  font-weight: var(--type-label-font-weight);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--theme-brand-accent-text);
+}
+
+.decision-header__question {
+  font-family: var(--type-title-font-family);
+  font-size: var(--type-title-font-size);
+  font-weight: var(--type-title-font-weight);
+  line-height: var(--type-title-line-height);
+  margin: 0;
+  text-wrap: balance;
+}
+
+.decision-header__answer {
+  margin: 0;
+  font-size: 1.0625rem;
+  color: var(--theme-ink);
+  max-width: 70ch;
+}
+
+.decision-header__links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: var(--space-2);
+}
+
+.decision-header__evidence {
+  font-size: var(--type-label-font-size);
+}
+
+/* Segment rows on the Audiences page */
+.segment-card {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.segment-card__stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+  align-items: baseline;
+}
+
+.segment-card__copy {
+  margin: 0;
+  color: var(--theme-ink-muted);
+  font-size: var(--type-label-font-size);
+}
+
+.segment-card__message {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border-left: 3px solid var(--color-divider);
+  font-style: italic;
+}
+
+.team-copy-note {
+  font-size: var(--type-label-font-size);
+  color: var(--theme-ink-muted);
+}

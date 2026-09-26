@@ -9,6 +9,7 @@ import { fetchRankedHomes, fetchPredictedHomes, SIGNAL_KEYS, type SignalKey, typ
 import type { ModelCardData } from "../../components/PredictionProof";
 import { getCountiesWithScoredHomes } from "../../lib/counties.server";
 import { resolveCounty } from "../../lib/counties";
+import { DecisionHeader } from "../../components/DecisionHeader";
 
 // M1-W1: MapLibre choropleth of Travis block groups (api.blockgroup_scores,
 // via the app/ranking/blockgroups route handler) + top-50 table
@@ -320,23 +321,21 @@ export default async function RankingPage({
   return (
     <div style={{ display: "grid", gap: "var(--space-4)" }}>
       <div>
-        <h1
-          style={{
-            fontFamily: "var(--type-title-font-family)",
-            fontSize: "var(--type-title-font-size)",
-            fontWeight: "var(--type-title-font-weight)",
-            margin: 0,
-          }}
-        >
-          Where should Base knock next?
-        </h1>
-        <p style={{ color: "var(--theme-ink-muted)", margin: "var(--space-1) 0 0 0", maxWidth: "80ch" }}>
-          Ranking owner-occupied single-family homes inside {county.name} County on outage
-          exposure, grid value, installability and household fit.
-        </p>
-        <p style={{ margin: "var(--space-1) 0 0 0" }}>
+        <DecisionHeader
+          question="Which neighborhoods and homes should Base knock on first?"
+          answer={
+            <>
+              {predictedTotal !== null && predictedTotal > 0 ? `${predictedTotal.toLocaleString("en-US")} ` : ""}
+              {county.name} homes Base can serve, ranked by how likely each is to add backup power in the next 12
+              months. Darker block groups hold more likely buyers. Open any home to see its three strongest reasons.
+            </>
+          }
+          evidence={{ href: "/sources", label: "every source file behind the ranking" }}
+          next={{ href: `/audiences?county=${county.fips}`, label: "Turn this into audiences" }}
+        />
+        <p style={{ margin: "var(--space-2) 0 0 0" }}>
           <Link href={`/ranking/coverage?county=${county.fips}`}>
-            See coverage gaps -- where Base isn&rsquo;t yet, but backup demand is proven →
+            Attack list: where backup demand is proven and Base isn&rsquo;t there yet →
           </Link>
         </p>
       </div>

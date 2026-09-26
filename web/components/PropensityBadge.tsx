@@ -1,5 +1,6 @@
 import { Chip } from "./ui/Chip";
 import { MissingState } from "./ui/MissingState";
+import { signalForFeature } from "../lib/segments";
 
 // M4-W2: the predictive headline — core.home_propensity's calibrated
 // 12-month backup-adoption probability, read straight from
@@ -85,7 +86,7 @@ export function PropensityBadge({
           {reasons.map((reason, index) => (
             <Chip
               key={`${reason.feature}-${index}`}
-              signal="install"
+              signal={signalForFeature(reason.feature)}
               label={`${reason.direction === "raises" ? "↑" : "↓"} ${reason.feature}`}
             />
           ))}

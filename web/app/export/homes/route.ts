@@ -14,6 +14,14 @@ import {
   permitPathFromTerritory,
   type PropensityReason,
 } from "../shared";
+import {
+  isHoldout,
+  predictedFeaturesForSegment,
+  segmentByKey,
+  segmentForReasons,
+  segmentForSignalKeys,
+  type Segment,
+} from "../../../lib/segments";
 
 // M5-W1: ranked-homes CSV export for territory planning. Real rows only
 // -- every home comes from the same gated population (core.mv_home_
@@ -164,8 +172,23 @@ const HEADER = [
   "utility",
   "utility_confirmation_status",
   "extrapolated_from",
+  "segment",
+  "suggested_message",
+  "holdout_group",
   "sources",
 ];
+
+// GTM P0: segment (lib/segments.ts, from the home's strongest raising
+// reason), the team's suggested message for it, and a stable 10% holdout
+// flag ("holdout" = do not contact; measure lift against it). Messages are
+// team copy, not data. `?segment=<key>` limits the export to one segment.
+function segmentCells(segment: Segment | null, propId: string): string[] {
+  return [
+    segment?.name ?? "",
+    segment?.message ?? "",
+    isHoldout(propId) ? "holdout" : "contact",
+  ];
+}
 
 export async function GET(request: NextRequest) {
   const params = request.nextUrl.searchParams;
@@ -173,9 +196,11 @@ export async function GET(request: NextRequest) {
   const mode: "predicted" | "weighted" = params.get("mode") === "weighted" ? "weighted" : "predicted";
   const excludeBackup = params.get("backup") !== "show"; // default hide
   const hideOldHomes = params.get("pre2000") === "hide"; // default show
+  const segmentFilter = segmentByKey(params.get("segment"));
 
   const today = isoDate(new Date());
-  const filename = csvFilename(county.name, `ranked-homes-${mode}`, today);
+  const view = segmentFilter ? `${segmentFilter.key.replace(/_/g, "-")}-${mode}` : `ranked-homes-${mode}`;
+  const filename = csvFilename(county.name, view, today);
   const resolveSources = await makeSourcesResolver(query);
   const weights = mode === "weighted" ? await getWeightsFromParams(params) : null;
 
@@ -196,7 +221,9 @@ export async function GET(request: NextRequest) {
       try {
         controller.enqueue(
           encoder.encode(
-            `# Base Power Zeus ranked-homes export -- ${county.name} County -- ${mode} mode -- capped at ${CSV_CAP} rows -- generated ${today}\r\n`
+            `# Base Power Zeus ranked-homes export -- ${county.name} County -- ${mode} mode${
+              segmentFilter ? ` -- segment: ${segmentFilter.name}` : ""
+            } -- capped at ${CSV_CAP} rows -- generated ${today}\r\n`
           )
         );
         controller.enqueue(encoder.encode(csvRow(HEADER)));
@@ -226,9 +253,27 @@ export async function GET(request: NextRequest) {
                    or hp.p_install_12m < $4::numeric
                    or (hp.p_install_12m = $4::numeric and hp.prop_id > $5::text)
                  )
+                 and (
+                   $7::text[] is null
+                   or (
+                     select r ->> 'feature'
+                     from jsonb_array_elements(hp.reasons) with ordinality as t(r, ord)
+                     where r ->> 'direction' = 'raises'
+                     order by ord
+                     limit 1
+                   ) = any($7::text[])
+                 )
                order by hp.p_install_12m desc, hp.prop_id asc
                limit $6`,
-              [county.fips, excludeBackup, hideOldHomes, afterP, afterPropId, PAGE_SIZE]
+              [
+                county.fips,
+                excludeBackup,
+                hideOldHomes,
+                afterP,
+                afterPropId,
+                PAGE_SIZE,
+                segmentFilter ? predictedFeaturesForSegment(segmentFilter.key) : null,
+              ]
             );
             if (rows.length === 0) break;
 
@@ -236,6 +281,8 @@ export async function GET(request: NextRequest) {
 
             for (const row of rows) {
               if (emittedRows >= CSV_CAP) break;
+              const segment = segmentForReasons(row.reasons);
+              if (segmentFilter && segment?.key !== segmentFilter.key) continue;
               rank += 1;
               const market = marketByEiaId.get(row.territory_eia_id ?? "");
               const sources = await resolveSources([...(row.source_ids ?? []), ...(row.model_source_ids ?? [])]);
@@ -258,6 +305,7 @@ export async function GET(request: NextRequest) {
                     row.distributor_name ?? "",
                     "Confirmed Base-served utility match",
                     row.extrapolated_from ?? "",
+                    ...segmentCells(segment, row.prop_id),
                     sources,
                   ])
                 )
@@ -289,6 +337,8 @@ export async function GET(request: NextRequest) {
             for (const row of rows) {
               if (emittedRows >= CSV_CAP) break;
               if (hideOldHomes && row.yr_built !== null && row.yr_built < HIDE_OLD_HOMES_CUTOFF_YEAR) continue;
+              const segment = segmentForSignalKeys(row.reasons);
+              if (segmentFilter && segment?.key !== segmentFilter.key) continue;
               rank += 1;
               const market = marketByEiaId.get(row.territory_eia_id ?? "");
               const sources = await resolveSources([...(row.source_ids ?? []), ...(row.outage_source_ids ?? [])]);
@@ -311,6 +361,7 @@ export async function GET(request: NextRequest) {
                     row.distributor_name ?? "",
                     "Confirmed Base-served utility match",
                     "",
+                    ...segmentCells(segment, row.prop_id),
                     sources,
                   ])
                 )

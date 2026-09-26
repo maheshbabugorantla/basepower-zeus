@@ -14,6 +14,8 @@ import { PredictionProof, type ModelCardData } from "../components/PredictionPro
 import { getCountiesWithScoredHomes } from "../lib/counties.server";
 import { COUNTY_CANDIDATES } from "../lib/counties";
 import { StormRecordPanel, type StormRecordCounty } from "../components/StormRecordPanel";
+import { DecisionHeader } from "../components/DecisionHeader";
+import { getMarketRows, formatExpected } from "../lib/audiences.server";
 
 // M0-W1: server component. `force-dynamic` is required, not decorative —
 // this page must query api.county_outage at request time (the EAGLE-I
@@ -516,25 +518,105 @@ export default async function HomePage() {
 
   const outageData: OutageSummaryData = { distributors, countyContext };
 
+  // GTM P0: one row per scored county -- homes Base can serve and the
+  // model's expected adopters (sum of calibrated 12-month likelihoods).
+  const marketRows = await getMarketRows(scoredCountyFips);
+  const namedMarkets = (marketRows ?? [])
+    .map((r) => ({ ...r, name: scoredCounties.find((c) => c.fips === r.countyFips)?.name ?? r.countyFips }))
+    .sort((a, b) => b.expectedAdopters - a.expectedAdopters);
+  const marketTotals = namedMarkets.reduce(
+    (acc, r) => ({ homes: acc.homes + r.homes, expected: acc.expected + r.expectedAdopters }),
+    { homes: 0, expected: 0 }
+  );
+  const topMarket = namedMarkets.length > 1 ? namedMarkets[0] : null;
+
   return (
     <div style={{ display: "grid", gap: "var(--space-6)", maxWidth: "1000px" }}>
-      <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-1)" }}>
-        <h1
-          style={{
-            fontFamily: "var(--type-title-font-family)",
-            fontSize: "var(--type-title-font-size)",
-            fontWeight: "var(--type-title-font-weight)",
-            margin: 0,
-          }}
-        >
-          Overview
-        </h1>
+      <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-2)" }}>
+        <DecisionHeader
+          question="Where should Base focus outreach next?"
+          answer={
+            marketRows && marketRows.length > 0 ? (
+              <>
+                The model expects {formatExpected(marketTotals.expected)} of{" "}
+                {marketTotals.homes.toLocaleString("en-US")} homes Base can serve to add backup power in the next 12
+                months.
+                {topMarket ? (
+                  <>
+                    {" "}
+                    {topMarket.name} has the most: {formatExpected(topMarket.expectedAdopters)}.
+                  </>
+                ) : null}
+              </>
+            ) : (
+              "Model likelihoods are not loaded yet, so markets can't be compared."
+            )
+          }
+          evidence={{ href: "#model-proof", label: "how we know the model works" }}
+          next={{ href: "/ranking", label: "See neighborhoods" }}
+        />
         <p style={{ color: "var(--theme-ink-muted)", margin: 0, maxWidth: "70ch" }}>
           Real public data on Texas homes ({scoredCounties.map((c) => c.name).join(", ")}{" "}
           {scoredCounties.length > 1 ? "Counties" : "County"} so far), gated to owner-occupied
           single-family parcels, scored for Base Power outreach.
         </p>
       </div>
+
+      <Panel data-testid="markets-panel">
+        <h2
+          style={{
+            fontFamily: "var(--type-heading-font-family)",
+            fontSize: "var(--type-heading-font-size)",
+            fontWeight: "var(--type-heading-font-weight)",
+            marginTop: 0,
+          }}
+        >
+          Markets compared
+        </h2>
+        {marketRows === null ? (
+          <MissingState variant="not-loaded" reason="Model likelihoods not loaded yet" />
+        ) : (
+          <div style={{ overflowX: "auto" }}>
+            <table className="data-table" style={{ width: "100%" }}>
+              <thead>
+                <tr>
+                  <th scope="col">County</th>
+                  <th scope="col" style={{ textAlign: "right" }}>Homes Base can serve</th>
+                  <th scope="col" style={{ textAlign: "right" }}>Expected to add backup in 12 months</th>
+                  <th scope="col" style={{ textAlign: "right" }}>Per 1,000 homes</th>
+                  <th scope="col">Open</th>
+                </tr>
+              </thead>
+              <tbody>
+                {namedMarkets.map((m) => (
+                  <tr key={m.countyFips}>
+                    <td>{m.name}</td>
+                    <td style={{ textAlign: "right", fontFamily: "var(--type-data-font-family)" }}>
+                      {m.homes.toLocaleString("en-US")}
+                    </td>
+                    <td style={{ textAlign: "right", fontFamily: "var(--type-data-font-family)" }}>
+                      {formatExpected(m.expectedAdopters)}
+                    </td>
+                    <td style={{ textAlign: "right", fontFamily: "var(--type-data-font-family)" }}>
+                      {m.homes > 0 ? ((m.expectedAdopters / m.homes) * 1000).toFixed(1) : "not available"}
+                    </td>
+                    <td>
+                      <a href={`/ranking?county=${m.countyFips}`}>Neighborhoods</a>
+                      {" · "}
+                      <a href={`/audiences?county=${m.countyFips}`}>Audiences</a>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        <p style={{ margin: "var(--space-3) 0 0 0", fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)" }}>
+          Expected adopters are a model estimate: the sum of each home&rsquo;s calibrated likelihood of adding battery or
+          generator backup in the next 12 months. Outside Austin, the model extrapolates from Austin installs because no
+          other city publishes a permit feed.
+        </p>
+      </Panel>
 
       <Panel>
         <h2
@@ -657,6 +739,7 @@ export default async function HomePage() {
         >
           How we know it works
         </h2>
+        <span id="model-proof" />
         <PredictionProof modelCard={modelCard} />
       </Panel>
 

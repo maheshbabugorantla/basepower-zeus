@@ -10,16 +10,28 @@ import { usePathname } from "next/navigation";
 // page is reached from Ranking, not from its own top-level nav item, so
 // /home/* highlights "Ranking" as its active route.
 
+//
+// GTM P0: the nav now follows the order a growth team decides in -- where
+// to play (Markets, formerly Overview), which neighborhoods and homes
+// (Neighborhoods, formerly Ranking), who gets which message (Audiences),
+// where Base is absent but demand is proven (Attack list, formerly
+// Coverage gaps), and why to trust it (Proof, formerly Sources). Routes
+// are unchanged so existing links keep working.
 const ROUTES = [
-  { href: "/", label: "Overview" },
-  { href: "/ranking", label: "Ranking" },
-  { href: "/sources", label: "Sources" },
+  { href: "/", label: "Markets" },
+  { href: "/ranking", label: "Neighborhoods" },
+  { href: "/audiences", label: "Audiences" },
+  { href: "/ranking/coverage", label: "Attack list" },
+  { href: "/sources", label: "Proof" },
 ] as const;
 
 function isActive(pathname: string | null, href: string): boolean {
   if (pathname === null) return false;
   if (href === "/") return pathname === "/";
-  if (href === "/ranking") return pathname === "/ranking" || pathname.startsWith("/home/");
+  if (href === "/ranking") {
+    if (pathname.startsWith("/ranking/coverage")) return false;
+    return pathname === "/ranking" || pathname.startsWith("/home/");
+  }
   return pathname === href || pathname.startsWith(`${href}/`);
 }
 

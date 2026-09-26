@@ -220,7 +220,8 @@ export function ScoreExplainer({ propId, weights }: ScoreExplainerProps) {
   return (
     <div style={{ display: "grid", gap: "var(--space-4)" }}>
       <p style={{ margin: 0, color: "var(--theme-ink-muted)", maxWidth: "70ch" }}>
-        Score = a weighted average of this home&apos;s percentile on each signal below; signals with no
+        Score = a weighted average of this home&apos;s term on each signal below (its real value divided by a fixed
+        anchor, capped at 1); signals with no
         data are left out of the average, not counted as zero.
       </p>
       <div>

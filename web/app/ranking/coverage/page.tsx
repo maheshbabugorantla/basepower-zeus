@@ -6,6 +6,7 @@ import { CoverageLegend, CoverageMap } from "../../../components/CoverageGaps";
 import type { CoverageBucketCount } from "../../../components/coverageZones";
 import { getCountiesWithScoredHomes } from "../../../lib/counties.server";
 import { resolveCounty } from "../../../lib/counties";
+import { DecisionHeader } from "../../../components/DecisionHeader";
 
 // M2-P11: "where Base is not yet, but backup demand is proven" -- a
 // choropleth of Travis block groups bucketed into 4 zones (see
@@ -45,29 +46,39 @@ export default async function CoveragePage({
   ]);
   const county = resolveCounty(requestedCounty, availableCounties);
   const isTravis = county.fips === "48453";
+  const otherBackupHomes = bucketCounts.find((b) => b.bucket === "other_backup")?.homeCount;
+  const baseCustomerHomes = bucketCounts.find((b) => b.bucket === "base_customer")?.homeCount;
 
   return (
     <div style={{ display: "grid", gap: "var(--space-4)" }}>
       <nav aria-label="Breadcrumb" className="breadcrumb">
-        <Link href="/ranking">Ranking</Link>
+        <Link href="/ranking">Neighborhoods</Link>
         <span className="breadcrumb__separator" aria-hidden="true">
           /
         </span>
-        <span>Coverage gaps</span>
+        <span>Attack list</span>
       </nav>
 
       <div>
-        <h1
-          style={{
-            fontFamily: "var(--type-title-font-family)",
-            fontSize: "var(--type-title-font-size)",
-            fontWeight: "var(--type-title-font-weight)",
-            margin: 0,
-          }}
-        >
-          Where Base isn&rsquo;t yet, but backup demand is proven
-        </h1>
-        <p style={{ color: "var(--theme-ink-muted)", margin: "var(--space-1) 0 0 0", maxWidth: "80ch" }}>
+        <DecisionHeader
+          question="Where is backup demand proven, but Base isn't there yet?"
+          answer={
+            isTravis && otherBackupHomes !== undefined && baseCustomerHomes !== undefined ? (
+              <>
+                {otherBackupHomes.toLocaleString("en-US")} {county.name} homes already bought backup from another
+                installer; {baseCustomerHomes.toLocaleString("en-US")} are Base customers. Start with the yellow block
+                groups: someone there already paid for backup, and Base has no customer there yet.
+              </>
+            ) : isTravis ? (
+              "Coverage counts are not loaded yet."
+            ) : (
+              `No public permit feed covers ${county.name} yet, so demand can't be observed here.`
+            )
+          }
+          evidence={{ href: "/sources", label: "City of Austin permits joined to the appraisal roll" }}
+          next={{ href: `/audiences?county=${county.fips}`, label: "Pick audiences" }}
+        />
+        <p style={{ color: "var(--theme-ink-muted)", margin: "var(--space-2) 0 0 0", maxWidth: "80ch" }}>
           {county.name} County block groups, bucketed from the City of Austin permit file joined to the TCAD
           parcel roll -- never a per-address label of who has backup or which installer.
           {!isTravis ? (
