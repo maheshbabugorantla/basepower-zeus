@@ -90,13 +90,30 @@ class RankingEvaluation:
     default_weights_used: dict[str, float] = field(default_factory=dict)
 
 
+# core.default_weights' signal_key values (the scoring-function weight
+# keys) vs this evaluation's feature names -- 'backup_intent' and
+# 'home_permits' are computed here AS OF the cutoff (peer rate / own
+# permits before the cutoff), so they're named with an '_asof' suffix to
+# make that explicit; every other key matches core.default_weights
+# exactly.
+DEFAULT_WEIGHT_KEY_TO_SIGNAL = {
+    "backup_intent_asof": "backup_intent",
+    "home_permits_asof": "home_permits",
+}
+
+
 def _default_weights(conn) -> dict[str, float]:
     with conn.cursor() as cur:
         cur.execute("select signal_key, weight from core.default_weights")
         rows = {k: float(w) for k, w in cur.fetchall()}
     # Only the keys this evaluation actually scores homes on (flood is
     # penalty-only and installability wasn't part of the adoption study).
-    return {k: rows[k] for k in SINGLE_SIGNAL_KEYS if k in rows}
+    out: dict[str, float] = {}
+    for key in SINGLE_SIGNAL_KEYS:
+        signal_key = DEFAULT_WEIGHT_KEY_TO_SIGNAL.get(key, key)
+        if signal_key in rows:
+            out[key] = rows[signal_key]
+    return out
 
 
 def _load_population(conn, *, cutoff: date) -> list[dict]:
@@ -111,9 +128,9 @@ def _load_population(conn, *, cutoff: date) -> list[dict]:
             """
             with eligible as (
                 select s.prop_id, s.geo_id, s.block_group_geoid,
-                       s.age65_term, s.electric_heat_term, s.empower_term,
-                       s.outage_term, s.home_value_term,
-                       case when s.owner_65 is null then null else s.owner_65::numeric end as owner_65
+                       s.age65_term as age65, s.electric_heat_term as electric_heat, s.empower_term as empower,
+                       s.outage_term as outage, s.home_value_term as home_value,
+                       case when s.owner_65 is null then null else s.owner_65::int::numeric end as owner_65
                 from core.mv_home_signals s
                 where s.gate_reason is null
                   and s.permit_null_reason is null
@@ -153,30 +170,30 @@ def _load_population(conn, *, cutoff: date) -> list[dict]:
                 group by block_group_geoid
             ),
             own_backup_asof as (
-                select p.tcad_id,
+                select p.geo_id as tcad_id,
                        count(distinct pm.permit_number) as own_backup_asof
                 from core.parcels p
                 join core.permits pm on pm.tcad_id = p.geo_id
                 join core.permit_labels pl
                   on pl.permit_number = pm.permit_number and pl.labeller = 'rules'
                 where pl.label in ('battery', 'generator') and pm.issue_date < %(cutoff)s
-                group by p.tcad_id
+                group by p.geo_id
             ),
             outcome as (
-                select p.tcad_id, true as adopted
+                select p.geo_id as tcad_id, true as adopted
                 from core.parcels p
                 join core.permits pm on pm.tcad_id = p.geo_id
                 join core.permit_labels pl
                   on pl.permit_number = pm.permit_number and pl.labeller = 'rules'
                 where pl.label in ('battery', 'generator')
                   and pm.issue_date >= %(cutoff)s
-                group by p.tcad_id
+                group by p.geo_id
             )
             select
                 e.prop_id,
-                e.age65_term, e.electric_heat_term, e.empower_term, e.outage_term,
-                e.home_value_term, e.owner_65,
-                coalesce(oa.home_permits_asof, false)::numeric as home_permits_asof,
+                e.age65, e.electric_heat, e.empower, e.outage,
+                e.home_value, e.owner_65,
+                coalesce(oa.home_permits_asof, false)::int::numeric as home_permits_asof,
                 case
                     when bhc.homes_gated - 1 <= 0 then null
                     when bb.backup_permits_asof is null then null
@@ -203,7 +220,7 @@ def _load_population(conn, *, cutoff: date) -> list[dict]:
     # peer rate across this same population (same anchoring method as
     # core.signal_anchors['backup_intent'], recomputed on the as-of-cutoff
     # population since the live anchor reflects today's permits).
-    raw_rates = sorted(r["backup_intent_asof_raw"] for r in rows if r["backup_intent_asof_raw"] is not None)
+    raw_rates = sorted(float(r["backup_intent_asof_raw"]) for r in rows if r["backup_intent_asof_raw"] is not None)
     anchor = _percentile(raw_rates, 0.9) if raw_rates else None
     for r in rows:
         raw = r.pop("backup_intent_asof_raw")
