@@ -46,7 +46,17 @@ describe.skipIf(!process.env.POSTGRES_URL_READONLY)("M2-W5 score breakdown + sum
 
   it("api.home_score_breakdown's contributions sum to the ranked score on 3 real homes (±0.001)", async () => {
     const weights = equalWeights();
-    for (const propId of REAL_HOMES_WITH_STORED_SUMMARY) {
+    const firstPage = await (
+      await topHomesPOST(
+        new Request("http://localhost/api/top-homes", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ weights, countyFips: TRAVIS_COUNTY_FIPS, pageSize: 3 }),
+        })
+      )
+    ).json();
+    const homesOnFirstPage: string[] = firstPage.rows.map((r: { propId: string }) => r.propId);
+    for (const propId of homesOnFirstPage) {
       const rankedResponse = await topHomesPOST(
         new Request("http://localhost/api/top-homes", {
           method: "POST",

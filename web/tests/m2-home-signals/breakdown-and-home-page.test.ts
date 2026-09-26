@@ -16,9 +16,6 @@ async function findAGatedPropId(): Promise<string | null> {
 }
 
 describe.skipIf(!process.env.POSTGRES_URL)("api.home_score_breakdown — M2-P8 anchored terms", () => {
-  afterAll(async () => {
-    await getPool().end();
-  });
 
   it(
     "returns a real term (0-1) and anchor for signals with an anchor, never a bare percentile as the score input",
@@ -47,9 +44,6 @@ describe.skipIf(!process.env.POSTGRES_URL)("api.home_score_breakdown — M2-P8 a
 });
 
 describe.skipIf(!process.env.POSTGRES_URL)("/home/[prop_id] — M2-P8 built year + own-permit facts", () => {
-  afterAll(async () => {
-    await getPool().end();
-  });
 
   it(
     "renders a plain 'Built <year>' line and this home's own permit facts, with no schema names on screen",

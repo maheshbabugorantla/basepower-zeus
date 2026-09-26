@@ -23,10 +23,14 @@ describe.skipIf(!process.env.POSTGRES_URL)("RankingPage", () => {
       // api.top_homes_weighted (score v1, equal weights for the
       // server-rendered first paint), not the retired v0 api.top_homes
       // view — see 0201_m2.sql / app/ranking/page.tsx.
-      const equalWeights = { outage: 1, flood: 1, empower: 1, age65: 1, electric_heat: 1, backup_intent: 1 };
+      // First paint uses the evidence-based defaults (api.default_weights).
+      const defaults = await query<{ signal_key: string; weight: string | number }>(
+        `select signal_key, weight from api.default_weights`
+      );
+      const weights = Object.fromEntries(defaults.map((d) => [d.signal_key, Number(d.weight)]));
       const topHomes = await query<{ prop_id: string }>(
-        `select prop_id from api.top_homes_weighted($1::jsonb, $2::text)`,
-        [JSON.stringify(equalWeights), "48453"]
+        `select prop_id from api.homes_ranked_weighted($1::jsonb, $2::text, null, null, null, 10)`,
+        [JSON.stringify(weights), "48453"]
       );
 
       const html = renderToStaticMarkup(await RankingPage());
