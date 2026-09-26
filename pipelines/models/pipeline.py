@@ -475,9 +475,14 @@ def score(conn: psycopg.Connection, *, metrics: dict) -> None:
 
     county_mean = score_df.groupby("county_fips")["p_install_12m"].transform("mean")
     score_df["relative_to_county"] = score_df["p_install_12m"] / county_mean
+    # decile 1 = highest p_install_12m within the home's county, decile 10
+    # = lowest (core.home_propensity's own contract, 0401_propensity.sql).
+    # rank(ascending=False) gives the top value pct -> 1/n (small), the
+    # bottom value pct -> 1.0 (large), so int(pct*10)+1 maps top->1,
+    # bottom->10 -- the previous ascending rank had this backwards.
     score_df["decile"] = (
         score_df.groupby("county_fips")["p_install_12m"]
-        .rank(pct=True, method="average")
+        .rank(pct=True, method="average", ascending=False)
         .apply(lambda pct: min(10, int(pct * 10) + 1))
     )
 
@@ -555,6 +560,13 @@ def main(argv: list[str] | None = None) -> int:
     from pipelines.core import db  # sibling top-level package pipelines/pipelines (cwd=pipelines/)
 
     with db.connect(pooled=False) as conn:
+        # M3 integration (Harris + Williamson): the as-of feature query
+        # now scans ~3x the gated-home population, and the session
+        # pooler's default statement_timeout (a few minutes) cancels it
+        # mid-query. This is a CLI-only, long-running backfill command
+        # (never the cron/request path, which stays on the pooled,
+        # short-timeout connection), so raising it here is safe.
+        conn.execute("set statement_timeout = 0")
         metrics = train_and_evaluate(conn)
         print(json.dumps({k: v for k, v in metrics.items() if k != "calibration"}, indent=2))
         if argv[0] == "score":

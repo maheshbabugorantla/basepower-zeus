@@ -92,7 +92,7 @@ LATEST_YEAR = 2025
 BERYL_YEAR = 2024
 BERYL_MONTH_PREFIX = "2024-07"
 
-TARGET_COUNTIES = {"48453": "Travis", "48201": "Harris"}
+TARGET_COUNTIES = {"48453": "Travis", "48201": "Harris", "48491": "Williamson"}
 
 TUS_CHUNK_BYTES = 6 * 1024 * 1024  # Supabase's documented resumable-upload chunk size
 
