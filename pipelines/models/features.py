@@ -78,6 +78,12 @@ with eligible as (
     from core.mv_home_signals s
     left join core.acs_income_age_bg ia on ia.geoid = s.block_group_geoid
     where s.gate_reason is null
+      -- Training/test (exclude_before = true) use only homes whose installs
+      -- are observable: inside the City of Austin permit area. Homes with no
+      -- permit feed (Harris, Williamson, outside Austin) would otherwise enter
+      -- as "did not install" and inflate AUC; they are still SCORED
+      -- (exclude_before = false) and flagged extrapolated_from.
+      and (%(exclude_before)s = false or s.permit_null_reason is null)
       and (
           %(exclude_before)s = false
           or not exists (
