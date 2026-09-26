@@ -39,6 +39,9 @@ SCAN_DIRS = ("pipelines", "web", "supabase")
 # installs run, plus VCS/build noise.
 SKIP_DIR_NAMES = {
     "node_modules",
+    # web/public/maplibre: vendor worker copied from node_modules at build time
+    # (web/scripts/copy-maplibre-worker.mjs), git-ignored third-party code.
+    "maplibre",
     ".next",
     ".venv",
     "venv",
