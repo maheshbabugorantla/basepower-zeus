@@ -1,0 +1,6 @@
+# Raw source files are stored with Git LFS (mirror of Supabase Storage `raw`; the manifest is the source of truth).
+data/raw/** filter=lfs diff=lfs merge=lfs -text
+# Small provenance sidecars stay as plain text.
+data/raw/**/SHA256SUMS -filter -diff -merge text
+data/raw/**/retrieved_at.txt -filter -diff -merge text
+data/raw/**/*.source.md -filter -diff -merge text

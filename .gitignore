@@ -3,8 +3,8 @@
 .env.*
 !.env.example
 
-# raw data never goes in git (it lives in Supabase Storage)
-data/raw/
+# raw data is committed via Git LFS (see .gitattributes); unzipped extracts are not
+data/raw/**/unzipped/
 
 # tooling
 .vercel/
