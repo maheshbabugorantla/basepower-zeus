@@ -56,7 +56,7 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints, Validation
 from pipelines.core import config, db, runs
 
 SOURCE = "home_summaries"
-PROMPT_VERSION = 3
+PROMPT_VERSION = 4
 TRAVIS_COUNTY_FIPS = "48453"
 TOP_N = 500
 # The 3 real homes pipelines/tests/test_home_summaries.py's live-DB tests
@@ -482,7 +482,7 @@ def call_gemini(
 
 JEV_ENDPOINT = "https://api.typesafe.ai/v1/systemone"
 JEV_MODEL = "jev-latest"
-JEV_OK_MIN_CONFIDENCE = 0.5
+JEV_OK_MIN_CONFIDENCE = 0.5  # OK confidence = 1 - worst failure probability
 MAX_ATTEMPTS = 3
 
 
@@ -490,31 +490,73 @@ def jev_api_key() -> str:
     return _require_env("TYPESAFE_AI_JEV_API_KEY")
 
 
+# One yes/no (Noul) question per failure mode, each with explicit meanings
+# for yes and no. A single forced Choice let "ok" lose to loosely worded
+# failure options (310 of 330 correct briefings judged household_overclaim);
+# separate Nouls score each failure independently (measured on real replies:
+# correct briefing <= 0.07 on every mode; real overclaim 0.96; real cut-off 0.97).
+JEV_FAILURE_THRESHOLD = 0.5
+
+JEV_NOULS: dict[FailureMode, dict[str, Any]] = {
+    FailureMode.CUT_OFF: {
+        "instructions": "Is `briefing` unfinished, i.e. does it stop mid-sentence or end without a complete final sentence?",
+        "criteria": {"true": "Stops mid-sentence or trails off", "false": "Every sentence is complete"},
+    },
+    FailureMode.UNGROUNDED: {
+        "instructions": "Does `briefing` state any number or claim that is not supported by `facts`?",
+        "criteria": {"true": "Contains a number or claim absent from or contradicting `facts`", "false": "Every number and claim appears in `facts`"},
+    },
+    FailureMode.WRONG_VOICE: {
+        "instructions": "Does `briefing` address the homeowner directly as 'you' or 'your'?",
+        "criteria": {"true": "Uses you/your toward the homeowner", "false": "Talks about 'this home' or 'this neighborhood' in the third person"},
+    },
+    FailureMode.HOUSEHOLD_OVERCLAIM: {
+        "instructions": "Some `facts` are neighborhood figures (block-group or ZIP shares). Does `briefing` claim that THIS specific household or homeowner has one of those traits?",
+        "criteria": {
+            "true": "States a neighborhood share as a fact about this household, e.g. 'the homeowner is over 65' or 'this home heats with electricity'",
+            "false": "Neighborhood figures are attributed to the neighborhood or area, e.g. 'in this neighborhood, 25.6% are 65+'",
+        },
+    },
+    FailureMode.FORMATTING: {
+        "instructions": "Does `briefing` contain headings, bullet lists, markdown symbols, or drafting notes?",
+        "criteria": {"true": "Has headings, lists, markdown or drafting notes", "false": "Plain prose only"},
+    },
+    FailureMode.OFF_TASK: {
+        "instructions": "Is `briefing` about something other than why this home ranks for a home-battery outreach conversation?",
+        "criteria": {"true": "Off topic", "false": "Explains why this home ranks for outreach"},
+    },
+}
+
+
+def verdict_from_nouls(nouls: dict[FailureMode, float], judge_model: str) -> Verdict:
+    """Pure: the most likely failure at or above the threshold, else OK.
+    Confidence is that failure's probability, or 1 - the largest failure
+    probability for OK."""
+    worst_mode, worst_p = max(nouls.items(), key=lambda kv: kv[1])
+    if worst_p >= JEV_FAILURE_THRESHOLD:
+        return Verdict(mode=worst_mode, confidence=worst_p, judge_model=judge_model)
+    return Verdict(mode=FailureMode.OK, confidence=1.0 - worst_p, judge_model=judge_model)
+
+
 def judge_briefing(briefing: Briefing, facts_text: str, *, api_key: str, timeout: float = 30.0) -> Verdict:
-    """Asks Jev one Choice question over the typed briefing and the facts;
-    returns a typed Verdict. Raises GenerationFailed(JUDGE_UNAVAILABLE) on
-    any transport or shape problem."""
+    """One Jev call asking every failure-mode Noul at once (speculative
+    fan-out); returns a typed Verdict. Raises GenerationFailed(JUDGE_UNAVAILABLE)
+    on any transport or shape problem."""
     try:
         resp = httpx.post(
             JEV_ENDPOINT,
             headers={"Authorization": f"Bearer {api_key}"},
             json={
                 "model": JEV_MODEL,
-                "state": {"facts": facts_text, "briefing": briefing.model_dump()},
-                "questions": {
-                    "failure_mode": {
-                        "type": "choice",
-                        "instructions": "Judge this outreach briefing (`briefing`, read in field order) written from `facts` for a Base Power rep.",
-                        "criteria": {m.value: d for m, d in JEV_FAILURE_MODES.items()},
-                    }
-                },
+                "state": {"facts": facts_text, "briefing": briefing.text()},
+                "questions": {m.value: {"type": "noul", **q} for m, q in JEV_NOULS.items()},
             },
             timeout=timeout,
         )
         resp.raise_for_status()
         data = resp.json()
-        ans = data["answers"]["failure_mode"]
-        return Verdict(mode=FailureMode(ans["choice"]), confidence=ans["confidence"], judge_model=data.get("model", JEV_MODEL))
+        nouls = {m: float(data["answers"][m.value]["noul"]) for m in JEV_NOULS}
+        return verdict_from_nouls(nouls, data.get("model", JEV_MODEL))
     except (httpx.HTTPError, KeyError, ValueError, ValidationError) as exc:
         raise GenerationFailed(FailureMode.JUDGE_UNAVAILABLE, type(exc).__name__) from exc
 

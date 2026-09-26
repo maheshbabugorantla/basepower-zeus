@@ -231,5 +231,13 @@ def test_live_jev_answer_is_a_typed_verdict():
     briefing, facts_text = _real_briefing(REAL_PROP_IDS[0])
     verdict = hs.judge_briefing(briefing, facts_text, api_key=hs.jev_api_key())
     assert isinstance(verdict, hs.Verdict)
-    assert verdict.mode in set(hs.JEV_FAILURE_MODES)
+    assert isinstance(verdict.mode, hs.FailureMode)
     assert 0.0 <= verdict.confidence <= 1.0
+
+
+def test_verdict_from_nouls_is_ok_only_when_every_failure_is_unlikely():
+    low = {m: 0.07 for m in hs.JEV_NOULS}
+    assert hs.verdict_from_nouls(low, "jev-test").mode is hs.FailureMode.OK
+    high = dict(low, **{hs.FailureMode.HOUSEHOLD_OVERCLAIM: 0.96, hs.FailureMode.UNGROUNDED: 0.85})
+    v = hs.verdict_from_nouls(high, "jev-test")
+    assert v.mode is hs.FailureMode.HOUSEHOLD_OVERCLAIM and v.confidence == 0.96
