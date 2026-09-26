@@ -99,7 +99,7 @@ interface GateCountsRow {
   total_parcels: string | number;
   single_family_count: string | number;
   homestead_count: string | number;
-  gated_count: string | number;
+  gated_count: string | number | null;
   source: string | null;
   url: string | null;
   retrieved_at: string | Date | null;
@@ -128,7 +128,7 @@ interface GateCounts {
    * M1 gate) contains, since core.mv_home_signals has one row per home in
    * that population regardless of the M2 territory-gate outcome.
    */
-  gatedCount: number;
+  gatedCount: number | null;
   source: (Omit<ProvenancePopoverProps, "children" | "id">) | null;
 }
 
@@ -139,7 +139,7 @@ async function getGateCounts(): Promise<GateCounts | null> {
          pgc.total_parcels,
          pgc.single_family_count,
          pgc.homestead_count,
-         (select coalesce(sum(home_count), 0) from api.gate_counts) as gated_count,
+         (select sum(home_count) from api.gate_counts) as gated_count,
          s.source, s.url, s.retrieved_at, s.sha256, s.storage_key, s.runner,
          s.latest_run_id, s.latest_run_rows_in, s.latest_run_rows_loaded
        from api.parcel_gate_counts pgc
@@ -160,7 +160,7 @@ async function getGateCounts(): Promise<GateCounts | null> {
       totalParcels: Number(row.total_parcels),
       singleFamilyCount: Number(row.single_family_count),
       homesteadCount: Number(row.homestead_count),
-      gatedCount: Number(row.gated_count),
+      gatedCount: row.gated_count === null ? null : Number(row.gated_count),
       source: hasSource
         ? {
             dataset: row.source as string,
@@ -282,7 +282,7 @@ export default async function HomePage() {
             <StatRow
               id="overview-gated"
               label="Gated for ranking (single-family + homestead + parcel geometry)"
-              value={gateCounts.gatedCount.toLocaleString()}
+              value={gateCounts.gatedCount === null ? "not loaded" : gateCounts.gatedCount.toLocaleString()}
               unit="homes"
               source={gateCounts.source}
               linkHref="/ranking"
