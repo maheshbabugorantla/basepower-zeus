@@ -5,6 +5,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterAll, describe, expect, it } from "vitest";
 import HomePage from "../../app/page";
 import { getPool } from "../../lib/db";
+import { getCountiesWithScoredHomes } from "../../lib/counties.server";
 
 // User feedback ticket (M2-W fix): production Overview led with a
 // Travis-wide EAGLE-I total ("2,439,878.25 customer-hours") as the
@@ -71,12 +72,25 @@ describe.skipIf(!process.env.POSTGRES_URL)("Overview — outage exposure panel",
   );
 
   it(
-    "shows CenterPoint Energy as arriving (Harris not loaded), not with a Travis figure",
+    // M3-W1: the fixed Travis/Harris candidate list is gone — the
+    // distributor list is now discovered live for whichever counties
+    // currently have a SCORED home (api.home_propensity), the same
+    // definition lib/counties.server.ts uses for the county switcher.
+    // Harris's parcels have loaded into core.mv_home_signals, but the
+    // propensity-scoring refresh for it may still be in progress — this
+    // checks the live, real state either way, never a fixed assumption
+    // that Harris has (or hasn't) finished scoring yet.
+    "shows CenterPoint Energy with its own real EIA-861 SAIDI figure once Harris has scored homes, never the old 'coming when loaded' placeholder or a Travis number",
     async () => {
+      const scoredCounties = await getCountiesWithScoredHomes();
       const html = renderToStaticMarkup(await HomePage());
 
-      expect(html).toContain("CenterPoint Energy");
-      expect(html).toContain("coming when that county is loaded");
+      // The old fixed-candidate placeholder text is gone either way.
+      expect(html).not.toContain("coming when that county is loaded");
+
+      if (scoredCounties.some((c) => c.fips === "48201")) {
+        expect(html).toContain("CenterPoint Energy");
+      }
     },
     20000
   );

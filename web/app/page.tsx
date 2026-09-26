@@ -11,6 +11,9 @@ import {
 import { StatRow, StatList } from "../components/ui/StatRow";
 import { PermitTimelinePanel, type PermitQuarterRow } from "../components/PermitTimelinePanel";
 import { PredictionProof, type ModelCardData } from "../components/PredictionProof";
+import { getCountiesWithScoredHomes } from "../lib/counties.server";
+import { COUNTY_CANDIDATES } from "../lib/counties";
+import { StormRecordPanel, type StormRecordCounty } from "../components/StormRecordPanel";
 
 // M0-W1: server component. `force-dynamic` is required, not decorative —
 // this page must query api.county_outage at request time (the EAGLE-I
@@ -39,26 +42,23 @@ const OUTAGE_YEAR = 2025;
 // homes (ground-truthed against core.mv_home_signals: Austin Energy and
 // Oncor). CenterPoint is Base-served too but serves Harris, not Travis, so
 // it is listed but marked as arriving once Harris loads, never faked with
-// a Travis figure. This eia_id/base_name pairing is a small, fixed list of
-// real EIA-861 utility identifiers (documented in
-// supabase/migrations/0201_m2.sql's core.territories comment), not
-// fabricated data — the query below still reads every value (SAIDI, year,
-// early_release, provenance) live from core.utility_reliability.
-const DISTRIBUTOR_CANDIDATES: { baseName: string; eiaId: string; county: string }[] = [
-  { baseName: "Austin Energy", eiaId: "1015", county: TRAVIS_COUNTY_NAME },
-  { baseName: "Oncor", eiaId: "44372", county: TRAVIS_COUNTY_NAME },
-  { baseName: "CenterPoint Energy", eiaId: "8901", county: "Harris" },
-];
+// a Travis figure. This eia_id/base_name pairing used to be a small,
+// fixed candidate array (documented in supabase/migrations/0201_m2.sql's
+// core.territories comment) -- M3-W1 replaces that fixed list with a
+// data-driven one: whatever distributor(s) actually cover a gate-passed
+// home in a county that has scored homes, discovered from
+// core.mv_home_signals itself (indexed on county_fips/territory_eia_id,
+// migration 0208), never a candidate list chosen ahead of what loaded.
 
 interface DistributorReliabilityDbRow {
   base_name: string;
   eia_id: string;
+  county_fips: string;
   distributor_name: string | null;
   year: number | null;
   saidi_incl_major: string | number | null;
   saidi_incl_major_null_reason: string | null;
   early_release: boolean | null;
-  in_loaded_county: boolean;
   source: string | null;
   url: string | null;
   retrieved_at: string | Date | null;
@@ -72,34 +72,35 @@ interface DistributorReliabilityDbRow {
 
 /**
  * Per-distributor EIA-861 reliability (SAIDI incl. major events), latest
- * year first, for the Base-served distributors in DISTRIBUTOR_CANDIDATES.
- * `in_loaded_county` is an index probe on precomputed per-home territory
- * (core.mv_home_signals, index from migration 0208) — no request-time
- * spatial join — so a distributor with no loaded homes in the county
- * (CenterPoint/Harris, currently)
- * is reported as such instead of being silently included or excluded.
+ * year first, for every distributor that actually covers a gate-passed
+ * home in one of `countyFipsList` -- discovered live, not a fixed
+ * candidate array. `distinct` is over an already-indexed pair of columns
+ * on the materialized core.mv_home_signals, not a live spatial join.
  */
-async function getDistributorReliability(): Promise<DistributorReliabilityRow[]> {
+async function getDistributorReliability(
+  countyFipsList: string[]
+): Promise<DistributorReliabilityRow[]> {
   try {
-    const eiaIds = DISTRIBUTOR_CANDIDATES.map((d) => d.eiaId);
     const rows = await query<DistributorReliabilityDbRow>(
-      `select
+      `with present as (
+         select distinct county_fips, territory_eia_id
+         from core.mv_home_signals
+         where county_fips = any($1::text[]) and territory_eia_id is not null
+       )
+       select
          cw.base_name,
          t.eia_id,
+         p.county_fips,
          ur.utility_name as distributor_name,
          ur.year,
          ur.saidi_incl_major,
          ur.saidi_incl_major_null_reason,
          ur.early_release,
-         exists (
-           select 1 from core.mv_home_signals h
-           where h.county_fips = $1
-             and h.territory_eia_id = t.eia_id::text
-         ) as in_loaded_county,
          s.source, s.url, s.retrieved_at, s.sha256, s.storage_key, s.runner,
          s.latest_run_id, s.latest_run_rows_in, s.latest_run_rows_loaded
-       from core.utility_crosswalk cw
-       join core.territories t on t.eia_id = cw.eia_utility_number
+       from present p
+       join core.territories t on t.eia_id::text = p.territory_eia_id
+       join core.utility_crosswalk cw on cw.eia_utility_number = t.eia_id
        left join lateral (
          select r.utility_name, r.year, r.saidi_incl_major,
                 r.saidi_incl_major_null_reason, r.early_release, r.source_id
@@ -109,26 +110,13 @@ async function getDistributorReliability(): Promise<DistributorReliabilityRow[]>
          limit 1
        ) ur on true
        left join api.sources s on s.source_id = ur.source_id
-       where cw.eia_utility_number = any($2::text[])`,
-      [TRAVIS_COUNTY_FIPS, eiaIds]
+       order by p.county_fips, cw.base_name`,
+      [countyFipsList]
     );
 
-    const byEiaId = new Map(rows.map((r) => [r.eia_id, r]));
+    const countyNameByFips = new Map(COUNTY_CANDIDATES.map((c) => [c.fips, c.name]));
 
-    return DISTRIBUTOR_CANDIDATES.map((candidate) => {
-      const row = byEiaId.get(candidate.eiaId);
-      if (!row) {
-        return {
-          baseName: candidate.baseName,
-          county: candidate.county,
-          inLoadedCounty: false,
-          year: null,
-          saidiInclMajor: null,
-          earlyRelease: false,
-          source: null,
-        };
-      }
-
+    return rows.map((row) => {
       const hasSource =
         row.source !== null &&
         row.url !== null &&
@@ -138,12 +126,11 @@ async function getDistributorReliability(): Promise<DistributorReliabilityRow[]>
         row.runner !== null;
 
       return {
-        baseName: candidate.baseName,
-        county: candidate.county,
-        inLoadedCounty: row.in_loaded_county,
+        baseName: row.base_name,
+        county: countyNameByFips.get(row.county_fips) ?? row.county_fips,
+        inLoadedCounty: true,
         year: row.year,
-        saidiInclMajor:
-          row.saidi_incl_major === null ? null : Number(row.saidi_incl_major),
+        saidiInclMajor: row.saidi_incl_major === null ? null : Number(row.saidi_incl_major),
         earlyRelease: row.early_release ?? false,
         source: hasSource
           ? {
@@ -165,15 +152,7 @@ async function getDistributorReliability(): Promise<DistributorReliabilityRow[]>
     });
   } catch (err) {
     console.error("page: failed to load core.utility_reliability", err);
-    return DISTRIBUTOR_CANDIDATES.map((candidate) => ({
-      baseName: candidate.baseName,
-      county: candidate.county,
-      inLoadedCounty: false,
-      year: null,
-      saidiInclMajor: null,
-      earlyRelease: false,
-      source: null,
-    }));
+    return [];
   }
 }
 
@@ -258,6 +237,57 @@ async function getCountyOutageContext(): Promise<CountyOutageContext | null> {
         }
       : null,
   };
+}
+
+interface OutageMetricDbRow {
+  county_fips: string;
+  metric: string;
+  value: string | number | null;
+  value_null_reason: string | null;
+  source_ids: string[];
+}
+
+/**
+ * api.outage_metrics_county (M3-P3) for every county with scored homes --
+ * the longest continuous outage event (>=1% of the county's estimated
+ * customers out at once -- eaglei_metrics.py's MAJOR_EVENT_MIN_SHARE, a
+ * team threshold, not ERCOT's or EAGLE-I's own) and the July 2024
+ * Hurricane Beryl peak. A county absent from the table (pipeline hasn't
+ * run for it yet) is left out of the returned list entirely -- never a
+ * zero-filled row.
+ */
+async function getStormRecords(countyFipsList: string[]): Promise<StormRecordCounty[]> {
+  try {
+    const rows = await query<OutageMetricDbRow>(
+      `select county_fips, metric, value, value_null_reason, source_ids
+       from api.outage_metrics_county
+       where county_fips = any($1::text[])`,
+      [countyFipsList]
+    );
+    const countyNameByFips = new Map(COUNTY_CANDIDATES.map((c) => [c.fips, c.name]));
+    const byCounty = new Map<string, Map<string, OutageMetricDbRow>>();
+    for (const row of rows) {
+      if (!byCounty.has(row.county_fips)) byCounty.set(row.county_fips, new Map());
+      byCounty.get(row.county_fips)!.set(row.metric, row);
+    }
+
+    const toNum = (r: OutageMetricDbRow | undefined): number | null =>
+      r && r.value !== null ? Number(r.value) : null;
+
+    return Array.from(byCounty.entries()).map(([fips, metrics]) => ({
+      countyFips: fips,
+      countyName: countyNameByFips.get(fips) ?? fips,
+      longestEventHours: toNum(metrics.get("longest_event_hours")),
+      longestEventPeakCustomers: toNum(metrics.get("longest_event_peak_customers")),
+      longestEventStartEpoch: toNum(metrics.get("longest_event_start_epoch")),
+      longestEventEndEpoch: toNum(metrics.get("longest_event_end_epoch")),
+      berylPeakCustomers: toNum(metrics.get("beryl_2024_07_peak_customers")),
+      berylPeakShare: toNum(metrics.get("beryl_2024_07_peak_share")),
+    }));
+  } catch (err) {
+    console.error("page: failed to load api.outage_metrics_county", err);
+    return [];
+  }
 }
 
 interface GateCountsRow {
@@ -470,15 +500,18 @@ async function getSourcesLoadedCount(): Promise<number | null> {
 }
 
 export default async function HomePage() {
-  const [distributors, countyContext, gateCounts, topHomesCount, sourcesLoadedCount, permitTimeline, modelCard] =
+  const scoredCounties = await getCountiesWithScoredHomes();
+  const scoredCountyFips = scoredCounties.map((c) => c.fips);
+  const [distributors, countyContext, gateCounts, topHomesCount, sourcesLoadedCount, permitTimeline, modelCard, stormRecords] =
     await Promise.all([
-      getDistributorReliability(),
+      getDistributorReliability(scoredCountyFips),
       getCountyOutageContext(),
       getGateCounts(),
       getTopHomesCount(),
       getSourcesLoadedCount(),
       getPermitTimelineByQuarter(),
       getModelCard(),
+      getStormRecords(scoredCountyFips),
     ]);
 
   const outageData: OutageSummaryData = { distributors, countyContext };
@@ -497,8 +530,9 @@ export default async function HomePage() {
           Overview
         </h1>
         <p style={{ color: "var(--theme-ink-muted)", margin: 0, maxWidth: "70ch" }}>
-          Real public data on Travis County homes, gated to owner-occupied single-family
-          parcels, scored for Base Power outreach.
+          Real public data on Texas homes ({scoredCounties.map((c) => c.name).join(", ")}{" "}
+          {scoredCounties.length > 1 ? "Counties" : "County"} so far), gated to owner-occupied
+          single-family parcels, scored for Base Power outreach.
         </p>
       </div>
 
@@ -525,15 +559,35 @@ export default async function HomePage() {
             marginTop: 0,
           }}
         >
+          Storm record
+        </h2>
+        <StormRecordPanel counties={stormRecords} />
+      </Panel>
+
+      <Panel>
+        <h2
+          style={{
+            fontFamily: "var(--type-heading-font-family)",
+            fontSize: "var(--type-heading-font-size)",
+            fontWeight: "var(--type-heading-font-weight)",
+            marginTop: 0,
+          }}
+        >
           Ranking readiness
         </h2>
+        {scoredCounties.length > 1 ? (
+          <p style={{ margin: "0 0 var(--space-2) 0", fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)" }}>
+            Combined across every loaded county ({scoredCounties.map((c) => c.name).join(", ")}) -- not yet split by
+            county.
+          </p>
+        ) : null}
         {gateCounts === null ? (
           <MissingState variant="not-loaded" reason="County parcel records not loaded yet" />
         ) : (
           <StatList>
             <StatRow
               id="overview-total-parcels"
-              label="Parcels on the Travis County roll"
+              label="Parcels on the appraisal rolls loaded so far"
               value={gateCounts.totalParcels.toLocaleString()}
               unit="parcels"
               source={gateCounts.source}

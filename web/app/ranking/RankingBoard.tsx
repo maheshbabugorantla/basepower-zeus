@@ -61,6 +61,7 @@ interface PredictedCursor {
 const FIRST_PREDICTED_CURSOR: PredictedCursor = { afterP: null, afterPropId: null };
 
 async function fetchPredictedPage(params: {
+  countyFips: string;
   blockGroupGeoid: string | null;
   cursor: PredictedCursor;
   pageSize?: number;
@@ -74,7 +75,7 @@ async function fetchPredictedPage(params: {
     cache: "no-store",
     body: JSON.stringify({
       mode: "predicted",
-      countyFips: TRAVIS_COUNTY_FIPS,
+      countyFips: params.countyFips,
       blockGroupGeoid: params.blockGroupGeoid,
       afterP: params.cursor.afterP,
       afterPropId: params.cursor.afterPropId,
@@ -94,6 +95,7 @@ function buildRankMap(rows: TopHomeRow[]): Map<string, number> {
 }
 
 async function fetchPage(params: {
+  countyFips: string;
   weights: Record<SignalKey, number>;
   blockGroupGeoid: string | null;
   cursor: Cursor;
@@ -110,7 +112,7 @@ async function fetchPage(params: {
     body: JSON.stringify({
       mode: "weighted",
       weights: params.weights,
-      countyFips: TRAVIS_COUNTY_FIPS,
+      countyFips: params.countyFips,
       blockGroupGeoid: params.blockGroupGeoid,
       afterScore: params.cursor.afterScore,
       afterPropId: params.cursor.afterPropId,
@@ -143,6 +145,7 @@ export function RankingBoard({
   predictedTotal: initialPredictedTotal,
   modelCard = null,
   countyName = "Travis",
+  countyFips = TRAVIS_COUNTY_FIPS,
 }: {
   rows: TopHomeRow[];
   /** Real gate-passed county home count (api.homes_ranked_weighted_count), server-rendered. */
@@ -157,6 +160,9 @@ export function RankingBoard({
   /** api.model_card, server-rendered for the "How we know it works" panel. */
   modelCard?: ModelCardData | null;
   countyName?: string;
+  /** M3-W1: the county the ranking/map/table are scoped to — follows
+   * the top-bar county switcher via app/ranking/page.tsx's `?county=`. */
+  countyFips?: string;
 }) {
   // M4-W2: predicted is the default ranking mode; "weighted" is the
   // team-adjustment alternative (unchanged M2-W1 behavior).
@@ -246,9 +252,10 @@ export function RankingBoard({
       setError(null);
       try {
         const [page, dotsPage] = await Promise.all([
-          fetchPage({ weights, blockGroupGeoid: selectedGeoid, cursor: FIRST_CURSOR, withTotal: true, hideOldHomes, excludeBackup: hideExistingBackup }),
+          fetchPage({ countyFips, weights, blockGroupGeoid: selectedGeoid, cursor: FIRST_CURSOR, withTotal: true, hideOldHomes, excludeBackup: hideExistingBackup }),
           selectedGeoid
             ? fetchPage({
+                countyFips,
                 weights,
                 blockGroupGeoid: selectedGeoid,
                 cursor: FIRST_CURSOR,
@@ -315,6 +322,7 @@ export function RankingBoard({
       try {
         const [page, dotsPage] = await Promise.all([
           fetchPredictedPage({
+            countyFips,
             blockGroupGeoid: selectedGeoid,
             cursor: FIRST_PREDICTED_CURSOR,
             withTotal: true,
@@ -323,6 +331,7 @@ export function RankingBoard({
           }),
           selectedGeoid
             ? fetchPredictedPage({
+                countyFips,
                 blockGroupGeoid: selectedGeoid,
                 cursor: FIRST_PREDICTED_CURSOR,
                 pageSize: DOTS_PAGE_SIZE,
@@ -360,6 +369,7 @@ export function RankingBoard({
     setPredictedError(null);
     try {
       const page = await fetchPredictedPage({
+        countyFips,
         blockGroupGeoid: selectedGeoid,
         cursor,
         withTotal: false,
@@ -405,7 +415,7 @@ export function RankingBoard({
     setLoading(true);
     setError(null);
     try {
-      const page = await fetchPage({ weights, blockGroupGeoid: selectedGeoid, cursor, withTotal: false, hideOldHomes, excludeBackup: hideExistingBackup });
+      const page = await fetchPage({ countyFips, weights, blockGroupGeoid: selectedGeoid, cursor, withTotal: false, hideOldHomes, excludeBackup: hideExistingBackup });
       if (mySeq !== requestSeqRef.current) return;
       setRows(page.rows);
       setPageIndex(nextIndex);
@@ -591,9 +601,10 @@ export function RankingBoard({
         </div>
         <div style={{ flex: "1 1 auto", minHeight: 0 }}>
           <BlockGroupMap
-            geojsonUrl="/ranking/blockgroups"
+            key={countyFips}
+            geojsonUrl={`/ranking/blockgroups?county=${countyFips}`}
             weights={weights}
-            countyFips={TRAVIS_COUNTY_FIPS}
+            countyFips={countyFips}
             hoveredGeoid={hoveredGeoid}
             onFeatureHover={setHoveredGeoid}
             selectedGeoid={selectedGeoid}

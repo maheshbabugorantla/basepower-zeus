@@ -262,8 +262,11 @@
   font-weight: 600;
 }
 
-/* M1-W3-b fix #5: this is a read-only segmented control ("County: Travis"),
- * not a call-to-action — it must not read as a solid dark primary button. */
+/* M1-W3-b fix #5 (superseded by M3-W1): a segmented control ("County:
+ * Travis/Harris/Williamson") that must not read as a solid dark primary
+ * button, even though each option is now a real link that switches the
+ * county everywhere on the page (M3-W1: data-driven, no longer a single
+ * read-only pressed option). */
 .county-switcher {
   display: flex;
   align-items: center;
@@ -282,6 +285,8 @@
 }
 
 .county-switcher__button {
+  display: inline-flex;
+  align-items: center;
   height: 28px;
   padding: 0 var(--space-3);
   border: none;
@@ -291,7 +296,8 @@
   font-family: var(--type-label-font-family);
   font-size: var(--type-label-font-size);
   font-weight: var(--type-label-font-weight);
-  cursor: default;
+  text-decoration: none;
+  cursor: pointer;
 }
 
 .county-switcher__button--active {

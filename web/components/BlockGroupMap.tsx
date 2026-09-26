@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import type { Map as MapLibreMap, ExpressionSpecification, MapLayerMouseEvent } from "maplibre-gl";
 import { maplibregl } from "../lib/maplibre";
 import type { SignalKey } from "../app/api/top-homes/route";
+import { COUNTY_MAP_CENTER } from "../lib/counties";
 import "maplibre-gl/dist/maplibre-gl.css";
 
 // DESIGN.md §2 score ramp (light theme; the map basemap is light Positron,
@@ -164,14 +165,20 @@ export function BlockGroupMap({
   useEffect(() => {
     if (!containerRef.current) return;
 
+    // M3-W1: per-county map center (Austin/Houston/Georgetown), keyed off
+    // the same countyFips prop that already drives /api/blockgroup-scores
+    // below — falls back to the Travis center for an unrecognized fips
+    // rather than defaulting to nothing.
+    const mapCenter = COUNTY_MAP_CENTER[countyFips] ?? COUNTY_MAP_CENTER["48453"];
+
     const map = new maplibregl.Map({
       container: containerRef.current,
       // OpenFreeMap Positron: no API key required. Kept muted per
       // DESIGN.md §6 "Do: use a muted, low-chroma basemap so the
       // choropleth carries the color."
       style: "https://tiles.openfreemap.org/styles/positron",
-      center: [-97.7431, 30.2672], // Austin/Travis County
-      zoom: 9,
+      center: mapCenter.center,
+      zoom: mapCenter.zoom,
     });
     mapRef.current = map;
 

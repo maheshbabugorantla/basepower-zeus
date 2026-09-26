@@ -37,7 +37,7 @@ describe.skipIf(!process.env.POSTGRES_URL)("Overview — gated count matches the
     const homesteadFormatted = homesteadCount.toLocaleString();
 
     const overviewText = textOf(renderToStaticMarkup(await HomePage()));
-    const rankingText = textOf(renderToStaticMarkup(await RankingPage()));
+    const rankingText = textOf(renderToStaticMarkup(await RankingPage({ searchParams: Promise.resolve({}) })));
 
     // Same real number, read straight from the stat row's own label — not
     // a substring match anywhere on the page, so relabeling the wrong

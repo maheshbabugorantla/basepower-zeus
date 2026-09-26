@@ -9,6 +9,7 @@ import {
   type ZoneBucket,
   type CoverageBucketCount,
 } from "./coverageZones";
+import { COUNTY_MAP_CENTER } from "../lib/counties";
 
 // M2-P11: "where Base is not yet, but backup demand is proven" — a
 // choropleth over Travis block groups, 4 zone buckets computed from real
@@ -83,11 +84,16 @@ export function CoverageMap({ geojsonUrl }: { geojsonUrl: string }) {
 
   useEffect(() => {
     if (!containerRef.current) return;
+    // M3-W1: geojsonUrl already carries `?county=<fips>` — read it back
+    // out for the map center rather than adding a second prop the caller
+    // would have to keep in sync with the same URL.
+    const countyFips = new URL(geojsonUrl, "http://localhost").searchParams.get("county") ?? "48453";
+    const mapCenter = COUNTY_MAP_CENTER[countyFips] ?? COUNTY_MAP_CENTER["48453"];
     const map = new maplibregl.Map({
       container: containerRef.current,
       style: "https://tiles.openfreemap.org/styles/positron",
-      center: [-97.7431, 30.2672],
-      zoom: 9,
+      center: mapCenter.center,
+      zoom: mapCenter.zoom,
     });
 
     map.on("load", () => {

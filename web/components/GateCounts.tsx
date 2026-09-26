@@ -146,7 +146,7 @@ async function MarketSplit() {
   );
 }
 
-export function GateCounts({ rows }: { rows: GateCountRow[] }) {
+export function GateCounts({ rows, note }: { rows: GateCountRow[]; note?: string }) {
   const total = rows.reduce((sum, r) => sum + r.homeCount, 0);
   const hasUnresolvedGate = rows.some((r) => NOT_LOADED_REASONS.has(r.reason));
 
@@ -165,6 +165,11 @@ export function GateCounts({ rows }: { rows: GateCountRow[] }) {
       <p style={{ margin: "0 0 var(--space-2) 0", fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)" }}>
         Base only sells where the home&rsquo;s electric utility is on Base&rsquo;s service list.
       </p>
+      {note ? (
+        <p style={{ margin: "0 0 var(--space-2) 0", fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)" }}>
+          {note}
+        </p>
+      ) : null}
 
       {rows.length === 0 || total === 0 ? (
         <MissingState

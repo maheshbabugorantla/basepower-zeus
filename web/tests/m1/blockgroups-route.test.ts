@@ -1,4 +1,5 @@
 import { afterAll, describe, expect, it } from "vitest";
+import { NextRequest } from "next/server";
 import { GET } from "../../app/ranking/blockgroups/route";
 import { getPool, query } from "../../lib/db";
 
@@ -17,7 +18,7 @@ describe.skipIf(!process.env.POSTGRES_URL)("GET /ranking/blockgroups", () => {
     // db.ts-backed queries against the real Supabase pooler; other test
     // files' pools can be mid-teardown when the suite runs in parallel, so
     // this is generous rather than tuned to the happy-path latency above.
-    const response = await GET();
+    const response = await GET(new NextRequest("http://localhost/ranking/blockgroups"));
     const body = await response.json();
 
     expect(body.type).toBe("FeatureCollection");
@@ -44,7 +45,7 @@ describe.skipIf(!process.env.POSTGRES_URL)("GET /ranking/blockgroups", () => {
         "select count(*) from core.block_groups where county_fips = $1",
         ["48453"]
       );
-      const response = await GET();
+      const response = await GET(new NextRequest("http://localhost/ranking/blockgroups"));
       const body = await response.json();
       expect(body.features.length).toBe(Number(rows[0].count));
     },

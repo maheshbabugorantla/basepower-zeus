@@ -43,6 +43,7 @@ import {
 } from "./ui/DataTable";
 import { MissingState } from "./ui/MissingState";
 import { REASON_META } from "./TopHomesTable";
+import { SignalsUsed, type SignalUsedEntry } from "./SignalsUsed";
 import type { SignalKey } from "../app/api/top-homes/route";
 
 const DEBOUNCE_MS = 250;
@@ -206,12 +207,35 @@ export function ScoreExplainer({ propId, weights }: ScoreExplainerProps) {
   );
   const templateSentence = summary.status === "template" ? buildTemplateSentence(signals) : null;
 
+  // M3-W1: signals-used chips — every non-null term this home was
+  // actually scored on (not just the top-3 contributors), derived from
+  // this same live breakdown response, no new SQL.
+  const signalsUsed: SignalUsedEntry[] = signals
+    .filter((s) => s.available)
+    .map((s) => {
+      const meta = REASON_META[s.key];
+      return { key: s.key, label: meta?.label ?? s.label, signal: meta?.signal ?? "install" };
+    });
+
   return (
     <div style={{ display: "grid", gap: "var(--space-4)" }}>
       <p style={{ margin: 0, color: "var(--theme-ink-muted)", maxWidth: "70ch" }}>
         Score = a weighted average of this home&apos;s percentile on each signal below; signals with no
         data are left out of the average, not counted as zero.
       </p>
+      <div>
+        <p
+          style={{
+            margin: "0 0 var(--space-2) 0",
+            fontFamily: "var(--type-label-font-family)",
+            fontSize: "var(--type-label-font-size)",
+            color: "var(--theme-ink-muted)",
+          }}
+        >
+          Signals this home was scored on
+        </p>
+        <SignalsUsed signals={signalsUsed} />
+      </div>
 
       <div>
         <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "var(--space-1)" }}>
