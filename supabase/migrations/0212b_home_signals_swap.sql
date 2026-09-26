@@ -153,7 +153,7 @@ as $function$
             s.prop_id,
             s.outage_term, s.flood_term, s.empower_term, s.age65_term, s.electric_heat_term,
             s.backup_intent_rate, s.backup_intent_term,
-            s.owner_65::numeric as owner65_term, s.home_permits_flag::numeric as permits_term,
+            s.owner_65::int::numeric as owner65_term, s.home_permits_flag::int::numeric as permits_term,
             s.installability_term, s.home_value_term
         from core.mv_home_signals s
         where s.gate_reason is null
@@ -227,9 +227,9 @@ as $function$
                     ('backup_intent', case when s.backup_intent_term is not null
                                           then (select w_backup from w) * (s.backup_intent_term - coalesce((md.med->>'backup_intent')::numeric, 0)) end, true),
                     ('owner_65',      case when s.owner_65 is not null
-                                          then (select w_owner65 from w) * (s.owner_65::numeric - coalesce((md.med->>'owner_65')::numeric, 0)) end, true),
+                                          then (select w_owner65 from w) * (s.owner_65::int::numeric - coalesce((md.med->>'owner_65')::numeric, 0)) end, true),
                     ('home_permits',  case when s.home_permits_flag is not null
-                                          then (select w_permits from w) * (s.home_permits_flag::numeric - coalesce((md.med->>'home_permits')::numeric, 0)) end, true),
+                                          then (select w_permits from w) * (s.home_permits_flag::int::numeric - coalesce((md.med->>'home_permits')::numeric, 0)) end, true),
                     ('installability', case when s.installability_term is not null
                                           then (select w_install from w) * (s.installability_term - coalesce((md.med->>'installability')::numeric, 0)) end, true),
                     ('home_value',    case when s.home_value_term is not null
@@ -308,7 +308,7 @@ as $function$
             s.prop_id,
             s.outage_term, s.flood_term, s.empower_term, s.age65_term, s.electric_heat_term,
             s.backup_intent_rate, s.backup_intent_term,
-            s.owner_65::numeric as owner65_term, s.home_permits_flag::numeric as permits_term,
+            s.owner_65::int::numeric as owner65_term, s.home_permits_flag::int::numeric as permits_term,
             s.installability_term, s.home_value_term
         from core.mv_home_signals s
         where s.gate_reason is null
@@ -390,9 +390,9 @@ as $function$
                     ('backup_intent', case when s.backup_intent_term is not null
                                           then (select w_backup from w) * (s.backup_intent_term - coalesce((md.med->>'backup_intent')::numeric, 0)) end, true),
                     ('owner_65',      case when s.owner_65 is not null
-                                          then (select w_owner65 from w) * (s.owner_65::numeric - coalesce((md.med->>'owner_65')::numeric, 0)) end, true),
+                                          then (select w_owner65 from w) * (s.owner_65::int::numeric - coalesce((md.med->>'owner_65')::numeric, 0)) end, true),
                     ('home_permits',  case when s.home_permits_flag is not null
-                                          then (select w_permits from w) * (s.home_permits_flag::numeric - coalesce((md.med->>'home_permits')::numeric, 0)) end, true),
+                                          then (select w_permits from w) * (s.home_permits_flag::int::numeric - coalesce((md.med->>'home_permits')::numeric, 0)) end, true),
                     ('installability', case when s.installability_term is not null
                                           then (select w_install from w) * (s.installability_term - coalesce((md.med->>'installability')::numeric, 0)) end, true),
                     ('home_value',    case when s.home_value_term is not null
@@ -466,7 +466,7 @@ as $function$
     narrow as (
         select
             s.outage_term, s.flood_term, s.empower_term, s.age65_term, s.electric_heat_term,
-            s.backup_intent_term, s.owner_65::numeric as owner65_term, s.home_permits_flag::numeric as permits_term,
+            s.backup_intent_term, s.owner_65::int::numeric as owner65_term, s.home_permits_flag::int::numeric as permits_term,
             s.installability_term, s.home_value_term
         from core.mv_home_signals s
         where s.gate_reason is null
@@ -520,7 +520,7 @@ as $function$
         select
             s.block_group_geoid,
             s.outage_term, s.flood_term, s.empower_term, s.age65_term, s.electric_heat_term,
-            s.backup_intent_term, s.owner_65::numeric as owner65_term, s.home_permits_flag::numeric as permits_term,
+            s.backup_intent_term, s.owner_65::int::numeric as owner65_term, s.home_permits_flag::int::numeric as permits_term,
             s.installability_term, s.home_value_term
         from core.mv_home_signals s
         where s.gate_reason is null
@@ -713,21 +713,21 @@ as $function$
             ),
             (
                 'owner_65', 'Homeowner is 65+ (TCAD over-65 exemption)',
-                case when s.owner_65 is null then null else s.owner_65::numeric end,
+                case when s.owner_65 is null then null else s.owner_65::int::numeric end,
                 'flag (1 = has the TCAD over-65 homestead exemption)',
                 null::numeric, w.w_owner65,
                 s.owner_65 is not null, s.owner_65_null_reason,
-                case when s.owner_65 is null then null else s.owner_65::numeric end,
+                case when s.owner_65 is null then null else s.owner_65::int::numeric end,
                 null::numeric,
                 'no anchor -- 1/0 flag'
             ),
             (
                 'home_permits', 'Home has its own solar/EV/generator permit',
-                case when s.home_permits_flag is null then null else s.home_permits_flag::numeric end,
+                case when s.home_permits_flag is null then null else s.home_permits_flag::int::numeric end,
                 'flag (1 = this home''s own Austin permits include solar, EV, or generator)',
                 null::numeric, w.w_permits,
                 s.home_permits_flag is not null, s.permit_null_reason,
-                case when s.home_permits_flag is null then null else s.home_permits_flag::numeric end,
+                case when s.home_permits_flag is null then null else s.home_permits_flag::int::numeric end,
                 null::numeric,
                 'no anchor -- 1/0 flag'
             ),
