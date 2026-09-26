@@ -9,7 +9,7 @@ import { ScoreExplainer } from "../../components/ScoreExplainer";
 import { Panel } from "../../components/ui/Panel";
 import { MissingState } from "../../components/ui/MissingState";
 import { DataTable, DataTableBody, DataTableCell, DataTableHead, DataTableHeaderCell, DataTableRow } from "../../components/ui/DataTable";
-import { SIGNAL_KEYS, type SignalKey, type PredictedHomeRow } from "../api/top-homes/route";
+import type { SignalKey, PredictedHomeRow } from "../api/top-homes/route";
 import { PredictedHomesTable } from "./PredictedHomesTable";
 import { PredictionProof, type ModelCardData } from "../../components/PredictionProof";
 import { bucketBy, filterRows, countyTotals, type GeoRollupRow, type GeoBucket } from "../../lib/geoRollup";
@@ -38,6 +38,28 @@ type RankingMode = "predicted" | "weighted";
 // fixed top-50 pins). A table row hover highlights its dot + block-group
 // outline; a dot hover highlights its row (and scrolls it into view only
 // if it isn't already visible).
+
+// Client-safe duplicate of app/api/top-homes/route.ts's SIGNAL_KEYS
+// (matching web/app/export/homes/route.ts's own existing duplicate of the
+// same list) -- importing the real SIGNAL_KEYS VALUE from route.ts here
+// would pull that whole server module (next/server, lib/db.ts's `pg`
+// import) into the client bundle; a type-only import (SignalKey, above)
+// is erased at build and stays safe.
+const SIGNAL_KEYS: readonly SignalKey[] = [
+  "outage",
+  "home_value",
+  "backup_intent",
+  "age65",
+  "home_permits",
+  "electric_heat",
+  "empower",
+  "owner_65",
+  "installability",
+  "flood",
+  "income_100k",
+  "age_35_64",
+  "permit_risk",
+];
 
 const DEBOUNCE_MS = 250;
 const RANK_DELTA_DISPLAY_MS = 2000;
