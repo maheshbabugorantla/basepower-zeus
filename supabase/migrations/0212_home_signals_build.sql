@@ -463,7 +463,7 @@ bg_backup as (
         case
             when hc.peer_homes <= 0 then null
             when pc.any_permits_count is null then null
-            else (greatest(0, pc.backup_permits_count - coalesce(hbp.own_backup_permits, 0))::numeric / hc.peer_homes) * 1000
+            else (greatest(0, pc.backup_permits_count - (case when hbp.own_backup_permits is null then 0 else hbp.own_backup_permits end))::numeric / hc.peer_homes) * 1000
         end as backup_intent_rate,
         pc.permit_source_ids,
         case
