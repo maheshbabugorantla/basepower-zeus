@@ -217,23 +217,23 @@ as $function$
                 select label, contrib, home_level
                 from (values
                     ('outage',        case when s.outage_term is not null
-                                          then (select w_outage from w) * (s.outage_term - coalesce((md.med->>'outage')::numeric, 0)) end, true),
+                                          then (select w_outage from w) * (s.outage_term - (case when (md.med->>'outage') is null then 0 else (md.med->>'outage')::numeric end)) end, true),
                     ('empower',       case when s.empower_term is not null
-                                          then (select w_empower from w) * (s.empower_term - coalesce((md.med->>'empower')::numeric, 0)) end, false),
+                                          then (select w_empower from w) * (s.empower_term - (case when (md.med->>'empower') is null then 0 else (md.med->>'empower')::numeric end)) end, false),
                     ('age65',         case when s.age65_term is not null
-                                          then (select w_age65 from w) * (s.age65_term - coalesce((md.med->>'age65')::numeric, 0)) end, false),
+                                          then (select w_age65 from w) * (s.age65_term - (case when (md.med->>'age65') is null then 0 else (md.med->>'age65')::numeric end)) end, false),
                     ('electric_heat', case when s.electric_heat_term is not null
-                                          then (select w_heat from w) * (s.electric_heat_term - coalesce((md.med->>'electric_heat')::numeric, 0)) end, false),
+                                          then (select w_heat from w) * (s.electric_heat_term - (case when (md.med->>'electric_heat') is null then 0 else (md.med->>'electric_heat')::numeric end)) end, false),
                     ('backup_intent', case when s.backup_intent_term is not null
-                                          then (select w_backup from w) * (s.backup_intent_term - coalesce((md.med->>'backup_intent')::numeric, 0)) end, true),
+                                          then (select w_backup from w) * (s.backup_intent_term - (case when (md.med->>'backup_intent') is null then 0 else (md.med->>'backup_intent')::numeric end)) end, true),
                     ('owner_65',      case when s.owner_65 is not null
-                                          then (select w_owner65 from w) * (s.owner_65::int::numeric - coalesce((md.med->>'owner_65')::numeric, 0)) end, true),
+                                          then (select w_owner65 from w) * (s.owner_65::int::numeric - (case when (md.med->>'owner_65') is null then 0 else (md.med->>'owner_65')::numeric end)) end, true),
                     ('home_permits',  case when s.home_permits_flag is not null
-                                          then (select w_permits from w) * (s.home_permits_flag::int::numeric - coalesce((md.med->>'home_permits')::numeric, 0)) end, true),
+                                          then (select w_permits from w) * (s.home_permits_flag::int::numeric - (case when (md.med->>'home_permits') is null then 0 else (md.med->>'home_permits')::numeric end)) end, true),
                     ('installability', case when s.installability_term is not null
-                                          then (select w_install from w) * (s.installability_term - coalesce((md.med->>'installability')::numeric, 0)) end, true),
+                                          then (select w_install from w) * (s.installability_term - (case when (md.med->>'installability') is null then 0 else (md.med->>'installability')::numeric end)) end, true),
                     ('home_value',    case when s.home_value_term is not null
-                                          then (select w_homevalue from w) * (s.home_value_term - coalesce((md.med->>'home_value')::numeric, 0)) end, true)
+                                          then (select w_homevalue from w) * (s.home_value_term - (case when (md.med->>'home_value') is null then 0 else (md.med->>'home_value')::numeric end)) end, true)
                     -- flood intentionally excluded: penalty-only, never a "top signal"
                 ) as t(label, contrib, home_level)
                 where contrib is not null and contrib > 0
@@ -380,23 +380,23 @@ as $function$
                 select label, contrib, home_level
                 from (values
                     ('outage',        case when s.outage_term is not null
-                                          then (select w_outage from w) * (s.outage_term - coalesce((md.med->>'outage')::numeric, 0)) end, true),
+                                          then (select w_outage from w) * (s.outage_term - (case when (md.med->>'outage') is null then 0 else (md.med->>'outage')::numeric end)) end, true),
                     ('empower',       case when s.empower_term is not null
-                                          then (select w_empower from w) * (s.empower_term - coalesce((md.med->>'empower')::numeric, 0)) end, false),
+                                          then (select w_empower from w) * (s.empower_term - (case when (md.med->>'empower') is null then 0 else (md.med->>'empower')::numeric end)) end, false),
                     ('age65',         case when s.age65_term is not null
-                                          then (select w_age65 from w) * (s.age65_term - coalesce((md.med->>'age65')::numeric, 0)) end, false),
+                                          then (select w_age65 from w) * (s.age65_term - (case when (md.med->>'age65') is null then 0 else (md.med->>'age65')::numeric end)) end, false),
                     ('electric_heat', case when s.electric_heat_term is not null
-                                          then (select w_heat from w) * (s.electric_heat_term - coalesce((md.med->>'electric_heat')::numeric, 0)) end, false),
+                                          then (select w_heat from w) * (s.electric_heat_term - (case when (md.med->>'electric_heat') is null then 0 else (md.med->>'electric_heat')::numeric end)) end, false),
                     ('backup_intent', case when s.backup_intent_term is not null
-                                          then (select w_backup from w) * (s.backup_intent_term - coalesce((md.med->>'backup_intent')::numeric, 0)) end, true),
+                                          then (select w_backup from w) * (s.backup_intent_term - (case when (md.med->>'backup_intent') is null then 0 else (md.med->>'backup_intent')::numeric end)) end, true),
                     ('owner_65',      case when s.owner_65 is not null
-                                          then (select w_owner65 from w) * (s.owner_65::int::numeric - coalesce((md.med->>'owner_65')::numeric, 0)) end, true),
+                                          then (select w_owner65 from w) * (s.owner_65::int::numeric - (case when (md.med->>'owner_65') is null then 0 else (md.med->>'owner_65')::numeric end)) end, true),
                     ('home_permits',  case when s.home_permits_flag is not null
-                                          then (select w_permits from w) * (s.home_permits_flag::int::numeric - coalesce((md.med->>'home_permits')::numeric, 0)) end, true),
+                                          then (select w_permits from w) * (s.home_permits_flag::int::numeric - (case when (md.med->>'home_permits') is null then 0 else (md.med->>'home_permits')::numeric end)) end, true),
                     ('installability', case when s.installability_term is not null
-                                          then (select w_install from w) * (s.installability_term - coalesce((md.med->>'installability')::numeric, 0)) end, true),
+                                          then (select w_install from w) * (s.installability_term - (case when (md.med->>'installability') is null then 0 else (md.med->>'installability')::numeric end)) end, true),
                     ('home_value',    case when s.home_value_term is not null
-                                          then (select w_homevalue from w) * (s.home_value_term - coalesce((md.med->>'home_value')::numeric, 0)) end, true)
+                                          then (select w_homevalue from w) * (s.home_value_term - (case when (md.med->>'home_value') is null then 0 else (md.med->>'home_value')::numeric end)) end, true)
                 ) as t(label, contrib, home_level)
                 where contrib is not null and contrib > 0
                 order by contrib desc, home_level desc
