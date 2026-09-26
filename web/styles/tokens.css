@@ -1,0 +1,213 @@
+/*
+ * Base Power Zeus design tokens — generated 1:1 from the YAML frontmatter
+ * in the repo-root DESIGN.md. Every leaf value in that frontmatter
+ * (colors, typography, rounded, spacing, components) has exactly one CSS
+ * custom property here, holding the same literal value or resolving to
+ * another token via var(). web/tests/design/tokens.test.ts parses
+ * DESIGN.md's frontmatter and asserts this file matches it one to one —
+ * update both together.
+ *
+ * Semantic light-mode values live directly on the color-* variables.
+ * Dark mode is applied two ways, both flipping the same semantic
+ * variables to their dark-* counterparts:
+ *   1. prefers-color-scheme: dark (OS/browser default), unless the page
+ *      opts out with data-theme="light".
+ *   2. An explicit data-theme="dark" override, regardless of OS
+ *      preference (DESIGN.md's "dark theme for long desk sessions").
+ */
+
+:root {
+  /* ---- colors: neutrals ---- */
+  --color-canvas: #f0eeeb;
+  --color-surface: #ffffff;
+  --color-surface-sunken: #e6e4e0;
+  --color-divider: #d8d7d5;
+  --color-control-border: #7f7d7a;
+  --color-ink: #292826;
+  --color-ink-muted: #54524f;
+  --color-ink-disabled: #a9a8a7;
+
+  /* ---- colors: brand ---- */
+  --color-brand: #b2dd79;
+  --color-brand-subtle: #d6f0b4;
+  --color-brand-strong: #1e4d2b;
+  --color-brand-strong-hover: #102a17;
+  --color-focus: #048ee5;
+
+  /* ---- colors: score ramp (sequential, low -> high) ---- */
+  --color-score-1: #d6f0b4;
+  --color-score-2: #b2dd79;
+  --color-score-3: #77a45a;
+  --color-score-4: #1e4d2b;
+  --color-score-5: #102a17;
+
+  /* ---- colors: signal categories ---- */
+  --color-signal-outage: #bf5249;
+  --color-signal-grid: #f7c33c;
+  --color-signal-grid-edge: #aa8422;
+  --color-signal-install: #06507e;
+  --color-signal-household: #68baed;
+  --color-signal-household-edge: #54524f;
+
+  /* ---- colors: states ---- */
+  --color-not-loaded-bg: #e6e4e0;
+  --color-not-loaded-ink: #54524f;
+  --color-stale-bg: #fdf1d3;
+  --color-stale-ink: #5e4507;
+  --color-error-bg: #ffccc7;
+  --color-error-ink: #c51808;
+  --color-excluded-fill: #d8d7d5;
+
+  /* ---- colors: dark theme raw values (DESIGN.md's dark-* keys) ---- */
+  --color-dark-canvas: #1b1a18;
+  --color-dark-surface: #292826;
+  --color-dark-divider: #54524f;
+  --color-dark-ink: #f0eeeb;
+  --color-dark-ink-muted: #a9a8a7;
+  --color-dark-brand: #b2dd79;
+  --color-dark-score-1: #1e4d2b;
+  --color-dark-score-2: #4f7a3c;
+  --color-dark-score-3: #77a45a;
+  --color-dark-score-4: #b2dd79;
+  --color-dark-score-5: #d6f0b4;
+
+  /* ---- typography ---- */
+  --type-title-font-family: Geist, ui-sans-serif, system-ui, sans-serif;
+  --type-title-font-size: 1.75rem;
+  --type-title-font-weight: 600;
+  --type-title-line-height: 1.2;
+  --type-title-letter-spacing: -0.01em;
+
+  --type-heading-font-family: Geist, ui-sans-serif, system-ui, sans-serif;
+  --type-heading-font-size: 1.25rem;
+  --type-heading-font-weight: 600;
+  --type-heading-line-height: 1.3;
+
+  --type-body-font-family: Geist, ui-sans-serif, system-ui, sans-serif;
+  --type-body-font-size: 0.9375rem;
+  --type-body-font-weight: 400;
+  --type-body-line-height: 1.5;
+
+  --type-label-font-family: Geist, ui-sans-serif, system-ui, sans-serif;
+  --type-label-font-size: 0.8125rem;
+  --type-label-font-weight: 500;
+  --type-label-line-height: 1.35;
+
+  --type-figure-font-family: Geist, ui-sans-serif, system-ui, sans-serif;
+  --type-figure-font-size: 2.25rem;
+  --type-figure-font-weight: 600;
+  --type-figure-line-height: 1.1;
+  --type-figure-letter-spacing: -0.02em;
+
+  --type-data-font-family: Geist Mono, ui-monospace, SFMono-Regular, monospace;
+  --type-data-font-size: 0.8125rem;
+  --type-data-font-weight: 400;
+  --type-data-line-height: 1.4;
+
+  /* ---- rounded ---- */
+  --rounded-sm: 4px;
+  --rounded-md: 12px;
+  --rounded-full: 9999px;
+
+  /* ---- spacing ---- */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-12: 48px;
+
+  /* ---- components (leaves that reference other groups resolve via var()) ---- */
+  --component-button-primary-background-color: var(--color-brand-strong);
+  --component-button-primary-text-color: var(--color-surface);
+  --component-button-primary-rounded: var(--rounded-sm);
+  --component-button-primary-padding: 8px 14px;
+  --component-button-primary-height: 36px;
+
+  --component-button-primary-hover-background-color: var(--color-brand-strong-hover);
+
+  --component-button-secondary-background-color: var(--color-surface);
+  --component-button-secondary-text-color: var(--color-ink);
+  --component-button-secondary-rounded: var(--rounded-sm);
+  --component-button-secondary-padding: 8px 14px;
+  --component-button-secondary-height: 36px;
+
+  --component-panel-background-color: var(--color-surface);
+  --component-panel-rounded: var(--rounded-md);
+  --component-panel-padding: 24px;
+
+  --component-chip-signal-background-color: var(--color-surface);
+  --component-chip-signal-text-color: var(--color-ink);
+  --component-chip-signal-rounded: var(--rounded-full);
+  --component-chip-signal-padding: 2px 10px;
+
+  --component-state-not-loaded-background-color: var(--color-not-loaded-bg);
+  --component-state-not-loaded-text-color: var(--color-not-loaded-ink);
+  --component-state-not-loaded-rounded: var(--rounded-sm);
+  --component-state-not-loaded-padding: 2px 8px;
+
+  --component-badge-stale-background-color: var(--color-stale-bg);
+  --component-badge-stale-text-color: var(--color-stale-ink);
+  --component-badge-stale-rounded: var(--rounded-sm);
+  --component-badge-stale-padding: 2px 8px;
+
+  --component-table-row-selected-background-color: var(--color-brand-subtle);
+  --component-table-row-selected-text-color: var(--color-ink);
+
+  /* ---- shadow (DESIGN.md §4 Elevation) ---- */
+  --shadow-float: 0 4px 12px #0000001a;
+
+  /* ---- motion (DESIGN.md §1) ---- */
+  --motion-duration: 200ms;
+  --motion-ease: cubic-bezier(0, 0, 0.2, 1);
+
+  /* =========================================================================
+   * Semantic theme variables. Every component reads ONLY these, never the
+   * raw --color-* tokens above directly, so both theme paths stay correct
+   * by construction.
+   * ======================================================================= */
+  --theme-canvas: var(--color-canvas);
+  --theme-surface: var(--color-surface);
+  --theme-divider: var(--color-divider);
+  --theme-ink: var(--color-ink);
+  --theme-ink-muted: var(--color-ink-muted);
+  --theme-brand-accent-text: var(--color-brand-strong);
+  --theme-score-1: var(--color-score-1);
+  --theme-score-2: var(--color-score-2);
+  --theme-score-3: var(--color-score-3);
+  --theme-score-4: var(--color-score-4);
+  --theme-score-5: var(--color-score-5);
+}
+
+/* OS/browser dark preference, unless the page explicitly opts back to light. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --theme-canvas: var(--color-dark-canvas);
+    --theme-surface: var(--color-dark-surface);
+    --theme-divider: var(--color-dark-divider);
+    --theme-ink: var(--color-dark-ink);
+    --theme-ink-muted: var(--color-dark-ink-muted);
+    --theme-brand-accent-text: var(--color-dark-brand);
+    --theme-score-1: var(--color-dark-score-1);
+    --theme-score-2: var(--color-dark-score-2);
+    --theme-score-3: var(--color-dark-score-3);
+    --theme-score-4: var(--color-dark-score-4);
+    --theme-score-5: var(--color-dark-score-5);
+  }
+}
+
+/* Explicit override, independent of OS preference. */
+:root[data-theme="dark"] {
+  --theme-canvas: var(--color-dark-canvas);
+  --theme-surface: var(--color-dark-surface);
+  --theme-divider: var(--color-dark-divider);
+  --theme-ink: var(--color-dark-ink);
+  --theme-ink-muted: var(--color-dark-ink-muted);
+  --theme-brand-accent-text: var(--color-dark-brand);
+  --theme-score-1: var(--color-dark-score-1);
+  --theme-score-2: var(--color-dark-score-2);
+  --theme-score-3: var(--color-dark-score-3);
+  --theme-score-4: var(--color-dark-score-4);
+  --theme-score-5: var(--color-dark-score-5);
+}

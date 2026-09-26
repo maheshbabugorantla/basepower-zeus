@@ -1,0 +1,289 @@
+/*
+ * Interactive/stateful styling for web/components/ui/*. Pseudo-classes
+ * (:hover, :focus-visible, :disabled) can't be expressed as inline
+ * style={} props, so they live here as plain classes layered on top of the
+ * custom properties in tokens.css. Every value used below is a token —
+ * no literal colors/sizes are introduced in this file.
+ */
+
+/* ---------------------------------------------------------------------- */
+/* Button                                                                  */
+/* ---------------------------------------------------------------------- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  border: none;
+  cursor: pointer;
+  font-family: var(--type-label-font-family);
+  font-size: var(--type-label-font-size);
+  font-weight: var(--type-label-font-weight);
+  line-height: var(--type-label-line-height);
+  border-radius: var(--component-button-primary-rounded);
+  padding: var(--component-button-primary-padding);
+  height: var(--component-button-primary-height);
+  transition: background-color var(--motion-duration) var(--motion-ease);
+}
+
+.btn:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.btn--primary {
+  background-color: var(--component-button-primary-background-color);
+  color: var(--component-button-primary-text-color);
+}
+
+.btn--primary:hover:not(:disabled) {
+  background-color: var(--component-button-primary-hover-background-color);
+}
+
+.btn--secondary {
+  background-color: var(--component-button-secondary-background-color);
+  color: var(--component-button-secondary-text-color);
+  border: 1px solid var(--color-control-border);
+}
+
+.btn--secondary:hover:not(:disabled) {
+  background-color: var(--color-surface-sunken);
+}
+
+.btn:disabled {
+  background-color: var(--color-surface-sunken);
+  color: var(--color-ink-disabled);
+  border-color: var(--color-surface-sunken);
+  cursor: not-allowed;
+}
+
+/* Loading keeps the button's width and swaps the label for a spinner. */
+.btn--loading .btn__label {
+  visibility: hidden;
+}
+
+.btn__spinner {
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  border-radius: var(--rounded-full);
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  animation: btn-spin 0.6s linear infinite;
+}
+
+@keyframes btn-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .btn__spinner {
+    animation-duration: 1.001ms;
+  }
+}
+
+/* ---------------------------------------------------------------------- */
+/* Chip (signal chip)                                                     */
+/* ---------------------------------------------------------------------- */
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  background-color: var(--component-chip-signal-background-color);
+  color: var(--component-chip-signal-text-color);
+  border: 1px solid var(--color-divider);
+  border-radius: var(--component-chip-signal-rounded);
+  padding: var(--component-chip-signal-padding);
+  font-family: var(--type-label-font-family);
+  font-size: var(--type-label-font-size);
+  font-weight: var(--type-label-font-weight);
+  line-height: var(--type-label-line-height);
+}
+
+.chip__dot {
+  width: 10px;
+  height: 10px;
+  min-width: 10px;
+  border-radius: var(--rounded-full);
+}
+
+.chip__scope {
+  color: var(--color-ink-muted);
+}
+
+/* ---------------------------------------------------------------------- */
+/* Badge (stale)                                                          */
+/* ---------------------------------------------------------------------- */
+
+.badge--stale {
+  display: inline-flex;
+  align-items: center;
+  background-color: var(--component-badge-stale-background-color);
+  color: var(--component-badge-stale-text-color);
+  border-radius: var(--component-badge-stale-rounded);
+  padding: var(--component-badge-stale-padding);
+  font-family: var(--type-label-font-family);
+  font-size: var(--type-label-font-size);
+  font-weight: var(--type-label-font-weight);
+  line-height: var(--type-label-line-height);
+}
+
+/* ---------------------------------------------------------------------- */
+/* Missing states (DESIGN.md "The Missing Is Grey Rule")                  */
+/* ---------------------------------------------------------------------- */
+
+.missing-state {
+  display: inline-flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  background-color: var(--component-state-not-loaded-background-color);
+  color: var(--component-state-not-loaded-text-color);
+  border-radius: var(--component-state-not-loaded-rounded);
+  padding: var(--component-state-not-loaded-padding);
+  font-family: var(--type-label-font-family);
+  font-size: var(--type-label-font-size);
+  font-weight: var(--type-label-font-weight);
+  line-height: var(--type-label-line-height);
+}
+
+/* not-loaded: pipeline hasn't run yet — a plain grey state. */
+.missing-state--not-loaded {
+  border: 1px solid var(--color-divider);
+}
+
+/* not-available: no public source exists — same grey palette, but a
+ * dashed border marks it as a permanent (not transient) absence. */
+.missing-state--not-available {
+  border: 1px dashed var(--color-control-border);
+}
+
+/* 45deg hatch pattern for map polygons representing missing data. Applied
+ * to an SVG/div fill area, not to the label chip above. */
+.hatch-missing {
+  background-image: repeating-linear-gradient(
+    45deg,
+    var(--color-not-loaded-bg) 0,
+    var(--color-not-loaded-bg) 4px,
+    var(--color-surface-sunken) 4px,
+    var(--color-surface-sunken) 8px
+  );
+}
+
+/* ---------------------------------------------------------------------- */
+/* Table                                                                  */
+/* ---------------------------------------------------------------------- */
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--type-body-font-family);
+  font-size: var(--type-body-font-size);
+}
+
+.data-table th {
+  text-align: left;
+  font-family: var(--type-label-font-family);
+  font-size: var(--type-label-font-size);
+  font-weight: var(--type-label-font-weight);
+  color: var(--theme-ink-muted);
+  border-bottom: 1px solid var(--theme-divider);
+  padding: var(--space-2) var(--space-3);
+}
+
+.data-table td {
+  border-bottom: 1px solid var(--theme-divider);
+  padding: var(--space-2) var(--space-3);
+  height: 36px;
+}
+
+.data-table__row--selected td {
+  background-color: var(--component-table-row-selected-background-color);
+  color: var(--component-table-row-selected-text-color);
+}
+
+/* ---------------------------------------------------------------------- */
+/* Provenance popover (DESIGN.md §5 Signature component)                  */
+/* ---------------------------------------------------------------------- */
+
+.provenance-trigger {
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+}
+
+.provenance-trigger:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+/* Popovers use the top layer, so they are never clipped by a scroll
+ * container by construction — this just styles the box itself.
+ *
+ * No `display` here: the UA stylesheet's `[popover]:not(:popover-open) {
+ * display: none }` must win when the popover is closed, and author rules
+ * always beat UA rules regardless of specificity, so declaring `display`
+ * on this selector would keep the popover visible even when closed.
+ *
+ * `inset: auto; margin: 0` cancels the UA default `[popover] { inset: 0;
+ * margin: auto }` (which centers the box), so ProvenancePopoverAnchor's
+ * `top`/`left` positioning actually takes effect instead of being
+ * overridden by the still-active `right: 0; bottom: 0` half of `inset: 0`.
+ */
+[popover].provenance-popover {
+  inset: auto;
+  margin: 0;
+  max-width: 320px;
+  background-color: var(--theme-surface);
+  color: var(--theme-ink);
+  border: 1px solid var(--theme-divider);
+  border-radius: var(--rounded-md);
+  padding: var(--space-4);
+  box-shadow: var(--shadow-float);
+  font-family: var(--type-body-font-family);
+  font-size: var(--type-body-font-size);
+}
+
+.provenance-popover__row {
+  display: block;
+  margin-bottom: var(--space-2);
+}
+
+.provenance-popover__label {
+  display: block;
+  font-family: var(--type-label-font-family);
+  font-size: var(--type-label-font-size);
+  color: var(--theme-ink-muted);
+}
+
+.provenance-popover__value {
+  font-family: var(--type-data-font-family);
+  font-size: var(--type-data-font-size);
+}
+
+.provenance-popover__copy {
+  background: none;
+  border: 1px solid var(--color-control-border);
+  border-radius: var(--rounded-sm);
+  padding: 0 var(--space-1);
+  margin-left: var(--space-1);
+  font-family: var(--type-label-font-family);
+  font-size: var(--type-label-font-size);
+  cursor: pointer;
+  color: var(--color-ink);
+  background-color: var(--color-surface);
+}
+
+.provenance-popover__copy:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}

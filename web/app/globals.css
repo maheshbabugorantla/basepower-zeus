@@ -1,0 +1,60 @@
+/* Geist + Geist Mono from Google Fonts. Loaded as a plain @import (not
+ * next/font/google) so the family name in tokens.css ("Geist, ...") matches
+ * the font actually applied — next/font hashes/scopes the family name via a
+ * generated CSS variable, which would break that 1:1 token/value match and
+ * requires a `className` wired up in app/layout.tsx (owned by M0-D1/M0-W2).
+ * @import must be the first rule in the stylesheet. */
+@import url("https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap");
+
+@import "../styles/tokens.css";
+@import "../styles/components.css";
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  color-scheme: light dark;
+}
+
+body {
+  margin: 0;
+  background-color: var(--theme-canvas);
+  color: var(--theme-ink);
+  font-family: var(--type-body-font-family);
+  font-size: var(--type-body-font-size);
+  font-weight: var(--type-body-font-weight);
+  line-height: var(--type-body-line-height);
+  /* Numbers align in columns everywhere: tables, figures, provenance data. */
+  font-variant-numeric: tabular-nums;
+}
+
+h1,
+h2,
+h3 {
+  text-wrap: balance;
+}
+
+code,
+kbd,
+samp,
+pre {
+  font-family: var(--type-data-font-family);
+}
+
+a {
+  color: var(--theme-brand-accent-text);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
