@@ -58,6 +58,7 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
           }}
         >
           <Link href="/">Overview</Link>
+          <Link href="/ranking">Ranking</Link>
           <Link href="/sources">Sources</Link>
         </nav>
         <main
