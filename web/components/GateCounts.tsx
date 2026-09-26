@@ -65,8 +65,8 @@ export interface MarketGateCountRow {
 }
 
 const MARKET_LABEL: Record<string, string> = {
-  deregulated: "Deregulated (retail choice)",
-  not_deregulated: "Regulated (no retail choice)",
+  deregulated: "Retail choice: Base can be the electricity retailer",
+  not_deregulated: "No retail choice: the utility stays the provider",
   no_territory_match: "No utility match yet",
   retail_market_not_loaded: "Market list not loaded yet",
   utility_not_in_retail_market_file: "Utility not in the market list yet",
@@ -80,6 +80,7 @@ const KNOWN_MARKETS = new Set(["deregulated", "not_deregulated"]);
 const NOT_LOADED_MARKETS = new Set(["retail_market_not_loaded"]);
 
 function marketSegmentClass(market: string): string {
+  if (market === "deregulated") return "gate-funnel__segment--market-choice";
   if (KNOWN_MARKETS.has(market)) return "gate-funnel__segment--passed";
   if (NOT_LOADED_MARKETS.has(market)) return "gate-funnel__segment--not-loaded";
   return "gate-funnel__segment--excluded";
@@ -90,6 +91,7 @@ async function fetchMarketSplit(): Promise<MarketGateCountRow[] | null> {
     const rows = await query<{ market: string; home_count: string | number }>(
       `select market, sum(home_count) as home_count
        from api.gate_counts_by_market
+       where reason = 'passed'
        group by market
        order by sum(home_count) desc`
     );
@@ -117,9 +119,9 @@ async function MarketSplit() {
           margin: "0 0 var(--space-2) 0",
         }}
       >
-        By electricity market
+        Of the homes Base can serve, by electricity market
       </h3>
-      <div className="gate-funnel" role="img" aria-label="Home count by electricity market">
+      <div className="gate-funnel" role="img" aria-label="Servable homes by electricity market">
         {marketRows.map((row) => (
           <span
             key={row.market}

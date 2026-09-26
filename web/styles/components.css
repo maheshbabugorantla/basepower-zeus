@@ -680,6 +680,13 @@
   background-color: var(--theme-brand-accent-text);
 }
 
+/* Retail-choice share of servable homes: a lighter step of the same green
+ * ramp, so the two market segments read apart in the bar (legend labels
+ * carry the meaning too — never color alone). */
+.gate-funnel__segment--market-choice {
+  background-color: var(--color-score-2);
+}
+
 .gate-funnel__segment--excluded,
 .gate-funnel__dot--excluded {
   background-color: var(--color-excluded-fill);

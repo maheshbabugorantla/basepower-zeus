@@ -449,9 +449,7 @@ export default async function HomeDetailPage({
             </h1>
             {cityZip ? <p style={{ color: "var(--theme-ink-muted)", margin: "var(--space-1) 0" }}>{cityZip}</p> : null}
             <div style={{ fontFamily: "var(--type-data-font-family)", fontSize: "var(--type-data-font-size)", color: "var(--theme-ink-muted)" }}>
-              prop_id {home.prop_id}
-              {home.geo_id ? ` · geo_id ${home.geo_id}` : ""}
-              {scoreContext?.block_group_geoid ? ` · block group ${scoreContext.block_group_geoid}` : ""}
+              Travis CAD property {home.prop_id}
             </div>
           </div>
           <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "var(--space-1)" }}>
@@ -468,20 +466,20 @@ export default async function HomeDetailPage({
                   {Number(topHomeRank.score).toFixed(3)}
                 </span>
                 <span style={{ fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)" }}>
-                  Rank {Number(topHomeRank.rank)} of {Number(topHomeRank.total)} in top homes
+                  #{Number(topHomeRank.rank)} in Travis County at equal weights
                 </span>
               </>
             ) : (
-              <span style={{ fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)", maxWidth: "220px", textAlign: "right" }}>
-                Not in the current top 50 at equal weights
-              </span>
+              <a href="/ranking" style={{ fontSize: "var(--type-label-font-size)", maxWidth: "220px", textAlign: "right" }}>
+                See where it ranks
+              </a>
             )}
           </div>
         </div>
 
         <div style={{ display: "flex", gap: "var(--space-2)", flexWrap: "wrap", marginTop: "var(--space-4)" }}>
-          {home.is_single_family ? <span className="chip">Single-family (A1)</span> : null}
-          {home.is_homestead ? <span className="chip">Homestead</span> : null}
+          {home.is_single_family ? <span className="chip">Single-family home</span> : null}
+          {home.is_homestead ? <span className="chip">Owner-occupied (homestead)</span> : null}
         </div>
       </Panel>
 
@@ -617,7 +615,7 @@ export default async function HomeDetailPage({
             </div>
 
             <div>
-              <dt style={{ color: "var(--theme-ink-muted)", fontSize: "var(--type-label-font-size)" }}>Installability: flood zone</dt>
+              <dt style={{ color: "var(--theme-ink-muted)", fontSize: "var(--type-label-font-size)" }}>Flood zone</dt>
               <dd style={{ margin: "var(--space-1) 0 0 0" }}>
                 {homeSignals.flood_flag === null ? (
                   <MissingState variant="not-loaded" reason={homeSignals.flood_null_reason ?? "Flood zones not loaded"} />
@@ -626,7 +624,7 @@ export default async function HomeDetailPage({
                     sourceRow={findSourceByName(sourcesById, homeSignals.source_ids, ["nfhl", "flood"])}
                     id={`${home.prop_id}-flood`}
                   >
-                    <span>Inside a FEMA Special Flood Hazard Area: {homeSignals.flood_flag ? "Yes" : "No"}</span>
+                    <span>{homeSignals.flood_flag ? "Inside a FEMA high-risk flood zone" : "Outside FEMA high-risk flood zones"}</span>
                   </ProvenanceFor>
                 )}
               </dd>
@@ -720,7 +718,7 @@ export default async function HomeDetailPage({
         ) : null}
       </Panel>
 
-      <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 320px", gap: "var(--space-6)" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 320px", gap: "var(--space-6)", alignItems: "start" }}>
         <Panel>
           <h2
             style={{
@@ -733,10 +731,11 @@ export default async function HomeDetailPage({
             Permits on this parcel
           </h2>
           {home.permits.length === 0 ? (
-            <MissingState
-              variant="not-loaded"
-              reason="No permits joined to this parcel yet (either none exist, or the permits pipeline hasn't loaded)"
-            />
+            homeSignals?.backup_intent_null_reason === "no_permit_coverage" ? (
+              <MissingState variant="not-available" reason="no_permit_coverage" />
+            ) : (
+              <p style={{ margin: 0, color: "var(--theme-ink-muted)" }}>No City of Austin permits on file for this home.</p>
+            )
           ) : (
             <DataTable>
               <DataTableHead>
@@ -792,13 +791,13 @@ export default async function HomeDetailPage({
               <MissingState variant="not-loaded" reason="No lot outline on file for this parcel" />
             )}
             <dl style={{ display: "grid", gridTemplateColumns: "max-content 1fr", gap: "var(--space-2) var(--space-4)", marginTop: "var(--space-3)" }}>
-              <dt style={{ color: "var(--theme-ink-muted)" }}>State code</dt>
+              <dt style={{ color: "var(--theme-ink-muted)" }}>Property type</dt>
               <dd style={{ margin: 0 }}>
                 {stateCode === null ? (
-                  <MissingState variant="not-loaded" reason="No imprv_state_cd/land_state_cd on this parcel record" />
+                  <MissingState variant="not-loaded" reason="No property type on this parcel record" />
                 ) : (
                   <ProvenanceFor sourceRow={sourcesById.get(parcelSourceId ?? "")} id={`${home.prop_id}-state-cd`}>
-                    <span style={{ fontFamily: "var(--type-data-font-family)" }}>{stateCode}</span>
+                    <span>{stateCode === "A1" ? "Single-family home" : stateCode} <span style={{ fontFamily: "var(--type-data-font-family)", color: "var(--theme-ink-muted)" }}>({stateCode})</span></span>
                   </ProvenanceFor>
                 )}
               </dd>
