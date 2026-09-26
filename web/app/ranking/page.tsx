@@ -7,6 +7,8 @@ import { GateCounts, type GateCountRow } from "../../components/GateCounts";
 import type { TopHomeRow } from "../../components/TopHomesTable";
 import { fetchRankedHomes, fetchPredictedHomes, SIGNAL_KEYS, type SignalKey, type PredictedHomeRow } from "../api/top-homes/route";
 import type { ModelCardData } from "../../components/PredictionProof";
+import { getCountiesWithScoredHomes } from "../../lib/counties.server";
+import { resolveCounty } from "../../lib/counties";
 
 // M1-W1: MapLibre choropleth of Travis block groups (api.blockgroup_scores,
 // via the app/ranking/blockgroups route handler) + top-50 table
@@ -14,6 +16,14 @@ import type { ModelCardData } from "../../components/PredictionProof";
 // api.parcel_gate_counts). force-dynamic: parcels/permits/geometry
 // pipelines may be loading concurrently, so every request must reflect
 // the live view state, never a build-time snapshot.
+//
+// M3-W1: the ranking table, map and funnel now all follow the top bar's
+// `?county=` county switcher (data-driven — only a county with scored
+// homes is selectable, see lib/counties.server.ts). The Quality panel's
+// permit-join-rate/classifier-precision figures stay Travis-specific
+// (the only city permit feed loaded, per PRODUCT.md) regardless of the
+// selected county — they are not re-labelled per county, since they are
+// never county-scoped data in the first place.
 
 export const dynamic = "force-dynamic";
 
@@ -115,7 +125,7 @@ async function getFunnelSteps(): Promise<FunnelStep[]> {
   const gatedForScoring = gateRows.reduce((sum, r) => sum + Number(r.home_count), 0);
 
   const values = [
-    { label: "Parcels on the Travis County roll", value: total },
+    { label: "Parcels on the appraisal rolls loaded so far", value: total },
     { label: "Single-family homes", value: Number(pgc.single_family_count) },
     { label: "Owner-occupied, with a mapped lot", value: gatedForScoring },
   ];
@@ -127,8 +137,8 @@ async function getFunnelSteps(): Promise<FunnelStep[]> {
 // hydration. Reads only api.home_propensity (core.home_propensity, PK
 // joins), never api.homes_ranked_weighted_count (measured ~1.85s on prod
 // scoring all ~155k homes) -- see fetchPredictedHomes' own comment.
-async function getPredictedHomes(): Promise<{ rows: PredictedHomeRow[]; total: number | null }> {
-  return fetchPredictedHomes({ countyFips: TRAVIS_COUNTY_FIPS, withTotal: true });
+async function getPredictedHomes(countyFips: string): Promise<{ rows: PredictedHomeRow[]; total: number | null }> {
+  return fetchPredictedHomes({ countyFips, withTotal: true });
 }
 
 interface ModelCardDbRow {
@@ -196,6 +206,10 @@ async function getTopHomes(weights: Record<SignalKey, number>): Promise<{ rows: 
   });
   return { rows, total: total ?? 0 };
 }
+// getTopHomes is unused by this ticket's server render (RankingBoard's
+// weighted mode is always fetched client-side, see RankingPage below);
+// kept only because RankingBoard's props require *some* initial value
+// and other tickets may wire it back in.
 
 async function getGateCounts(): Promise<GateCountRow[]> {
   try {
@@ -253,7 +267,17 @@ async function getQualityPanelData(): Promise<QualityPanelData> {
   };
 }
 
-export default async function RankingPage() {
+export default async function RankingPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ county?: string }>;
+}) {
+  const [{ county: requestedCounty }, availableCounties] = await Promise.all([
+    searchParams,
+    getCountiesWithScoredHomes(),
+  ]);
+  const county = resolveCounty(requestedCounty, availableCounties);
+
   const defaultWeights = await getDefaultWeights();
   // M4-W2 perf: the first paint is predicted mode (the ranking default),
   // so this no longer eagerly calls api.homes_ranked_weighted_count
@@ -262,7 +286,7 @@ export default async function RankingPage() {
   // the first time a visitor actually switches to it (RankingBoard's own
   // effect) -- the empty arrays below are only the state until then.
   const [predictedHomes, modelCard, qualityData, funnelSteps, gateCounts] = await Promise.all([
-    getPredictedHomes(),
+    getPredictedHomes(county.fips),
     getModelCard(),
     getQualityPanelData(),
     getFunnelSteps(),
@@ -270,10 +294,25 @@ export default async function RankingPage() {
   ]);
   const { rows: predictedRows, total: predictedTotal } = predictedHomes;
 
+  // BUG fix (visible on prod once Harris/Williamson loaded): api.gate_counts
+  // and api.parcel_gate_counts (core.mv_gate_counts / core.mv_parcel_gate_counts,
+  // 0203_perf_precompute.sql / 0209_gate_counts_by_located_county.sql) have
+  // no county_fips column -- they are single combined totals across every
+  // loaded county, not just the selected one. Filtering them by county here
+  // would require a request-time scan of core.parcels/core.mv_home_signals
+  // (the exact cost those precomputed views exist to avoid), so instead of
+  // silently mislabeling a combined total as county.name's own count, this
+  // says so plainly until a per-county rollup lands (SQL change reported
+  // separately, not applied by this ticket -- it owns web/ only).
+  const countPanelNote =
+    availableCounties.length > 1
+      ? `Combined across every loaded county (${availableCounties.map((c) => c.name).join(", ")}) -- not yet split by county.`
+      : undefined;
+
   const leftRail = (
     <>
-      <EligibilityFunnel steps={funnelSteps} />
-      <GateCounts rows={gateCounts} />
+      <EligibilityFunnel steps={funnelSteps} note={countPanelNote} />
+      <GateCounts rows={gateCounts} note={countPanelNote} />
       <QualityPanel data={qualityData} />
     </>
   );
@@ -292,14 +331,17 @@ export default async function RankingPage() {
           Where should Base knock next?
         </h1>
         <p style={{ color: "var(--theme-ink-muted)", margin: "var(--space-1) 0 0 0", maxWidth: "80ch" }}>
-          Ranking owner-occupied single-family homes inside Travis County on outage
+          Ranking owner-occupied single-family homes inside {county.name} County on outage
           exposure, grid value, installability and household fit.
         </p>
         <p style={{ margin: "var(--space-1) 0 0 0" }}>
-          <Link href="/ranking/coverage">See coverage gaps -- where Base isn&rsquo;t yet, but backup demand is proven →</Link>
+          <Link href={`/ranking/coverage?county=${county.fips}`}>
+            See coverage gaps -- where Base isn&rsquo;t yet, but backup demand is proven →
+          </Link>
         </p>
       </div>
       <RankingBoard
+        key={county.fips}
         rows={[]}
         initialTotal={0}
         leftRail={leftRail}
@@ -307,6 +349,8 @@ export default async function RankingPage() {
         predictedRows={predictedRows}
         predictedTotal={predictedTotal}
         modelCard={modelCard}
+        countyName={county.name}
+        countyFips={county.fips}
       />
     </div>
   );

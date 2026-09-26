@@ -10,6 +10,18 @@ import { SolarPanel } from "../../../components/SolarPanel";
 import { ScoreExplainer } from "../../../components/ScoreExplainer";
 import { PropensityBadge, type PropensityReason } from "../../../components/PropensityBadge";
 import { PermitPath, type PermitPathKind, type PermitPathStatsRow, type PermitRulesCitation } from "../../../components/PermitPath";
+import { GridValue } from "../../../components/GridValue";
+import { COUNTY_CANDIDATES } from "../../../lib/counties";
+
+// M3-W1: which appraisal district this home's parcel roll comes from,
+// per county (Travis CAD / Harris CAD (HCAD) / Williamson CAD (WCAD)) --
+// never a hardcoded "Travis CAD" regardless of which county the parcel
+// actually sits in.
+const CAD_NAME: Record<string, string> = {
+  "48453": "Travis CAD",
+  "48201": "Harris CAD (HCAD)",
+  "48491": "Williamson CAD (WCAD)",
+};
 import {
   DataTable,
   DataTableBody,
@@ -218,6 +230,134 @@ async function getRetailMarket(eiaId: string): Promise<RetailMarketRow | null> {
   } catch (err) {
     console.error("home-detail: failed to load api.retail_market", err);
     return null;
+  }
+}
+
+// M3-W1: eia_utility_number -> ERCOT settlement point, backed by the
+// api.county_loadzone rows already loaded (M3-P4) — see that view for
+// each row's own citation. api.county_loadzone is keyed by
+// (county_fips, utility_name), and its utility_name text does not match
+// api.base_capture/api.retail_market's utility_name spelling for the
+// same utility (e.g. "CenterPoint Energy Houston Electric" vs.
+// "CenterPoint Energy") -- checks/M3-ercot-layering.md's own open item --
+// so this is an explicit, cited-by-comment crosswalk on the STABLE
+// eia_utility_number key, never a fuzzy name match. Only the utilities
+// this repo has ever seen a real county_loadzone row for are listed;
+// anything else reads "no zone mapped for this utility yet".
+const EIA_ID_TO_LOAD_ZONE: Record<string, string> = {
+  "1015": "LZ_AEN", // Austin Energy (api.county_loadzone, Travis)
+  "8901": "LZ_HOUSTON", // CenterPoint Energy (api.county_loadzone, Harris: "CenterPoint Energy Houston Electric")
+  "14626": "LZ_LCRA", // Pedernales Electric Cooperative (api.county_loadzone, Travis)
+  "1892": "LZ_LCRA", // Bluebonnet Electric Cooperative (api.county_loadzone, Travis)
+};
+
+interface BaseCaptureRow {
+  base_capture: "full" | "partner" | "backup_only" | "not_served" | null;
+  base_capture_null_reason: string | null;
+}
+
+interface GridValueLzRow {
+  avg_daily_spread_usd_mwh: string | number | null;
+  scarcity_days: string | number | null;
+  scarcity_threshold_usd_mwh: string | number | null;
+  window_start: string | Date | null;
+  window_end: string | Date | null;
+  grid_value_null_reason: string | null;
+  source_ids: string[];
+}
+
+export interface GridValueForHome {
+  baseCapture: "full" | "partner" | "backup_only" | "not_served" | null;
+  baseCaptureNullReason: string | null;
+  loadZone: string | null;
+  avgDailySpreadUsdMwh: number | null;
+  scarcityDays: number | null;
+  scarcityThresholdUsdMwh: number | null;
+  windowStart: string | null;
+  windowEnd: string | null;
+  gridValueNullReason: string | null;
+  source: SourceRow | null;
+}
+
+/** api.base_capture (per-utility Base service tier) + api.grid_value_lz
+ * (per-load-zone ERCOT spread/scarcity) for one home's territory_eia_id.
+ * Never invents a load zone or a spread for a utility this repo hasn't
+ * cited a zone for -- see EIA_ID_TO_LOAD_ZONE above. */
+async function getGridValueForHome(eiaId: string | null): Promise<GridValueForHome> {
+  if (!eiaId) {
+    return {
+      baseCapture: null,
+      baseCaptureNullReason: "no_territory_match",
+      loadZone: null,
+      avgDailySpreadUsdMwh: null,
+      scarcityDays: null,
+      scarcityThresholdUsdMwh: null,
+      windowStart: null,
+      windowEnd: null,
+      gridValueNullReason: null,
+      source: null,
+    };
+  }
+  try {
+    const captureRows = await query<BaseCaptureRow>(
+      `select base_capture, base_capture_null_reason from api.base_capture where eia_utility_number = $1`,
+      [eiaId]
+    );
+    const capture = captureRows[0] ?? { base_capture: null, base_capture_null_reason: "utility_tier_not_classified" };
+    const loadZone = EIA_ID_TO_LOAD_ZONE[eiaId] ?? null;
+
+    let gridValue: GridValueLzRow | null = null;
+    if ((capture.base_capture === "full" || capture.base_capture === "partner") && loadZone) {
+      const rows = await query<GridValueLzRow>(
+        `select avg_daily_spread_usd_mwh, scarcity_days, scarcity_threshold_usd_mwh,
+                window_start, window_end, grid_value_null_reason, source_ids
+         from api.grid_value_lz where load_zone = $1`,
+        [loadZone]
+      );
+      gridValue = rows[0] ?? null;
+    }
+
+    let source: SourceRow | null = null;
+    if (gridValue && gridValue.source_ids.length > 0) {
+      const sources = await getSourcesByIds(gridValue.source_ids);
+      source = sources.get(gridValue.source_ids[0]) ?? null;
+    }
+
+    return {
+      baseCapture: capture.base_capture,
+      baseCaptureNullReason: capture.base_capture_null_reason,
+      loadZone,
+      avgDailySpreadUsdMwh:
+        gridValue?.avg_daily_spread_usd_mwh === null || gridValue?.avg_daily_spread_usd_mwh === undefined
+          ? null
+          : Number(gridValue.avg_daily_spread_usd_mwh),
+      scarcityDays:
+        gridValue?.scarcity_days === null || gridValue?.scarcity_days === undefined
+          ? null
+          : Number(gridValue.scarcity_days),
+      scarcityThresholdUsdMwh:
+        gridValue?.scarcity_threshold_usd_mwh === null || gridValue?.scarcity_threshold_usd_mwh === undefined
+          ? null
+          : Number(gridValue.scarcity_threshold_usd_mwh),
+      windowStart: gridValue?.window_start ? String(gridValue.window_start).slice(0, 10) : null,
+      windowEnd: gridValue?.window_end ? String(gridValue.window_end).slice(0, 10) : null,
+      gridValueNullReason: gridValue?.grid_value_null_reason ?? null,
+      source,
+    };
+  } catch (err) {
+    console.error("home-detail: failed to load api.base_capture / api.grid_value_lz", err);
+    return {
+      baseCapture: null,
+      baseCaptureNullReason: "utility_tier_not_classified",
+      loadZone: null,
+      avgDailySpreadUsdMwh: null,
+      scarcityDays: null,
+      scarcityThresholdUsdMwh: null,
+      windowStart: null,
+      windowEnd: null,
+      gridValueNullReason: null,
+      source: null,
+    };
   }
 }
 
@@ -573,14 +713,19 @@ export default async function HomeDetailPage({
       <Panel>
         <MissingState
           variant="not-loaded"
-          reason={`No Travis County parcel with ID ${prop_id}`}
+          reason={`No parcel with ID ${prop_id}`}
         />
       </Panel>
     );
   }
 
   const home = rows[0];
+  // M3-W1: every home carries the county its lot actually sits in
+  // (api.home_detail.county_fips) -- Travis/Harris/Williamson wording
+  // must follow that, never a hardcoded "Travis".
+  const countyName = COUNTY_CANDIDATES.find((c) => c.fips === home.county_fips)?.name ?? "this";
   const homeSignals = await getHomeSignals(home.prop_id);
+  const gridValue = await getGridValueForHome(homeSignals?.territory_eia_id ?? null);
   const distributorSaidiRealNullReason =
     homeSignals && homeSignals.distributor_saidi === null && homeSignals.territory_eia_id
       ? await getDistributorSaidiNullReason(homeSignals.territory_eia_id)
@@ -687,7 +832,7 @@ export default async function HomeDetailPage({
             </h1>
             {cityZip ? <p style={{ color: "var(--theme-ink-muted)", margin: "var(--space-1) 0" }}>{cityZip}</p> : null}
             <div style={{ fontFamily: "var(--type-data-font-family)", fontSize: "var(--type-data-font-size)", color: "var(--theme-ink-muted)" }}>
-              Travis CAD property {home.prop_id}
+              {CAD_NAME[home.county_fips ?? ""] ?? `${countyName} CAD`} property {home.prop_id}
             </div>
           </div>
           <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "var(--space-1)", textAlign: "right" }}>
@@ -719,13 +864,13 @@ export default async function HomeDetailPage({
         {homePropensity === null ? (
           <MissingState
             variant="not-loaded"
-            reason="Not scored: only owner-occupied single-family homes with a mapped lot inside Travis County are scored"
+            reason={`Not scored: only owner-occupied single-family homes with a mapped lot inside ${countyName} County are scored`}
           />
         ) : (
           <PropensityBadge
             pInstall12m={Number(homePropensity.p_install_12m)}
             relativeToCounty={homePropensity.relative_to_county === null ? null : Number(homePropensity.relative_to_county)}
-            countyName="Travis"
+            countyName={countyName}
             extrapolatedFrom={homePropensity.extrapolated_from}
             reasons={homePropensity.reasons}
             showReasons
@@ -748,7 +893,7 @@ export default async function HomeDetailPage({
         {homeSignals === null ? (
           <MissingState
             variant="not-loaded"
-            reason="Not scored: only owner-occupied single-family homes with a mapped lot inside Travis County are ranked"
+            reason={`Not scored: only owner-occupied single-family homes with a mapped lot inside ${countyName} County are ranked`}
           />
         ) : homeSignals.gate_reason ? (
           <div
@@ -807,7 +952,7 @@ export default async function HomeDetailPage({
                       <span>
                         {homeSignals.outage_basis === "county_eaglei_proxy" ? (
                           <>
-                            Travis County averaged{" "}
+                            {countyName} County averaged{" "}
                             <span style={{ fontFamily: "var(--type-data-font-family)", fontWeight: 600 }}>
                               {Number(homeSignals.outage_minutes).toLocaleString(undefined, { maximumFractionDigits: 2 })}
                             </span>{" "}
@@ -888,6 +1033,42 @@ export default async function HomeDetailPage({
                     );
                   })()
                 )}
+              </dd>
+            </div>
+
+            <div>
+              <dt style={{ color: "var(--theme-ink-muted)", fontSize: "var(--type-label-font-size)" }}>Grid value to Base</dt>
+              <dd style={{ margin: "var(--space-1) 0 0 0" }}>
+                <GridValue
+                  idSuffix={home.prop_id}
+                  baseCapture={gridValue.baseCapture}
+                  baseCaptureNullReason={gridValue.baseCaptureNullReason}
+                  loadZone={gridValue.loadZone}
+                  avgDailySpreadUsdMwh={gridValue.avgDailySpreadUsdMwh}
+                  scarcityDays={gridValue.scarcityDays}
+                  scarcityThresholdUsdMwh={gridValue.scarcityThresholdUsdMwh}
+                  windowStart={gridValue.windowStart}
+                  windowEnd={gridValue.windowEnd}
+                  gridValueNullReason={gridValue.gridValueNullReason}
+                  source={
+                    gridValue.source
+                      ? {
+                          dataset: gridValue.source.source,
+                          url: gridValue.source.url,
+                          retrievedAt:
+                            gridValue.source.retrieved_at instanceof Date
+                              ? gridValue.source.retrieved_at.toISOString()
+                              : String(gridValue.source.retrieved_at),
+                          sha256: gridValue.source.sha256,
+                          runId: gridValue.source.latest_run_id ?? "none",
+                          runner: gridValue.source.runner,
+                          rowsIn: gridValue.source.latest_run_rows_in,
+                          rowsLoaded: gridValue.source.latest_run_rows_loaded,
+                          rawFileHref: `/sources/raw/${gridValue.source.source_id}`,
+                        }
+                      : null
+                  }
+                />
               </dd>
             </div>
 

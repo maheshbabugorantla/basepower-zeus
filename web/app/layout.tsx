@@ -7,6 +7,7 @@ import "./globals.css";
 import { query } from "../lib/db";
 import { TopBar } from "../components/TopBar";
 import type { SourceFreshnessRow } from "../components/FreshnessSummary";
+import { getCountiesWithScoredHomes } from "../lib/counties.server";
 
 // M0-W2: the real app shell. M1-W3 fix #3: DESIGN.md §1 "Zeus is light by
 // default, with a dark theme for long desk sessions" — pages were instead
@@ -55,7 +56,7 @@ async function getFreshness(): Promise<SourceFreshnessRow[]> {
 }
 
 export default async function RootLayout({ children }: { children: ReactNode }) {
-  const freshness = await getFreshness();
+  const [freshness, counties] = await Promise.all([getFreshness(), getCountiesWithScoredHomes()]);
 
   return (
     <html lang="en" data-theme="light" suppressHydrationWarning>
@@ -67,7 +68,7 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
         <a href="#main" className="skip-link">
           Skip to content
         </a>
-        <TopBar freshness={freshness} />
+        <TopBar freshness={freshness} counties={counties} />
         <main
           id="main"
           tabIndex={-1}

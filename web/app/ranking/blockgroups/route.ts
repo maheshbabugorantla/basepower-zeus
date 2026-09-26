@@ -1,5 +1,6 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { query } from "../../../lib/db";
+import { COUNTY_CANDIDATES, DEFAULT_COUNTY } from "../../../lib/counties";
 
 // M1-W1: serves the Travis block-group polygons for BlockGroupMap's
 // choropleth. 0203_perf_precompute.sql (M2 perf) replaced the two live
@@ -19,8 +20,6 @@ import { query } from "../../../lib/db";
 
 export const dynamic = "force-dynamic";
 
-const TRAVIS_COUNTY_FIPS = "48453";
-
 interface BlockGroupGeoJSONRow {
   geoid: string;
   county_fips: string | null;
@@ -36,12 +35,20 @@ function toNumberOrNull(value: number | string | null | undefined): number | nul
   return Number(value);
 }
 
-export async function GET() {
+// M3-W1: county-driven — accepts ?county=<fips>, validated against the
+// same small candidate list the switcher uses (never an arbitrary
+// caller-supplied fips passed straight to a query, even though it's
+// already parameterized).
+export async function GET(request: NextRequest) {
+  const requested = request.nextUrl.searchParams.get("county");
+  const countyFips =
+    COUNTY_CANDIDATES.find((c) => c.fips === requested)?.fips ?? DEFAULT_COUNTY.fips;
+
   const rows = await query<BlockGroupGeoJSONRow>(
     `select geoid, county_fips, geometry, score, score_null_reason, rate_per_1000, homes_gated
      from api.blockgroup_geojson
      where county_fips = $1`,
-    [TRAVIS_COUNTY_FIPS]
+    [countyFips]
   );
 
   const features = rows.map((row) => ({

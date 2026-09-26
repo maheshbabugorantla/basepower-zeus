@@ -4,6 +4,8 @@ import { Panel } from "../../../components/ui/Panel";
 import { MissingState } from "../../../components/ui/MissingState";
 import { CoverageLegend, CoverageMap } from "../../../components/CoverageGaps";
 import type { CoverageBucketCount } from "../../../components/coverageZones";
+import { getCountiesWithScoredHomes } from "../../../lib/counties.server";
+import { resolveCounty } from "../../../lib/counties";
 
 // M2-P11: "where Base is not yet, but backup demand is proven" -- a
 // choropleth of Travis block groups bucketed into 4 zones (see
@@ -31,8 +33,18 @@ async function getCoverageBucketCounts(): Promise<CoverageBucketCount[]> {
   }
 }
 
-export default async function CoveragePage() {
-  const bucketCounts = await getCoverageBucketCounts();
+export default async function CoveragePage({
+  searchParams,
+}: {
+  searchParams: Promise<{ county?: string }>;
+}) {
+  const [{ county: requestedCounty }, availableCounties, bucketCounts] = await Promise.all([
+    searchParams,
+    getCountiesWithScoredHomes(),
+    getCoverageBucketCounts(),
+  ]);
+  const county = resolveCounty(requestedCounty, availableCounties);
+  const isTravis = county.fips === "48453";
 
   return (
     <div style={{ display: "grid", gap: "var(--space-4)" }}>
@@ -56,17 +68,20 @@ export default async function CoveragePage() {
           Where Base isn&rsquo;t yet, but backup demand is proven
         </h1>
         <p style={{ color: "var(--theme-ink-muted)", margin: "var(--space-1) 0 0 0", maxWidth: "80ch" }}>
-          Travis County block groups, bucketed from the City of Austin permit file joined to the TCAD
+          {county.name} County block groups, bucketed from the City of Austin permit file joined to the TCAD
           parcel roll -- never a per-address label of who has backup or which installer.
+          {!isTravis ? (
+            <> No public permit feed covers {county.name} yet, so every block group here shows &ldquo;not observable&rdquo;.</>
+          ) : null}
         </p>
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 320px", gap: "var(--space-6)", alignItems: "start" }}>
         <Panel>
-          {bucketCounts.length === 0 ? (
+          {bucketCounts.length === 0 && isTravis ? (
             <MissingState variant="not-loaded" reason="Coverage data not loaded yet" />
           ) : (
-            <CoverageMap geojsonUrl="/ranking/coverage/blockgroups" />
+            <CoverageMap geojsonUrl={`/ranking/coverage/blockgroups?county=${county.fips}`} />
           )}
         </Panel>
         <Panel>
@@ -80,8 +95,11 @@ export default async function CoveragePage() {
           >
             Legend
           </h2>
-          {bucketCounts.length === 0 ? (
-            <MissingState variant="not-loaded" reason="Coverage data not loaded yet" />
+          {bucketCounts.length === 0 || !isTravis ? (
+            <MissingState
+              variant="not-available"
+              reason={isTravis ? "not_loaded" : "no_public_permit_feed"}
+            />
           ) : (
             <CoverageLegend bucketCounts={bucketCounts} />
           )}

@@ -1,4 +1,5 @@
 import { describe, expect, it, afterAll } from "vitest";
+import { NextRequest } from "next/server";
 import { zoneBucket } from "../../components/coverageZones";
 import { GET as blockgroupsGET } from "../../app/ranking/coverage/blockgroups/route";
 import { getPool, query } from "../../lib/db";
@@ -34,7 +35,7 @@ describe.skipIf(!process.env.POSTGRES_URL_READONLY)("GET /ranking/coverage/block
   });
 
   it("never carries a per-home Base-customer flag, installer name, or address -- only the fixed zone-level property set", async () => {
-    const response = await blockgroupsGET();
+    const response = await blockgroupsGET(new NextRequest("http://localhost/ranking/coverage/blockgroups"));
     expect(response.status).toBe(200);
     const data: { features: { properties: Record<string, unknown> }[] } = await response.json();
     expect(data.features.length).toBeGreaterThan(0);
@@ -58,7 +59,7 @@ describe.skipIf(!process.env.POSTGRES_URL_READONLY)("GET /ranking/coverage/block
   });
 
   it("every not_observable feature really has no api.coverage_gaps_bg row for that geoid", async () => {
-    const response = await blockgroupsGET();
+    const response = await blockgroupsGET(new NextRequest("http://localhost/ranking/coverage/blockgroups"));
     const data: { features: { properties: { geoid: string; bucket: string } }[] } = await response.json();
     const notObservable = data.features.filter((f) => f.properties.bucket === "not_observable");
     if (notObservable.length === 0) return; // every Travis block group currently has some coverage row

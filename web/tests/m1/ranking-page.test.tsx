@@ -32,7 +32,7 @@ describe.skipIf(!process.env.POSTGRES_URL)("RankingPage", () => {
         ["48453"]
       );
 
-      const html = renderToStaticMarkup(await RankingPage());
+      const html = renderToStaticMarkup(await RankingPage({ searchParams: Promise.resolve({}) }));
 
       if (topPredicted.length === 0) {
         expect(html).toContain("missing-state--not-loaded");
@@ -56,7 +56,7 @@ describe.skipIf(!process.env.POSTGRES_URL)("RankingPage", () => {
         ),
       ]);
 
-      const html = renderToStaticMarkup(await RankingPage());
+      const html = renderToStaticMarkup(await RankingPage({ searchParams: Promise.resolve({}) }));
 
       if (joinRate[0]?.join_rate === null) {
         expect(html).toContain("missing-state--not-loaded");

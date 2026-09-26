@@ -14,7 +14,7 @@ export interface FunnelStep {
   ratio: number;
 }
 
-export function EligibilityFunnel({ steps }: { steps: FunnelStep[] }) {
+export function EligibilityFunnel({ steps, note }: { steps: FunnelStep[]; note?: string }) {
   return (
     <Panel>
       <h2
@@ -27,6 +27,11 @@ export function EligibilityFunnel({ steps }: { steps: FunnelStep[] }) {
       >
         Who is eligible
       </h2>
+      {note ? (
+        <p style={{ margin: "0 0 var(--space-2) 0", fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)" }}>
+          {note}
+        </p>
+      ) : null}
       <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-3)" }}>
         {steps.map((step) => (
           <div key={step.label} style={{ display: "flex", flexDirection: "column", gap: "var(--space-1)" }}>

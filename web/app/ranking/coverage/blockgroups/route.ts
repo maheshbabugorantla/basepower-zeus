@@ -1,6 +1,7 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { query } from "../../../../lib/db";
 import { zoneBucket, ZONE_BUCKET_META, type ZoneBucket } from "../../../../components/coverageZones";
+import { COUNTY_CANDIDATES, DEFAULT_COUNTY } from "../../../../lib/counties";
 
 // M2-P11: block-group polygons (api.blockgroup_geojson, same geometry
 // cache /ranking/blockgroups uses) left-joined to api.coverage_gaps_bg's
@@ -10,8 +11,6 @@ import { zoneBucket, ZONE_BUCKET_META, type ZoneBucket } from "../../../../compo
 // no permit coverage at all -- "not_observable", never shown as a gap.
 
 export const dynamic = "force-dynamic";
-
-const TRAVIS_COUNTY_FIPS = "48453";
 
 interface CoverageBlockGroupRow {
   geoid: string;
@@ -30,7 +29,16 @@ function toNumberOrNull(value: string | number | null | undefined): number | nul
   return Number(value);
 }
 
-export async function GET() {
+// M3-W1: county-driven, same ?county= convention as /ranking/blockgroups.
+// api.coverage_gaps_bg is derived from the City of Austin permit feed
+// (Travis-only, M2-P11) — a Harris/Williamson block group here always
+// left-joins to no row, so its gap fields are null (bucket
+// "not_observable"), never a fabricated Travis-shaped gap.
+export async function GET(request: NextRequest) {
+  const requested = request.nextUrl.searchParams.get("county");
+  const countyFips =
+    COUNTY_CANDIDATES.find((c) => c.fips === requested)?.fips ?? DEFAULT_COUNTY.fips;
+
   const rows = await query<CoverageBlockGroupRow>(
     `select g.geoid, g.geometry,
             c.homes, c.base_customers, c.other_backup, c.prospects,
@@ -38,7 +46,7 @@ export async function GET() {
      from api.blockgroup_geojson g
      left join api.coverage_gaps_bg c on c.block_group_geoid = g.geoid
      where g.county_fips = $1`,
-    [TRAVIS_COUNTY_FIPS]
+    [countyFips]
   );
 
   const features = rows.map((row) => {

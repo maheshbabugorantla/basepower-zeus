@@ -1,7 +1,13 @@
+"use client";
+
+import { Suspense } from "react";
+import { usePathname, useSearchParams } from "next/navigation";
+import Link from "next/link";
 import { PrimaryNav } from "./PrimaryNav";
 import { ExportButton } from "./ExportButton";
 import { ThemeToggle } from "./ThemeToggle";
 import { FreshnessSummary, type SourceFreshnessRow } from "./FreshnessSummary";
+import type { CountyOption } from "../lib/counties";
 
 // DESIGN.md §5 Navigation: "The top bar holds the wordmark, the county
 // switcher (Travis, Harris), the freshness summary (quiet unless something
@@ -10,12 +16,52 @@ import { FreshnessSummary, type SourceFreshnessRow } from "./FreshnessSummary";
 // in its own bar under the header (M1-W3 fix #4/#5: "nav is plain
 // underlined links with no active state").
 //
-// Only Travis has any loaded parcel/geometry data through M1 (Harris lands
-// in a later milestone), so the county control is a real, focusable
-// segmented group with exactly one enabled, pressed option — not a
-// disabled/fake control, and not a raw <select> (M1-W3 fix #5).
+// M3-W1: data-driven county switcher. `counties` is the real list of
+// counties that have at least one scored home right now
+// (lib/counties.ts's getCountiesWithScoredHomes(), read once server-side
+// in app/layout.tsx) — never a fixed Travis/Harris pair. The active
+// county is read from the `?county=` search param on the CURRENT page
+// (client component, so it can follow navigation without a full reload);
+// each button links to the same pathname with that param set, so
+// Overview/Ranking/Coverage all follow the same control per DESIGN.md.
 
-export function TopBar({ freshness }: { freshness: SourceFreshnessRow[] }) {
+function CountySwitcherInner({ counties }: { counties: CountyOption[] }) {
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const activeFips = searchParams.get("county") ?? counties[0]?.fips ?? "48453";
+
+  return (
+    <div role="group" aria-label="County" className="county-switcher">
+      <span className="county-switcher__label">County</span>
+      {counties.map((county) => {
+        const params = new URLSearchParams(searchParams.toString());
+        params.set("county", county.fips);
+        const href = `${pathname}?${params.toString()}`;
+        const isActive = county.fips === activeFips;
+        return (
+          <Link
+            key={county.fips}
+            href={href}
+            aria-pressed={isActive}
+            className={
+              "county-switcher__button" + (isActive ? " county-switcher__button--active" : "")
+            }
+          >
+            {county.name}
+          </Link>
+        );
+      })}
+    </div>
+  );
+}
+
+export function TopBar({
+  freshness,
+  counties,
+}: {
+  freshness: SourceFreshnessRow[];
+  counties: CountyOption[];
+}) {
   return (
     <header className="top-bar">
       <div className="top-bar__brand">
@@ -39,12 +85,9 @@ export function TopBar({ freshness }: { freshness: SourceFreshnessRow[] }) {
 
       <div className="top-bar__spacer" />
 
-      <div role="group" aria-label="County" className="county-switcher">
-        <span className="county-switcher__label">County</span>
-        <button type="button" aria-pressed="true" className="county-switcher__button county-switcher__button--active">
-          Travis
-        </button>
-      </div>
+      <Suspense fallback={null}>
+        <CountySwitcherInner counties={counties} />
+      </Suspense>
 
       <FreshnessSummary rows={freshness} />
       <ThemeToggle />
