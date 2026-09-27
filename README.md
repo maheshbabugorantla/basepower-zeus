@@ -18,19 +18,19 @@ The app opens on a map of real census block groups shaded by how many top-priori
 
 ![Zeus demo: the intro reel, rank 1's case and its source, Team priorities, a ZIP camera glide, a home record, and the Overview](docs/media/zeus-demo.gif)
 
-Full-quality recording: [`docs/media/zeus-demo.mp4`](docs/media/zeus-demo.mp4) (58 s, 1440×900, recorded live against the app with Playwright).
+Full-quality recording: [`docs/media/zeus-demo.mp4`](docs/media/zeus-demo.mp4) (55 s, 1440×900, recorded live against https://base-power-zeus.vercel.app with Playwright, starting at `/?intro`).
 
 ## What it does, and for whom
 
 Two audiences use the same screen:
 
 - **A Base growth or territory analyst at a desk** deciding which neighborhoods and homes to approach next, and why. The home record, the signal breakdown and the Sources page reward a close look.
-- **A room watching a projector for five minutes.** The first visit plays a 13-second intro reel that ends on the live ranking, and the ranked list, the map and the case sentence read from across the room.
+- **A room watching a projector for five minutes.** The first visit plays a short intro reel (about 11 seconds) that ends on the live ranking, and the ranked list, the map and the case sentence read from across the room.
 
 | Page | What it answers |
 |---|---|
 | **Ranking** | Which homes in this county are most likely to add backup, and why. Map and list on one screen, rank 1 expanded, camera glides to any city, ZIP or neighborhood. |
-| **Home record** | Everything about one home, in tabs: Summary (the case, six meters, six facts, recent permits, priority, a "before you knock" checklist), Signals, Permits, Parcel & solar, Sources. |
+| **Home record** | Everything about one home under its address, in tabs: Summary (the case, six meters, six facts, recent permits, priority, a "before you knock" checklist), Signals, Permits, Parcel & solar, Sources. |
 | **Overview** | The territory at a glance: outage minutes by utility, the storm record, how many parcels reach the ranked list per county, and battery permit times. |
 | **Sources** | How leads are prioritized, the model's accuracy check, spot checks on the data, and every downloaded file with its fingerprint. |
 
@@ -188,7 +188,7 @@ This repo's non-negotiable rule, enforced in CI:
 | No-mock scan | `python3 scripts/no_mock_check.py` | Fake-data libraries, `random`, literal record arrays, zero-filling, fixture sidecars |
 | Ticket graph | `python3 scripts/dag.py tickets/<Mn>/` | Wave order, cycles, overlapping `owns` paths |
 | Script tests | `python3 -m unittest discover -s scripts/tests` | The checkers themselves |
-| Web tests | `cd web && npx vitest run` | 184 tests at the time of writing; database suites run when the read-only URL is set |
+| Web tests | `cd web && npx vitest run` | 184 tests in 45 files at the time of writing; database suites run when the read-only URL is set |
 | Types and build | `cd web && npm run typecheck && npm run build` | The production build |
 | Pipeline checks | `python3 -m pipelines.check manifest\|rows\|provenance` | Re-downloads and re-hashes raw files, row counts, source ids on every `api.*` view |
 
@@ -204,7 +204,7 @@ vercel deploy --scope gorantlasubs-gmailcoms-projects              # preview
 vercel promote <preview-url> --scope gorantlasubs-gmailcoms-projects
 ```
 
-Static assets (the brand mark, the intro reel art, icons) ship with the web build under `web/public/` and are served from Vercel's CDN. The Hobby plan limits functions to 300 s, so long backfills run from the CLI (`runner='cli'` in `ops.pipeline_runs`).
+Static assets (the brand mark, the intro reel art, the map worker, icons) ship with the web build under `web/public/` and are served from Vercel's CDN. `/brand`, `/intro` and `/maplibre` carry `Cache-Control: public, max-age=86400, stale-while-revalidate=604800` (`web/next.config.ts`), so browsers reuse them for a day and refresh them in the background for a week. The Hobby plan limits functions to 300 s, so long backfills run from the CLI (`runner='cli'` in `ops.pipeline_runs`).
 
 ## Repo layout
 
