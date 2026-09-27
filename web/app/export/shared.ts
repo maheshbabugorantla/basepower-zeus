@@ -1,5 +1,5 @@
 import "server-only";
-import { plainReason } from "../../lib/priorityTier";
+import { plainReason, isEligibleReason } from "../../lib/priorityTier";
 
 // M5-W1: shared plumbing for /export/homes and /export/coverage --
 // plain-CSV, streamed, read-only role, real DB rows only (no synthetic
@@ -142,7 +142,7 @@ export interface PropensityReason {
 // feature/direction pair.
 export function formatPredictedReasons(reasons: PropensityReason[]): string {
   return reasons
-    .filter((r) => r.direction === "raises")
+    .filter((r) => r.direction === "raises" && isEligibleReason(r.feature))
     .map((r) => plainReason(r.feature))
     .join("; ");
 }

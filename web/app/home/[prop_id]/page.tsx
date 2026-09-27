@@ -9,7 +9,7 @@ import { ParcelMap } from "../../../components/ParcelMap";
 import { SolarPanel } from "../../../components/SolarPanel";
 import { ScoreExplainer } from "../../../components/ScoreExplainer";
 import { PropensityBadge, type PropensityReason } from "../../../components/PropensityBadge";
-import { utilityStatusForHome } from "../../../lib/priorityTier";
+import { utilityStatusForHome, buildYearNote } from "../../../lib/priorityTier";
 import { PermitPath, type PermitPathKind, type PermitPathStatsRow, type PermitRulesCitation } from "../../../components/PermitPath";
 import { GridValue } from "../../../components/GridValue";
 import { COUNTY_CANDIDATES, CAD_NAME } from "../../../lib/counties";
@@ -221,6 +221,16 @@ interface IncomeAgeRow {
 const GATE_REASON_LABEL: Record<string, string> = {
   territory_not_base_served: "Not in a utility Base serves (HIFLD polygon match, or Base's served-utilities list does not mark it mapped=yes)",
 };
+
+/** territory_null_reason codes with a known plain-language line in
+ * MissingState's own REASON_TEXT map -- rendered via MissingState
+ * (never the generic "(raw_code)" fallback further below). */
+const KNOWN_UTILITY_NULL_REASONS = new Set([
+  "utility_not_confirmed",
+  "multiply_certificated",
+  "no_ccn_match",
+  "ccn_holder_unmapped",
+]);
 
 // M2-W4: regulated (no retail choice, e.g. Austin Energy municipal) vs
 // deregulated (retail choice, e.g. Oncor) market, from api.retail_market
@@ -983,6 +993,19 @@ export default async function HomeDetailPage({
                   : "Not resolvable yet."}
             </dd>
           </div>
+          <div>
+            <dt style={{ color: "var(--theme-ink-muted)", fontSize: "var(--type-label-font-size)" }}>Build year</dt>
+            <dd style={{ margin: "var(--space-1) 0 0 0" }}>
+              {homeSignals?.yr_built == null ? (
+                <MissingState
+                  variant="not-loaded"
+                  reason={homeSignals?.yr_built_null_reason ?? "Build year not available"}
+                />
+              ) : (
+                buildYearNote(homeSignals.yr_built)
+              )}
+            </dd>
+          </div>
         </dl>
       </Panel>
 
@@ -1016,16 +1039,19 @@ export default async function HomeDetailPage({
             <strong>Excluded from ranking:</strong>{" "}
             {GATE_REASON_LABEL[homeSignals.gate_reason] ?? homeSignals.gate_reason}
           </div>
-        ) : homeSignals.territory_null_reason === "utility_not_confirmed" ? (
+        ) : KNOWN_UTILITY_NULL_REASONS.has(homeSignals.territory_null_reason ?? "") ? (
           // M-utility-gate copy fix: Williamson's every HIFLD territory
           // polygon overlaps, so which utility actually serves this home
-          // can't be resolved from the polygon alone. The raw code is
-          // passed straight through -- MissingState's own REASON_TEXT map
-          // (components/ui/MissingState.tsx) is the one place every
-          // null_reason code becomes plain text, per CLAUDE.md's "Added
-          // after M2-W3" rule -- never a second hardcoded copy of it here.
+          // can't be resolved from the polygon alone -- 'utility_not_
+          // confirmed'. M-ccn adds the PUCT CCN-mapping outcomes
+          // ('multiply_certificated'/'no_ccn_match'/'ccn_holder_unmapped'),
+          // now live in the DB. The raw code is passed straight through --
+          // MissingState's own REASON_TEXT map (components/ui/MissingState.tsx)
+          // is the one place every null_reason code becomes plain text, per
+          // CLAUDE.md's "Added after M2-W3" rule -- never a second
+          // hardcoded copy of it here.
           <div style={{ marginBottom: "var(--space-4)" }}>
-            <MissingState variant="not-loaded" reason={homeSignals.territory_null_reason} />
+            <MissingState variant="not-loaded" reason={homeSignals.territory_null_reason as string} />
           </div>
         ) : homeSignals.territory_null_reason ? (
           <div style={{ marginBottom: "var(--space-4)" }}>

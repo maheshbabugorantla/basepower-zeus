@@ -119,34 +119,68 @@ export function decileRangeForTier(tier: PriorityTierKey | "all"): [number | nul
 // disappears from the UI.
 // ---------------------------------------------------------------------------
 
+// Rep-approved reason vocabulary ONLY -- a rep must be able to say this
+// out loud at the door. Every entry here is a story ("neighbors added
+// backup"), never a bare threshold or fact ("year built", "installed
+// before 2000"). Facts like build year belong on the row meta line and
+// the door brief's "Before you knock" section instead (see
+// buildYearNote below), never as a reason chip.
 export const REASON_PHRASES: Record<string, string> = {
   "home value": "High-value home",
-  "year built": "Newer construction",
-  "over-65 exemption on file": "Older homeowner",
-  "share of neighbors 65+": "Older neighborhood",
+  "over-65 exemption on file": "Homeowner 65+",
   "share of neighbors with electric heat": "Electric heat",
-  "medical-need rate (zip)": "Medical-need household nearby",
+  "medical-need rate (zip)": "Many neighbors rely on powered medical devices",
   "outage exposure": "Long outages on this utility",
-  "share of neighbors earning $100k+": "Higher-income neighborhood",
-  "share of neighbors aged 35-64": "Prime working-age neighborhood",
   "home's own solar permit": "Already has solar",
-  "home's own ev charger permit": "Already has an EV charger",
-  "home's own panel-upgrade permit": "Recently upgraded electric panel",
-  "home's own prior battery permit": "Already has backup",
-  "home's own prior generator permit": "Already has backup",
   "neighbors who already added backup": "Neighbors recently added backup",
 };
 
-/** Case-insensitive lookup with the "already has backup" collision
- * resolved to whichever exact label matched (own battery vs. own
- * generator both read "Already has backup" to a rep -- same talking
- * point either way). */
+// Model feature labels that are real contributors but must NEVER become
+// a reason chip -- they're a bare threshold/fact, not a sentence a rep
+// can say, or they'd contradict the door-brief's own "already has
+// backup -- skip" rule (a home's own prior battery/generator permit is a
+// reason to DE-prioritize, not a reason to knock). Filtered out of the
+// model's top-3 before display; since web/ only ever receives that
+// stored top-3 (never a 4th contributor), a home whose top-3 are all
+// excluded shows fewer reason chips rather than a fabricated one --
+// "missing means empty," never invented.
+const EXCLUDED_REASON_LABELS = new Set([
+  "year built",
+  "installability",
+  "share of neighbors 65+",
+  "share of neighbors earning $100k+",
+  "share of neighbors aged 35-64",
+  "home's own ev charger permit",
+  "home's own panel-upgrade permit",
+  "home's own prior battery permit",
+  "home's own prior generator permit",
+]);
+
+export function isEligibleReason(featureLabel: string): boolean {
+  return !EXCLUDED_REASON_LABELS.has(featureLabel.toLowerCase());
+}
+
+/** Case-insensitive lookup. Callers should filter through
+ * isEligibleReason first -- this still returns a readable fallback
+ * (capitalized label) for anything that slips through, but never for
+ * one of the excluded labels above by design. */
 export function plainReason(featureLabel: string): string {
   const phrase = REASON_PHRASES[featureLabel.toLowerCase()];
   if (phrase) return phrase;
   // Fallback: capitalize the model's own label so it's still a full
   // sentence fragment, not raw feature-engineering text.
   return featureLabel.charAt(0).toUpperCase() + featureLabel.slice(1);
+}
+
+/** Build-year fact for the door brief's "Before you knock" -- never a
+ * reason chip (see EXCLUDED_REASON_LABELS above). Harris carries no
+ * yr_built for any home (no public appraisal-roll field loaded for it)
+ * -- that is said plainly, never guessed or defaulted to a year. */
+export function buildYearNote(yrBuilt: number | null): string {
+  if (yrBuilt === null) return "Build year not available";
+  return yrBuilt >= 2000
+    ? `Built ${yrBuilt} -- wiring likely to modern code`
+    : `Built ${yrBuilt} -- older wiring, check the panel`;
 }
 
 // ---------------------------------------------------------------------------

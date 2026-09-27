@@ -365,11 +365,15 @@
 
 .ranking-board {
   display: grid;
-  grid-template-columns: minmax(280px, 340px) minmax(0, 1.4fr) minmax(0, 1.6fr);
+  /* Map-as-dominant-surface pivot: the map is ~70% of the map+list
+     workspace at desktop (rail is a narrow, secondary column outside
+     that split), min 480px so it never gets squeezed on a narrower
+     "desktop" width; the list is the remaining ~30%, its own scroll. */
+  grid-template-columns: minmax(190px, 220px) minmax(480px, 2.3fr) minmax(280px, 1fr);
   gap: var(--space-6);
   align-items: stretch;
-  height: calc(100vh - 260px);
-  min-height: 560px;
+  height: calc(100vh - 160px);
+  min-height: 640px;
 }
 
 .ranking-board__rail {
@@ -380,9 +384,18 @@
   min-height: 0;
 }
 
-/* M2-W1 (responsive fix): stack rail -> map -> table below 1280px, in
- * that DOM order, instead of squeezing three columns into one-word-per-
- * line widths. */
+.ranking-board__map-panel {
+  height: 100%;
+  min-height: 560px;
+}
+
+/* Three explicit breakpoints (layout review): desktop >=1280 (3-col,
+ * map dominant per above); tablet 900-1279 (map full-width above the
+ * list at a fixed 420px, rail stacks above both); phone <900 (map
+ * full-width at 320px, list below). No horizontal overflow at any of
+ * them -- 1fr columns everywhere below 1280, and the map panel's height
+ * is an explicit px value at these sizes rather than a %-of-parent
+ * (which breaks once the parent's own height goes to auto). */
 @media (max-width: 1279px) {
   .ranking-board {
     grid-template-columns: 1fr;
@@ -391,6 +404,18 @@
 
   .ranking-board__rail {
     overflow-y: visible;
+  }
+
+  .ranking-board__map-panel {
+    height: 420px;
+    min-height: 420px;
+  }
+}
+
+@media (max-width: 899px) {
+  .ranking-board__map-panel {
+    height: 320px;
+    min-height: 320px;
   }
 }
 
@@ -436,6 +461,74 @@
   font-family: var(--type-label-font-family);
   font-size: var(--type-label-font-size);
   color: var(--theme-ink-muted);
+}
+
+/* Layout-review fix: predicted-mode lead-list rows as a CSS grid
+ * "table" (role=table/row/cell) instead of an HTML <table> -- a real
+ * <table> let a long address wrap into the Priority column and let
+ * reason chips overlap the row below at 1440px, because table columns
+ * can grow past a colgroup hint. Grid columns are hard-sized instead:
+ * content that doesn't fit truncates/clips inside its own column, it
+ * never bleeds into a neighbor. */
+.predicted-homes-table {
+  display: flex;
+  flex-direction: column;
+}
+
+.predicted-homes-table__row {
+  display: grid;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--theme-divider);
+  min-width: 0;
+}
+
+.predicted-homes-table__row--head {
+  font-family: var(--type-label-font-family);
+  font-size: var(--type-label-font-size);
+  font-weight: var(--type-label-font-weight);
+  color: var(--theme-ink-muted);
+  padding-bottom: var(--space-2);
+}
+
+.predicted-homes-table__row--body:hover,
+.predicted-homes-table__row--body[data-hovered] {
+  background-color: var(--theme-surface-sunken);
+}
+
+/* One line only here (unlike the weighted-mode table's 2-line clamp) --
+ * this list prioritizes row density (>=5 rows visible at 1440x900) over
+ * showing a full multi-word street name; the full address is always one
+ * click away on /home/[prop_id]. */
+.predicted-homes-table__home-cell .top-homes-address {
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.predicted-homes-table__home-cell,
+.predicted-homes-table__priority-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.predicted-homes-table__reasons {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: var(--space-1);
+  overflow: hidden;
+}
+
+.predicted-homes-table__reasons .chip {
+  white-space: nowrap;
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .top-homes-score {

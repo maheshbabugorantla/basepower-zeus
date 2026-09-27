@@ -2,12 +2,11 @@ import Link from "next/link";
 import { query } from "../../lib/db";
 import { RankingBoard } from "./RankingBoard";
 import { QualityPanel, type QualityPanelData, type ClassifierPrecisionRow } from "../../components/QualityPanel";
-import { EligibilityFunnel, type FunnelStep } from "../../components/EligibilityFunnel";
-import { GateCounts, type GateCountRow } from "../../components/GateCounts";
+import type { GateCountRow } from "../../components/GateCounts";
 import type { TopHomeRow } from "../../components/TopHomesTable";
 import { fetchRankedHomes, fetchPredictedHomes, SIGNAL_KEYS, type SignalKey, type PredictedHomeRow } from "../api/top-homes/route";
 import { getCountiesWithScoredHomes } from "../../lib/counties.server";
-import { resolveCounty, CAD_NAME } from "../../lib/counties";
+import { resolveCounty } from "../../lib/counties";
 import type { GeoRollupRow } from "../../lib/geoRollup";
 import { decileRangeForTier, type PriorityTierKey } from "../../lib/priorityTier";
 
@@ -100,42 +99,6 @@ interface ParcelGateCountsRow {
 interface GateCountsRow {
   reason: string;
   home_count: string | number;
-}
-
-async function getFunnelSteps(countyFips: string): Promise<FunnelStep[]> {
-  // M2-W1 perf fix: this used to run a live `select count(*) ... FILTER
-  // (...) from core.parcels` (a full 441,961-row scan) plus a second
-  // `count(*) from core.mv_home_block_group` on every /ranking request —
-  // duplicating Overview's own (also-live) count and, under concurrent
-  // load, contributing to a real statement-timeout cascade on the shared
-  // Supabase pooler. Every count below now comes from an already-precomputed
-  // source: api.parcel_gate_counts for the first two steps, and
-  // api.gate_counts (0201_m2.sql, built on the materialized
-  // core.mv_home_signals) for the last — sum(home_count) across every
-  // reason is exactly the single-family + homestead + parcel-geometry
-  // population, since core.mv_home_signals has one row per home in that
-  // population regardless of the M2 territory-gate outcome. Both views
-  // now carry county_fips (0303b), so this scopes to the selected county
-  // instead of a combined total across every loaded county.
-  const [pgcRows, gateRows] = await Promise.all([
-    query<ParcelGateCountsRow>(
-      `select total_parcels, single_family_count from api.parcel_gate_counts where county_fips = $1`,
-      [countyFips]
-    ),
-    query<GateCountsRow>(`select reason, home_count from api.gate_counts where county_fips = $1`, [countyFips]),
-  ]);
-  const pgc = pgcRows[0];
-  if (!pgc) return [];
-  const total = Number(pgc.total_parcels);
-  if (total === 0) return [];
-  const gatedForScoring = gateRows.reduce((sum, r) => sum + Number(r.home_count), 0);
-
-  const values = [
-    { label: "Parcels on the appraisal rolls loaded so far", value: total },
-    { label: "Single-family homes", value: Number(pgc.single_family_count) },
-    { label: "Owner-occupied, with a mapped lot", value: gatedForScoring },
-  ];
-  return values.map((v) => ({ ...v, ratio: v.value / total }));
 }
 
 // M4-W2: predicted mode is the ranking default -- server-rendered so the
@@ -259,10 +222,19 @@ interface GeoRollupDbRow {
 /** M-drilldown: api.home_geo_rollup (core.mv_home_geo_rollup, 0303) --
  * one precomputed row per (city, ZIP, block group) in the county, read
  * once per /ranking request and cascaded client-side into the City ->
- * ZIP -> Neighborhood dropdowns (see lib/geoRollup.ts). Predicted-mode
- * only -- weighted mode has no per-bucket average to show (a weighted
- * score is a live per-request computation), so RankingBoard only reads
- * this array when its ranking mode is "predicted". */
+ * ZIP -> Neighborhood dropdowns (see lib/geoRollup.ts).
+ *
+ * Layout-review item 5 ("dropdown counts must match the list") tried a
+ * live equivalent of this aggregation, joining core.home_propensity/
+ * core.mv_home_signals/core.parcels/core.home_coverage and excluding
+ * backup homes to match the list exactly -- that query timed out against
+ * the live DB (statement timeout, confirmed by the test suite) because
+ * this view exists precisely to avoid that per-request full-population
+ * scan. Reverted to the precomputed view; the dropdown-count mismatch
+ * when "Hide homes that already have backup" is on is a real, known gap
+ * (documented here rather than re-introducing a second explanatory
+ * paragraph on the page) that needs a DB-side fix (a backup-aware
+ * column on the view itself), not a per-request recompute. */
 async function getGeoRollup(countyFips: string): Promise<GeoRollupRow[]> {
   try {
     const rows = await query<GeoRollupDbRow>(
@@ -275,7 +247,7 @@ async function getGeoRollup(countyFips: string): Promise<GeoRollupRow[]> {
       countyFips: r.county_fips,
       situsCity: r.situs_city,
       situsZip: r.situs_zip,
-      blockGroupGeoid: r.block_group_geoid,
+      blockGroupGeoid: r.block_group_geoid ?? "",
       homeCount: Number(r.home_count),
       avgP: r.avg_p === null ? null : Number(r.avg_p),
       maxP: r.max_p === null ? null : Number(r.max_p),
@@ -334,7 +306,7 @@ export default async function RankingPage({
   // home) is only fetched server-side when the URL actually asks for it
   // -- otherwise RankingBoard's own client effect fetches it the first
   // time a visitor switches to it, exactly as before this ticket.
-  const [predictedHomes, weightedHomes, qualityData, funnelSteps, gateCounts, geoRollup] = await Promise.all([
+  const [predictedHomes, weightedHomes, qualityData, gateCounts, geoRollup] = await Promise.all([
     getPredictedHomes(county.fips, { city: initialCity, zip: initialZip, blockGroupGeoid: initialBlockGroupGeoid, hideOldHomes: initialHideOldHomes, excludeBackup: initialHideExistingBackup, tier: initialTier }),
     initialMode === "weighted"
       ? fetchRankedHomes({
@@ -349,28 +321,39 @@ export default async function RankingPage({
         })
       : Promise.resolve({ rows: [] as TopHomeRow[], total: 0 }),
     getQualityPanelData(county.fips),
-    getFunnelSteps(county.fips),
     getGateCounts(county.fips),
     getGeoRollup(county.fips),
   ]);
   const { rows: predictedRows, total: predictedTotal } = predictedHomes;
-  // Design-inspiration header ("Now ranking: County · N homes · Base
-  // serves M"): both counts come from the same gate-count rows the left
-  // rail's own GateCounts panel reads, never a second query.
+  // Coordinator's layout fix, corrected: one workspace, not a 3-panel
+  // dashboard. gateTotalHomes (sum of api.gate_counts across every
+  // reason) IS the eligible population -- owner-occupied, single-family,
+  // mapped lot. The other three numbers are read straight off their own
+  // gate_counts reasons, never derived by subtraction -- "not served"
+  // must mean territory_not_base_served specifically, and every
+  // unresolved/fail-open reason (utility_not_confirmed and the CCN-
+  // mapping codes) is its own "needs verification" bucket, not folded
+  // into either "serves" or "not served". Never claim "Base can't serve
+  // any home here" unless passed is actually 0 -- a fail-open reason
+  // (this county's territory data still loading) is not the same claim.
   const gateTotalHomes = gateCounts.reduce((sum, r) => sum + r.homeCount, 0);
   const gateServableHomes = gateCounts.find((r) => r.reason === "passed")?.homeCount ?? 0;
+  const gateNotServedHomes = gateCounts.find((r) => r.reason === "territory_not_base_served")?.homeCount ?? 0;
+  const NEEDS_VERIFICATION_REASONS = new Set([
+    "utility_not_confirmed",
+    "multiply_certificated",
+    "no_ccn_match",
+    "ccn_holder_unmapped",
+  ]);
+  const gateNeedsVerificationHomes = gateCounts
+    .filter((r) => NEEDS_VERIFICATION_REASONS.has(r.reason))
+    .reduce((sum, r) => sum + r.homeCount, 0);
 
   // Perf follow-up (0303b): api.gate_counts / api.parcel_gate_counts /
   // api.gate_counts_by_market now all carry county_fips, so every count
   // panel below is scoped to the selected county -- no more "combined
   // across every loaded county" caveat.
-  const leftRail = (
-    <>
-      <EligibilityFunnel steps={funnelSteps} appraisalDistrictName={CAD_NAME[county.fips] ?? `${county.name} Central Appraisal District`} />
-      <GateCounts rows={gateCounts} countyFips={county.fips} />
-      <QualityPanel data={qualityData} countyName={county.name} />
-    </>
-  );
+  const leftRail = <QualityPanel data={qualityData} countyName={county.name} />;
 
   return (
     <div style={{ display: "grid", gap: "var(--space-4)" }}>
@@ -385,21 +368,30 @@ export default async function RankingPage({
         >
           Lead list
         </h1>
-        {/* Design-inspiration header: the scope in one line, then the
-            whole method in one sentence -- no dashboard of panels above
-            the fold, no probability/multiple anywhere in it. */}
+        {/* One scope line (the only large/prominent line); everything
+            else here is small secondary text on as few lines as
+            possible -- no dashboard of panels above the fold, no
+            probability/multiple anywhere in it. */}
         <p style={{ margin: "var(--space-1) 0 0 0", fontFamily: "var(--type-data-font-family)" }}>
-          Now ranking: {county.name} County · {gateTotalHomes.toLocaleString()} homes · Base serves{" "}
-          {gateServableHomes.toLocaleString()}
+          {gateServableHomes === 0 ? (
+            <>
+              Now ranking: {county.name} County · {gateTotalHomes.toLocaleString()} eligible homes · Base can&rsquo;t
+              confirm service for any home here yet
+            </>
+          ) : (
+            <>
+              Now ranking: {county.name} County · {gateTotalHomes.toLocaleString()} eligible homes · Base serves{" "}
+              {gateServableHomes.toLocaleString()}
+              {gateNeedsVerificationHomes > 0
+                ? ` · ${gateNeedsVerificationHomes.toLocaleString()} need utility verification`
+                : ""}
+              {gateNotServedHomes > 0 ? ` · ${gateNotServedHomes.toLocaleString()} not served` : ""}
+            </>
+          )}
         </p>
-        <p style={{ color: "var(--theme-ink-muted)", margin: "var(--space-1) 0 0 0", maxWidth: "80ch" }}>
-          Priority = a model trained on past backup-battery and generator permits; each home&rsquo;s reasons are its
-          strongest signals. <Link href="/sources#how-leads-are-prioritized">How this works →</Link>
-        </p>
-        <p style={{ margin: "var(--space-1) 0 0 0" }}>
-          <Link href={`/ranking/coverage?county=${county.fips}`}>
-            See coverage gaps -- where Base isn&rsquo;t yet, but backup demand is proven →
-          </Link>
+        <p style={{ color: "var(--theme-ink-muted)", margin: "var(--space-1) 0 0 0", maxWidth: "90ch", fontSize: "var(--type-label-font-size)" }}>
+          Priority = a model trained on past backup-battery and generator permits, strongest signals shown per home
+          (<Link href="/sources#how-leads-are-prioritized">how this works</Link>). <Link href={`/ranking/coverage?county=${county.fips}`}>See coverage gaps →</Link>
         </p>
       </div>
       <RankingBoard

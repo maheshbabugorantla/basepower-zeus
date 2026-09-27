@@ -1,7 +1,7 @@
 import { Chip } from "./ui/Chip";
 import { PriorityTierBadge } from "./ui/PriorityTierBadge";
 import { MissingState } from "./ui/MissingState";
-import { plainReason } from "../lib/priorityTier";
+import { plainReason, isEligibleReason } from "../lib/priorityTier";
 
 // M4-W2, revised for the "no multiples in front of a rep" product rule:
 // core.home_propensity still drives ranking under the hood
@@ -50,15 +50,15 @@ export function PropensityBadge({
   showReasons = true,
   maxReasons = 3,
 }: PropensityBadgeProps) {
-  const risingReasons = reasons.filter((r) => r.direction === "raises").slice(0, maxReasons);
-  // If a home has fewer than maxReasons rising reasons, fill in from
-  // "lowers" only when there's nothing else to say (still labeled
-  // plainly -- "Already has backup" reads as a reason to skip, not a
-  // reason to knock, and the door brief's own "Before you knock" section
-  // is the one place a lowering reason really belongs). Kept here so a
-  // rep never sees a bare, reasonless tier chip when the model *has* a
-  // top-3 for this home.
-  const shownReasons = risingReasons.length > 0 ? risingReasons : reasons.slice(0, maxReasons);
+  // Only rising, rep-approved-vocabulary reasons ever become a chip
+  // (isEligibleReason drops bare thresholds/facts like "year built" and
+  // anything that means "already has backup," which belongs in the door
+  // brief's own "Before you knock" section, not as a reason to knock).
+  // web/ only ever receives the model's stored top-3, never a 4th
+  // contributor to fall back to -- a home whose top-3 are all ineligible
+  // or "lowers" shows fewer chips (even zero) rather than a fabricated
+  // reason. Honest and empty beats invented.
+  const shownReasons = reasons.filter((r) => r.direction === "raises" && isEligibleReason(r.feature)).slice(0, maxReasons);
 
   return (
     <div className="propensity-badge">
