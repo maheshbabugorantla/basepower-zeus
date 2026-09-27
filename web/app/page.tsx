@@ -1,13 +1,15 @@
+import type { ReactNode } from "react";
 import Link from "next/link";
 import { query } from "../lib/db";
 import { MissingState } from "../components/ui/MissingState";
-import {
-  OutageSummary,
-  type CountyOutageContext,
-  type DistributorReliabilityRow,
-  type OutageSummaryData,
+import type {
+  CountyOutageContext,
+  DistributorReliabilityRow,
+  OutageSourceProvenance,
 } from "../components/OutageSummary";
-import { PermitTimelinePanel, type PermitQuarterRow } from "../components/PermitTimelinePanel";
+import { OutageBars } from "../components/OutageBars";
+import { ProvenancePopover } from "../components/ui/ProvenancePopover";
+import { StaleBadge } from "../components/ui/Badge";
 import { getCountiesWithScoredHomes } from "../lib/counties.server";
 import { COUNTY_CANDIDATES, type CountyOption } from "../lib/counties";
 import { StormRecordPanel, type StormRecordCounty } from "../components/StormRecordPanel";
@@ -286,6 +288,10 @@ async function getStormRecords(countyFipsList: string[]): Promise<StormRecordCou
 
 interface ReadinessRow {
   county: CountyOption;
+  /** true when the county's loader kept single-family homesteads only (the
+   * roll has no non-single-family and no non-homestead parcel at all), so
+   * "parcels" and "single-family" were never counted separately */
+  prefilteredRoll: boolean;
   totalParcels: number | null;
   singleFamilyCount: number | null;
   homesteadCount: number | null;
@@ -297,7 +303,9 @@ interface ReadinessRow {
 interface GateCountsDbRow {
   total_parcels: string | number;
   single_family_count: string | number;
+  not_single_family_count: string | number;
   homestead_count: string | number;
+  not_homestead_count: string | number;
   gated_count: string | number | null;
 }
 
@@ -308,7 +316,9 @@ async function getReadinessRow(county: CountyOption): Promise<ReadinessRow> {
         `select
            pgc.total_parcels,
            pgc.single_family_count,
+           pgc.not_single_family_count,
            pgc.homestead_count,
+           pgc.not_homestead_count,
            (select sum(home_count) from api.gate_counts where county_fips = $1) as gated_count
          from api.parcel_gate_counts pgc
          where pgc.county_fips = $1`,
@@ -322,8 +332,11 @@ async function getReadinessRow(county: CountyOption): Promise<ReadinessRow> {
     ]);
     const gateRow = gateRows[0];
     const byReason = new Map(topHomesRows.map((r) => [r.reason, r.n === null ? null : Number(r.n)]));
+    const prefilteredRoll =
+      !!gateRow && Number(gateRow.not_single_family_count) === 0 && Number(gateRow.not_homestead_count) === 0;
     return {
       county,
+      prefilteredRoll,
       totalParcels: gateRow ? Number(gateRow.total_parcels) : null,
       singleFamilyCount: gateRow ? Number(gateRow.single_family_count) : null,
       homesteadCount: gateRow ? Number(gateRow.homestead_count) : null,
@@ -335,6 +348,7 @@ async function getReadinessRow(county: CountyOption): Promise<ReadinessRow> {
     console.error(`page: failed to load readiness row for ${county.fips}`, err);
     return {
       county,
+      prefilteredRoll: false,
       totalParcels: null,
       singleFamilyCount: null,
       homesteadCount: null,
@@ -345,53 +359,82 @@ async function getReadinessRow(county: CountyOption): Promise<ReadinessRow> {
   }
 }
 
-interface PermitQuarterDbRow {
-  period: string;
-  is_base_power: boolean;
+interface PermitStatsDbRow {
   n: string | number;
   median_days: string | number | null;
   p90_days: string | number | null;
+  share_never_finished: string | number | null;
+  source: string | null;
+  url: string | null;
+  retrieved_at: string | Date | null;
+  sha256: string | null;
+  storage_key: string | null;
+  runner: "cron" | "cli" | null;
+  latest_run_id: string | null;
+  latest_run_rows_in: number | null;
+  latest_run_rows_loaded: number | null;
 }
 
-/** M2-P9: "Time to permit a home battery" -- api.permit_path_stats, scoped
- * to whichever real jurisdiction covers `countyFips` (COUNTY_PERMIT_JURISDICTION
- * above); null when no jurisdiction has ever been loaded for that county. */
-async function getPermitTimelineByQuarter(jurisdiction: string): Promise<PermitQuarterRow[]> {
+interface PermitStats {
+  n: number;
+  medianDays: number | null;
+  p90Days: number | null;
+  shareNeverFinished: number | null;
+  source: OutageSourceProvenance | null;
+}
+
+/** City of Austin battery permits since Texas SB 1252 took effect, all
+ * installers other than Base -- the same api.permit_path_stats row the
+ * home record's permit path quotes (period_type 'sb1252', period
+ * 'after_sb1252'), so both pages state identical figures. The latest
+ * calendar quarter is still in progress, so its never-finished share
+ * would read artificially low; the SB 1252 period is complete enough to
+ * state. */
+async function getPermitStats(jurisdiction: string): Promise<PermitStats | null> {
   try {
-    const rows = await query<PermitQuarterDbRow>(
-      `select period, is_base_power, n, median_days, p90_days
-       from api.permit_path_stats
-       where jurisdiction = $1 and label = 'battery' and period_type = 'quarter'
-       order by period`,
+    const rows = await query<PermitStatsDbRow>(
+      `select p.n, p.median_days, p.p90_days, p.share_never_finished,
+              s.source, s.url, s.retrieved_at, s.sha256, s.storage_key, s.runner,
+              s.latest_run_id, s.latest_run_rows_in, s.latest_run_rows_loaded
+       from api.permit_path_stats p
+       left join api.sources s on s.source_id = p.source_id
+       where p.jurisdiction = $1 and p.label = 'battery' and p.period_type = 'sb1252'
+             and p.period = 'after_sb1252' and p.is_base_power = false`,
       [jurisdiction]
     );
-    const byPeriod = new Map<string, PermitQuarterRow>();
-    for (const row of rows) {
-      const existing = byPeriod.get(row.period) ?? {
-        period: row.period,
-        otherMedianDays: null,
-        otherP90Days: null,
-        otherN: 0,
-        baseMedianDays: null,
-        baseP90Days: null,
-        baseN: 0,
-      };
-      if (row.is_base_power) {
-        existing.baseMedianDays = row.median_days === null ? null : Number(row.median_days);
-        existing.baseP90Days = row.p90_days === null ? null : Number(row.p90_days);
-        existing.baseN = Number(row.n);
-      } else {
-        existing.otherMedianDays = row.median_days === null ? null : Number(row.median_days);
-        existing.otherP90Days = row.p90_days === null ? null : Number(row.p90_days);
-        existing.otherN = Number(row.n);
-      }
-      byPeriod.set(row.period, existing);
-    }
-    return Array.from(byPeriod.values()).sort((a, b) => a.period.localeCompare(b.period));
+    const r = rows[0];
+    if (!r) return null;
+    const num = (v: string | number | null) => (v === null ? null : Number(v));
+    const hasSource =
+      r.source !== null && r.url !== null && r.retrieved_at !== null && r.sha256 !== null && r.storage_key !== null && r.runner !== null;
+    return {
+      n: Number(r.n),
+      medianDays: num(r.median_days),
+      p90Days: num(r.p90_days),
+      shareNeverFinished: num(r.share_never_finished),
+      source: hasSource
+        ? {
+            dataset: r.source as string,
+            url: r.url as string,
+            retrievedAt: r.retrieved_at instanceof Date ? r.retrieved_at.toISOString() : (r.retrieved_at as string),
+            sha256: r.sha256 as string,
+            runId: r.latest_run_id ?? "none",
+            runner: r.runner as "cron" | "cli",
+            rowsIn: r.latest_run_rows_in,
+            rowsLoaded: r.latest_run_rows_loaded,
+            rawFileHref: `/storage/${r.storage_key}`,
+          }
+        : null,
+    };
   } catch (err) {
     console.error("page: failed to load api.permit_path_stats", err);
-    return [];
+    return null;
   }
+}
+
+/** Days to at most one decimal, never a float artefact (66.7000000000001). */
+function formatDays(d: number): string {
+  return Number.isInteger(d) ? d.toLocaleString() : (Math.round(d * 10) / 10).toLocaleString();
 }
 
 async function getSourcesLoadedCount(): Promise<number | null> {
@@ -413,106 +456,89 @@ function formatCountyListTitle(names: string[]): string {
   return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]} Counties, at a glance`;
 }
 
+function Sourced({ id, source, children }: { id: string; source: OutageSourceProvenance | null; children: ReactNode }) {
+  if (!source) return <>{children}</>;
+  return (
+    <ProvenancePopover
+      id={id}
+      dataset={source.dataset}
+      url={source.url}
+      retrievedAt={source.retrievedAt}
+      sha256={source.sha256}
+      runId={source.runId}
+      runner={source.runner}
+      rowsIn={source.rowsIn}
+      rowsLoaded={source.rowsLoaded}
+      rawFileHref={source.rawFileHref}
+    >
+      {children}
+    </ProvenancePopover>
+  );
+}
+
+const PREFILTERED_REASON = "The appraisal loader keeps single-family homesteads only";
+
 export default async function HomePage() {
   const scoredCounties = await getCountiesWithScoredHomes();
   const scoredCountyFips = scoredCounties.map((c) => c.fips);
 
-  const [distributors, countyContexts, sourcesLoadedCount, stormRecords, readinessRows] = await Promise.all([
+  const permitCountiesWithData = scoredCounties.filter((c) => COUNTY_PERMIT_JURISDICTION[c.fips]);
+  const permitCountiesWithoutData = scoredCounties.filter((c) => !COUNTY_PERMIT_JURISDICTION[c.fips]);
+
+  const [distributors, countyContexts, sourcesLoadedCount, stormRecords, readinessRows, permitStats] = await Promise.all([
     getDistributorReliability(scoredCountyFips),
     getCountyOutageContexts(scoredCountyFips),
     getSourcesLoadedCount(),
     getStormRecords(scoredCountyFips),
     Promise.all(scoredCounties.map((c) => getReadinessRow(c))),
+    permitCountiesWithData[0] ? getPermitStats(COUNTY_PERMIT_JURISDICTION[permitCountiesWithData[0].fips]) : Promise.resolve(null),
   ]);
 
-  const outageData: OutageSummaryData = { distributors, countyContext: countyContexts };
-
   const totalRanked = readinessRows.reduce((sum, r) => sum + (r.passedCount ?? 0), 0);
-
-  // Permits panel: only the counties with a real, loaded jurisdiction
-  // (see COUNTY_PERMIT_JURISDICTION above) get their own figures; the
-  // rest render one honest MissingState line, never the Austin numbers
-  // relabelled.
-  const permitCountiesWithData = scoredCounties.filter((c) => COUNTY_PERMIT_JURISDICTION[c.fips]);
-  const permitCountiesWithoutData = scoredCounties.filter((c) => !COUNTY_PERMIT_JURISDICTION[c.fips]);
-  const permitTimelines = await Promise.all(
-    permitCountiesWithData.map(async (c) => ({
-      county: c,
-      rows: await getPermitTimelineByQuarter(COUNTY_PERMIT_JURISDICTION[c.fips]),
-    }))
+  const showsEarlyRelease = distributors.some((d) => d.year === OUTAGE_YEAR && d.earlyRelease);
+  const prefilteredCounties = readinessRows.filter((r) => r.prefilteredRoll).map((r) => r.county.name);
+  const notLoadedCell = (
+    <MissingState className="missing-state--compact" variant="not-loaded" reason={PREFILTERED_REASON} title={PREFILTERED_REASON} />
   );
 
   return (
     <div className="overview-page">
-      <div className="ov-head" style={{ display: "flex", alignItems: "baseline", gap: "var(--space-4)", flexWrap: "wrap" }}>
-        <h1
-          style={{
-            fontFamily: "var(--type-title-font-family)",
-            fontSize: "var(--type-title-font-size)",
-            fontWeight: "var(--type-title-font-weight)",
-            margin: 0,
-          }}
-        >
-          {formatCountyListTitle(scoredCounties.map((c) => c.name))}
-        </h1>
-        <span style={{ color: "var(--theme-ink-muted)", fontSize: "var(--type-label-font-size)" }}>
-          Real public data, gated to owner-occupied single-family parcels · {totalRanked.toLocaleString()} homes
-          ranked for Base outreach across {scoredCounties.length} {scoredCounties.length === 1 ? "county" : "counties"}
+      <div className="ov-head">
+        <h1 className="ov-head__title">{formatCountyListTitle(scoredCounties.map((c) => c.name))}</h1>
+        <span className="ov-head__sub">
+          Real public data on owner-occupied single-family homes · {totalRanked.toLocaleString()} ranked for Base
+          outreach
         </span>
       </div>
 
-      <div className="overview-grid">
-        <div className="overview-panel">
-          <h2
-            style={{
-              fontFamily: "var(--type-heading-font-family)",
-              fontSize: "var(--type-heading-font-size)",
-              fontWeight: "var(--type-heading-font-weight)",
-              margin: "0 0 var(--space-1) 0",
-            }}
-          >
-            Outage exposure by distributor
-          </h2>
-          <p style={{ margin: "0 0 var(--space-2) 0", fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)" }}>
-            Minutes without power per customer, SAIDI including major events.
-          </p>
-          <OutageSummary data={outageData} />
-          <div className="overview-panel__go">
-            <Link href="/ranking">See the ranked list →</Link>
+      <div className="ov-grid">
+        <section className="ov-panel ov-panel--outage" aria-labelledby="ov-outage-h">
+          <div className="ov-panel__head">
+            <h2 id="ov-outage-h">Outage exposure by distributor</h2>
+            {showsEarlyRelease ? <StaleBadge>{OUTAGE_YEAR} early release, not fully edited</StaleBadge> : null}
           </div>
-        </div>
+          <p className="ov-panel__sub">
+            Bars show minutes without power per customer in {OUTAGE_YEAR} (SAIDI, incl. major events), EIA-861. EAGLE-I county
+            context is a county-wide average across every customer, not a per-home figure.
+          </p>
+          <OutageBars distributors={distributors} countyContexts={countyContexts} year={OUTAGE_YEAR} />
+          <div className="ov-panel__go">
+            <Link href="/ranking">See which homes rank highest →</Link>
+          </div>
+        </section>
 
-        <div className="overview-panel">
-          <h2
-            style={{
-              fontFamily: "var(--type-heading-font-family)",
-              fontSize: "var(--type-heading-font-size)",
-              fontWeight: "var(--type-heading-font-weight)",
-              margin: "0 0 var(--space-1) 0",
-            }}
-          >
-            Storm record
-          </h2>
+        <section className="ov-panel" aria-labelledby="ov-storm-h">
+          <div className="ov-panel__head">
+            <h2 id="ov-storm-h">Storm record</h2>
+          </div>
           <StormRecordPanel counties={stormRecords} />
-          <div className="overview-panel__go">
-            <Link href="/sources">Sources →</Link>
-          </div>
-        </div>
+        </section>
 
-        <div className="overview-panel">
-          <h2
-            style={{
-              fontFamily: "var(--type-heading-font-family)",
-              fontSize: "var(--type-heading-font-size)",
-              fontWeight: "var(--type-heading-font-weight)",
-              margin: "0 0 var(--space-1) 0",
-            }}
-          >
-            Ranking readiness
-          </h2>
-          <p style={{ margin: "0 0 var(--space-2) 0", fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)" }}>
-            How many parcels make it into the ranked list, by county.
-          </p>
+        <section className="ov-panel" aria-labelledby="ov-ready-h">
+          <div className="ov-panel__head">
+            <h2 id="ov-ready-h">Ranking readiness</h2>
+          </div>
+          <p className="ov-panel__sub">How many parcels make it into the ranked list, by county.</p>
           <div className="readiness-grid" role="table" aria-label="Ranking readiness by county">
             <div className="readiness-grid__row readiness-grid__row--head" role="row">
               <div role="columnheader">County</div>
@@ -527,13 +553,21 @@ export default async function HomePage() {
                 <div role="cell" className="readiness-grid__county">
                   {r.county.name}
                 </div>
-                <div role="cell">{r.totalParcels === null ? <MissingState variant="not-loaded" reason="Not loaded" /> : r.totalParcels.toLocaleString()}</div>
-                <div role="cell">{r.singleFamilyCount === null ? <MissingState variant="not-loaded" reason="Not loaded" /> : r.singleFamilyCount.toLocaleString()}</div>
-                <div role="cell">{r.homesteadCount === null ? <MissingState variant="not-loaded" reason="Not loaded" /> : r.homesteadCount.toLocaleString()}</div>
-                <div role="cell">{r.gatedCount === null ? <MissingState variant="not-loaded" reason="Not loaded" /> : r.gatedCount.toLocaleString()}</div>
+                <div role="cell">
+                  {r.prefilteredRoll ? notLoadedCell : r.totalParcels === null ? <MissingState className="missing-state--compact" variant="not-loaded" reason="Not loaded" /> : r.totalParcels.toLocaleString()}
+                </div>
+                <div role="cell">
+                  {r.prefilteredRoll ? notLoadedCell : r.singleFamilyCount === null ? <MissingState className="missing-state--compact" variant="not-loaded" reason="Not loaded" /> : r.singleFamilyCount.toLocaleString()}
+                </div>
+                <div role="cell">
+                  {r.homesteadCount === null ? <MissingState className="missing-state--compact" variant="not-loaded" reason="Not loaded" /> : r.homesteadCount.toLocaleString()}
+                </div>
+                <div role="cell">
+                  {r.gatedCount === null ? <MissingState className="missing-state--compact" variant="not-loaded" reason="Not loaded" /> : r.gatedCount.toLocaleString()}
+                </div>
                 <div role="cell">
                   {r.passedCount === null ? (
-                    <MissingState variant="not-loaded" reason="Ranking not available right now" />
+                    <MissingState className="missing-state--compact" variant="not-loaded" reason="Ranking not available right now" />
                   ) : (
                     <Link href={`/ranking?county=${r.county.fips}`}>{r.passedCount.toLocaleString()} →</Link>
                   )}
@@ -541,39 +575,75 @@ export default async function HomePage() {
               </div>
             ))}
           </div>
-          <div className="overview-panel__go">
-            <Link href="/ranking">Open the ranked list →</Link>
-          </div>
-        </div>
+          {prefilteredCounties.length > 0 ? (
+            <p className="ov-panel__note">
+              Not loaded for {prefilteredCounties.join(" and ")}: {PREFILTERED_REASON.toLowerCase()}.
+            </p>
+          ) : null}
+        </section>
 
-        <div className="overview-panel">
-          <h2
-            style={{
-              fontFamily: "var(--type-heading-font-family)",
-              fontSize: "var(--type-heading-font-size)",
-              fontWeight: "var(--type-heading-font-weight)",
-              margin: "0 0 var(--space-1) 0",
-            }}
-          >
-            Battery permits, City of Austin
-          </h2>
-          {permitTimelines.length === 0 ? (
-            <MissingState variant="not-available" reason="No jurisdiction's permit records are loaded yet" />
+        <section className="ov-panel" aria-labelledby="ov-permit-h">
+          <div className="ov-panel__head">
+            <h2 id="ov-permit-h">Battery permits, City of Austin</h2>
+          </div>
+          {permitStats === null ? (
+            <MissingState variant="not-loaded" reason="City of Austin permit figures not loaded yet" />
           ) : (
-            permitTimelines.map(({ county, rows }) => <PermitTimelinePanel key={county.fips} rows={rows} />)
+            <>
+              <div className="ov-figs">
+                <div>
+                  {permitStats.medianDays === null ? (
+                    <MissingState className="missing-state--inline" variant="not-available" reason="Not published" />
+                  ) : (
+                    <Sourced id="ov-permit-median" source={permitStats.source}>
+                      <span className="ov-fig ov-fig--lg">{formatDays(permitStats.medianDays)}</span>
+                      <span className="ov-unit"> days</span>
+                    </Sourced>
+                  )}
+                  <div className="ov-figs__label">typical time to issue</div>
+                </div>
+                <div>
+                  {permitStats.p90Days === null ? (
+                    <MissingState className="missing-state--inline" variant="not-available" reason="Not published" />
+                  ) : (
+                    <Sourced id="ov-permit-p90" source={permitStats.source}>
+                      <span className="ov-fig ov-fig--lg">{formatDays(permitStats.p90Days)}+</span>
+                      <span className="ov-unit"> days</span>
+                    </Sourced>
+                  )}
+                  <div className="ov-figs__label">slowest 10 %</div>
+                </div>
+                <div>
+                  {permitStats.shareNeverFinished === null ? (
+                    <MissingState className="missing-state--inline" variant="not-available" reason="Not published" />
+                  ) : (
+                    <Sourced id="ov-permit-never" source={permitStats.source}>
+                      <span className="ov-fig ov-fig--lg">{(Math.round(permitStats.shareNeverFinished * 1000) / 10).toLocaleString()}</span>
+                      <span className="ov-unit"> %</span>
+                    </Sourced>
+                  )}
+                  <div className="ov-figs__label">never finish</div>
+                </div>
+              </div>
+              <p className="ov-panel__note">
+                Since Texas SB 1252 took effect · {permitStats.n.toLocaleString()} permits by installers other than Base
+                {permitCountiesWithData[0] ? ` · ${permitCountiesWithData[0].name} County` : ""}
+              </p>
+            </>
           )}
           {permitCountiesWithoutData.length > 0 ? (
-            <p style={{ margin: "var(--space-2) 0 0 0", fontSize: "var(--type-label-font-size)" }}>
+            <p className="ov-panel__missing">
               <MissingState
+                className="missing-state--inline"
                 variant="not-available"
                 reason={`${permitCountiesWithoutData.map((c) => c.name).join(" and ")} permit records are not a loaded public source`}
               />
             </p>
           ) : null}
-          <div className="overview-panel__go">
-            <Link href="/sources#how-leads-are-prioritized">How the ranking works →</Link>
+          <div className="ov-panel__go">
+            <Link href="/sources">How every figure is sourced →</Link>
           </div>
-        </div>
+        </section>
       </div>
 
       <div className="overview-prov">
