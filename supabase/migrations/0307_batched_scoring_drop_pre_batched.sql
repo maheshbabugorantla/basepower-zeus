@@ -5,3 +5,6 @@
 -- drop, no cascade: fails loudly if anything still depends on them.
 drop materialized view core.mv_home_signals_pre_batched;
 drop materialized view core.mv_home_terms_pre_batched;
+-- 0306's pre-swap block-group copy: mv_home_signals_pre_batched read it, so it
+-- could only go once that reference copy was gone.
+drop materialized view if exists core.mv_home_block_group_pre_0306;

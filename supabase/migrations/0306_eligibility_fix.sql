@@ -293,6 +293,6 @@ create view api.blockgroup_geojson as
 grant select on core.mv_home_block_group, core.mv_blockgroup_scores, core.mv_top_homes, core.mv_blockgroup_geojson to zeus_web_ro;
 grant select on api.blockgroup_scores, api.top_homes, api.blockgroup_geojson to zeus_web_ro;
 
--- Drop the pre-swap copy as soon as nothing reads it (disk on Supabase
--- Small is 8 GB) -- same lesson as 0304b5_drop_pre_m3p6.sql.
-drop materialized view core.mv_home_block_group_pre_0306;
+-- The pre-swap copy is dropped in 0307_batched_scoring_drop_pre_batched.sql:
+-- core.mv_home_signals_pre_batched (the batched-runner parity reference)
+-- still reads it, so dropping it here fails with DependentObjectsStillExist.
