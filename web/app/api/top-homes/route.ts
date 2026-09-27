@@ -229,6 +229,8 @@ export interface PredictedHomeRow {
   territoryNullReason: string | null;
   /** core.home_coverage.bucket -- 'base_customer'/'other_backup' when this home already has backup. */
   coverageBucket: string | null;
+  /** core.mv_home_signals.distributor_name -- the home's electric utility, null when not matched. */
+  distributorName: string | null;
 }
 
 interface PredictedHomeDbRow {
@@ -252,6 +254,7 @@ interface PredictedHomeDbRow {
   gate_reason: string | null;
   territory_null_reason: string | null;
   coverage_bucket: string | null;
+  distributor_name: string | null;
 }
 
 function mapPredictedRow(row: PredictedHomeDbRow): PredictedHomeRow {
@@ -276,6 +279,7 @@ function mapPredictedRow(row: PredictedHomeDbRow): PredictedHomeRow {
     gateReason: row.gate_reason,
     territoryNullReason: row.territory_null_reason,
     coverageBucket: row.coverage_bucket,
+    distributorName: row.distributor_name,
   };
 }
 
@@ -384,7 +388,7 @@ export async function fetchPredictedHomes(params: {
     select hp.prop_id, hp.p_install_12m::text as p_install_12m, hp.relative_to_county, hp.decile, hp.reasons, hp.extrapolated_from,
            pc.geo_id, pc.situs_num, pc.situs_street, pc.situs_city, pc.situs_zip, pc.market_value,
            s.block_group_geoid, s.county_fips, s.yr_built, s.gate_reason, s.territory_null_reason,
-           hc.bucket as coverage_bucket,
+           hc.bucket as coverage_bucket, s.distributor_name,
            extensions.ST_X(pg.centroid) as lon, extensions.ST_Y(pg.centroid) as lat
     ${buildFrom({ forPage: true })}
     where ${buildWhere()}

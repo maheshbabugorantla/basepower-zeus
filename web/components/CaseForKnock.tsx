@@ -14,8 +14,9 @@
 
 import { useEffect, useRef, useState } from "react";
 import { MissingState, plainReason } from "./ui/MissingState";
-import { buildCaseSentenceParts, splitBoldMarkers, type CaseSignalInput } from "../lib/caseSentence";
+import { buildCaseSentenceParts, meterCaption, splitBoldMarkers, type CaseSignalInput } from "../lib/caseSentence";
 import { REASON_META } from "./TopHomesTable";
+import { signalSource } from "../lib/homeRowFormat";
 import type { SignalKey } from "../app/api/top-homes/route";
 
 const DEBOUNCE_MS = 200;
@@ -74,8 +75,10 @@ function CaseSentenceText({ text }: { text: string }) {
 /** Up to 3 meters: the home's top-3 by term, real value / anchor capped
  * at 1 — never a synthetic 0-100 vibe number. */
 function Meters({ signals, max = 3, includeMissing = false }: { signals: CaseSignalInput[]; max?: number; includeMissing?: boolean }) {
+  // Flood is a penalty-only signal (it can lower a score, never raise it),
+  // so it is never shown as one of a home's strongest terms.
   const withTerms = signals
-    .filter((s) => s.available && s.term !== null)
+    .filter((s) => s.available && s.term !== null && s.key !== "flood")
     .sort((a, b) => (b.term ?? 0) - (a.term ?? 0))
     .slice(0, max);
 
@@ -99,7 +102,6 @@ function Meters({ signals, max = 3, includeMissing = false }: { signals: CaseSig
           <div key={s.key} className="case-meter">
             <div className="case-meter__label">
               <span>{REASON_META[s.key]?.label ?? s.label}</span>
-              <span>term {(s.term ?? 0).toFixed(2)}</span>
             </div>
             <div className="case-meter__track">
               <span
@@ -107,13 +109,7 @@ function Meters({ signals, max = 3, includeMissing = false }: { signals: CaseSig
                 style={{ width: `${pct}%`, backgroundColor: meta ? `var(--color-signal-${meta.signal})` : undefined }}
               />
             </div>
-            <div className="case-meter__value">
-              {s.rawValue !== null ? s.rawValue.toLocaleString(undefined, { maximumFractionDigits: 2 }) : "—"}{" "}
-              <span className="case-meter__unit">
-                {s.rawUnit}
-                {s.anchorValue !== null ? ` · anchor ${s.anchorValue.toLocaleString(undefined, { maximumFractionDigits: 1 })}` : ""}
-              </span>
-            </div>
+            <div className="case-meter__value">{meterCaption(s.key, s.rawValue) ?? meta?.label ?? s.label}</div>
           </div>
         );
       })}
@@ -143,6 +139,11 @@ export interface CaseForKnockProps {
    * "N sources" note under the sentence — passed by the caller so this
    * component never invents a dataset list. */
   sourceNames?: string[];
+  /** Short appraisal-district name for the home's county (e.g. "Travis
+   * CAD", "HCAD"). When given and `sourceNames` is not, the sources note is
+   * built from the datasets behind the signals this component actually
+   * shows (sentence + meters), so a Harris home never cites Austin data. */
+  cadShort?: string;
   compact?: boolean;
   /** Summary tab (Mock B) wants up to 6 meters (incl. one "not scored"
    * hatch meter); the row expansion (Mock A) wants 3. */
@@ -153,7 +154,8 @@ export interface CaseForKnockProps {
 export function CaseForKnock({
   propId,
   weights,
-  sourceNames = [],
+  sourceNames,
+  cadShort,
   compact = false,
   maxMeters = 3,
   includeMissingMeter = false,
@@ -163,7 +165,20 @@ export function CaseForKnock({
   if (error) return <MissingState variant="not-loaded" reason={error} />;
   if (!signals) return <p style={{ margin: 0, color: "var(--theme-ink-muted)" }}>Loading the case for a knock…</p>;
 
-  const parts = buildCaseSentenceParts(signals as CaseSignalInput[], compact ? 3 : 4);
+  const parts = buildCaseSentenceParts(signals as CaseSignalInput[], compact ? 3 : 4, { cadShort });
+
+  // Sources behind what is on screen: the sentence's signals plus the
+  // meters' (top terms), each mapped to its dataset, de-duplicated in order.
+  let sources: string[] = sourceNames ?? [];
+  if (!sourceNames && cadShort) {
+    const meterKeys = (signals as CaseSignalInput[])
+      .filter((sig) => sig.available && sig.term !== null && sig.key !== "flood")
+      .sort((a, b) => (b.term ?? 0) - (a.term ?? 0))
+      .slice(0, maxMeters)
+      .map((sig) => sig.key);
+    const keys = [...parts.map((p) => p.key), ...meterKeys];
+    sources = Array.from(new Set(keys.map((k) => signalSource(k, cadShort)).filter((x): x is string => x !== null)));
+  }
 
   return (
     <div className="case-for-knock">
@@ -179,10 +194,9 @@ export function CaseForKnock({
           ))}
         </p>
       )}
-      {sourceNames.length > 0 ? (
+      {sources.length > 0 ? (
         <p className="case-for-knock__sources">
-          {sourceNames.length} source{sourceNames.length === 1 ? "" : "s"} · {sourceNames.join(", ")} · see all
-          signals for the file behind each figure
+          {sources.length} source{sources.length === 1 ? "" : "s"} · {sources.join(", ")} · each figure's file is under All 12 signals
         </p>
       ) : null}
       <Meters signals={signals as CaseSignalInput[]} max={maxMeters} includeMissing={includeMissingMeter} />

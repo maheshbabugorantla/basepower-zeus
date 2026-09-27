@@ -10,6 +10,7 @@ import { Panel } from "../../components/ui/Panel";
 import { MissingState } from "../../components/ui/MissingState";
 import type { SignalKey, PredictedHomeRow } from "../api/top-homes/route";
 import { PredictedHomesTable } from "./PredictedHomesTable";
+import { CAD_SHORT, homeMetaLine, streetLine } from "../../lib/homeRowFormat";
 import { bucketBy, filterRows, countyTotals, type GeoRollupRow } from "../../lib/geoRollup";
 import { decileRangeForTier, tierMeta, tierForDecile, PRIORITY_TIER_ORDER, type PriorityTierKey } from "../../lib/priorityTier";
 
@@ -303,7 +304,12 @@ export function RankingBoard({
   // the whole board (critique P0: "home detail is a separate route/panel,
   // not in-place"). Both PredictedHomesTable and TopHomesTable own their
   // own expand toggle now; this is just the shared piece of state.
-  const [expandedPropId, setExpandedPropId] = useState<string | null>(null);
+  // Mock A: rank 1 opens expanded on first load so the case for the top
+  // home is on screen without a click (only on an unfiltered first page).
+  const [expandedPropId, setExpandedPropId] = useState<string | null>(() => {
+    const first = initialMode === "weighted" ? initialRows[0] : initialPredictedRows[0];
+    return first?.propId ?? null;
+  });
   function toggleExpand(propId: string) {
     setExpandedPropId((current) => (current === propId ? null : propId));
   }
@@ -777,12 +783,19 @@ export function RankingBoard({
     ? {
         propId: cardRow.propId,
         rank: activeRangeStart === 1 ? activeRowsForCard.indexOf(cardRow) + 1 : null,
-        address: [cardRow.situsNum, cardRow.situsStreet].filter(Boolean).join(" ") || cardRow.propId,
-        metaLine: [cardRow.situsCity, cardRow.situsZip].filter(Boolean).join(" ") || "",
+        address: streetLine(cardRow.situsNum, cardRow.situsStreet) || cardRow.propId,
+        metaLine: homeMetaLine({
+          city: cardRow.situsCity,
+          zip: cardRow.situsZip,
+          yrBuilt: cardRow.yrBuilt,
+          utility: cardRow.distributorName,
+        }),
         tierLabel:
           mode === "predicted" && "decile" in cardRow
             ? tierMeta(tierForDecile((cardRow as PredictedHomeRow).decile).key).label
-            : "Team priority score",
+            : "score" in cardRow && typeof cardRow.score === "number"
+              ? `Team score ${cardRow.score.toFixed(2)}`
+              : "Team score not available",
         tierSublabel:
           mode === "predicted" && "decile" in cardRow
             ? tierMeta(tierForDecile((cardRow as PredictedHomeRow).decile).key).description
@@ -793,7 +806,7 @@ export function RankingBoard({
 
   return (
     <div className="ranking-board">
-      <Panel className="ranking-board__map-panel" style={{ display: "flex", flexDirection: "column", minHeight: 0, padding: 0, overflow: "hidden" }}>
+      <Panel className="ranking-board__map-panel" style={{ display: "flex", flexDirection: "column", minHeight: 0, padding: 0, overflow: "hidden", borderRadius: 0 }}>
         <div style={{ flex: "1 1 auto", minHeight: 0 }}>
           <BlockGroupMap
             key={countyFips}
@@ -813,7 +826,9 @@ export function RankingBoard({
             topPins={topPins}
             onPinClick={(propId) => toggleExpand(propId)}
             selectedHome={selectedHomeCard}
+            selectedPinId={cardRow?.propId ?? null}
             focusHome={focusHome}
+            rounded={false}
           />
         </div>
       </Panel>
@@ -1056,6 +1071,7 @@ export function RankingBoard({
               expandedPropId={expandedPropId}
               onToggleExpand={toggleExpand}
               onLocateOnMap={handleLocateOnMap}
+              cadShort={CAD_SHORT[countyFips]}
             />
           ) : (
             <TopHomesTable
@@ -1069,10 +1085,12 @@ export function RankingBoard({
               onToggleExpand={toggleExpand}
               weights={weights}
               onLocateOnMap={handleLocateOnMap}
+              cadShort={CAD_SHORT[countyFips]}
             />
           )}
         </div>
 
+        <div className="ranking-rail__pager">
         {mode === "predicted" ? (
           <TopHomesPagination
             rangeStart={predictedRangeStart}
@@ -1098,6 +1116,7 @@ export function RankingBoard({
             onNext={handleNext}
           />
         )}
+        </div>
       </aside>
     </div>
   );

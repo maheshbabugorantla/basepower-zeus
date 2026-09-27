@@ -51,6 +51,47 @@ function framePadding(el: HTMLElement): Pad {
   return wide ? { top: 90, left: 260, right: 56, bottom: 150 } : { top: 24, left: 16, right: 16, bottom: 120 };
 }
 
+/** Frame the area in the clear part of the map: measure the legend
+ * (top-left) and the selected-home card (bottom-left) where they actually
+ * render, then try two layouts -- clear them vertically (area sits between
+ * legend and card) or horizontally (area sits to their right) -- and keep
+ * whichever lets the camera zoom in further. Falls back to fixed padding
+ * before the overlays have rendered or on narrow maps. */
+function bestFramePadding(map: MapLibreMap, bounds: [[number, number], [number, number]]): Pad {
+  const el = map.getContainer();
+  if (el.clientWidth < 640) return framePadding(el);
+  const host = el.parentElement;
+  const cr = el.getBoundingClientRect();
+  const legend = host?.querySelector<HTMLElement>('[data-testid="map-legend"]')?.getBoundingClientRect();
+  const card = host?.querySelector<HTMLElement>('[data-testid="map-selected-home-card"]')?.getBoundingClientRect();
+  const M = 28;
+  const right = 64; // zoom control + attribution
+  const vertical: Pad = {
+    top: legend ? legend.bottom - cr.top + M : M,
+    bottom: card ? cr.bottom - card.top + M : M,
+    left: M,
+    right,
+  };
+  const horizontal: Pad = {
+    top: M,
+    bottom: M,
+    left: Math.max(legend ? legend.right - cr.left : 0, card ? card.right - cr.left : 0) + M,
+    right,
+  };
+  let best: Pad = vertical;
+  let bestZoom = -Infinity;
+  for (const pad of [vertical, horizontal]) {
+    if (pad.left + pad.right >= el.clientWidth - 80 || pad.top + pad.bottom >= el.clientHeight - 80) continue;
+    const cam = map.cameraForBounds(bounds, { padding: pad, maxZoom: 14 });
+    const z = cam?.zoom ?? -Infinity;
+    if (z > bestZoom) {
+      bestZoom = z;
+      best = pad;
+    }
+  }
+  return best;
+}
+
 /** fitBounds adds its padding to whatever padding the camera already
  * holds, so pass only the difference (Hyperlocal's extraPad). */
 function extraPad(map: MapLibreMap, want: Pad): Pad {
@@ -228,6 +269,10 @@ export interface BlockGroupMapProps {
    * recenters on a fabricated coordinate; a home with no centroid yet
    * simply doesn't move the map. */
   focusHome?: { lon: number | null; lat: number | null } | null;
+  /** The pin to emphasise (the selected / expanded home); defaults to rank 1. */
+  selectedPinId?: string | null;
+  /** Rounded map corners (panel use); false for the full-bleed ranking workspace. */
+  rounded?: boolean;
 }
 
 const SOURCE_ID = "blockgroups";
@@ -258,6 +303,8 @@ export function BlockGroupMap({
   onPinClick,
   selectedHome = null,
   focusHome = null,
+  selectedPinId = null,
+  rounded = true,
 }: BlockGroupMapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
@@ -299,6 +346,7 @@ export function BlockGroupMap({
       zoom: mapCenter.zoom,
     });
     mapRef.current = map;
+    map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "bottom-right");
 
     map.on("error", (e: unknown) => {
       // eslint-disable-next-line no-console
@@ -599,7 +647,7 @@ export function BlockGroupMap({
         [bbox[0], bbox[1]],
         [bbox[2], bbox[3]],
       ];
-      const opts = { padding: extraPad(m, framePadding(m.getContainer())), maxZoom: 14, pitch: 0, bearing: 0 };
+      const opts = { padding: extraPad(m, bestFramePadding(m, bounds)), maxZoom: 14, pitch: 0, bearing: 0 };
       if (reducedMotion()) m.fitBounds(bounds, { ...opts, animate: false });
       else m.fitBounds(bounds, { ...opts, duration: 900, essential: true });
       fittedKeyRef.current = selectionKey; // one glide per selection -- no re-fit on later sourcedata ticks
@@ -668,62 +716,133 @@ export function BlockGroupMap({
 
   // ---------------------------------------------------------------------
   // Top-ranked pins (Mock A): numbered markers for the current page-1
-  // list, independent of any block-group selection/dots. Rank 1-6 filled
-  // forest, 7-10 outlined, per the mock -- real ranks/coordinates only.
+  // list. Rank 1-6 filled forest, 7-10 outlined. The selected home's pin
+  // (rank 1 by default) is larger with a lime ring and always sits on top.
+  // Pins that would overlap on screen (within PIN_MERGE_PX at the current
+  // zoom) merge into one pill listing their ranks; clicking the pill zooms
+  // in until they separate. Re-laid-out after every zoom.
   // ---------------------------------------------------------------------
+  const pinPropsRef = useRef({ topPins, selectedPinId, onPinClick, onDotHover });
+  pinPropsRef.current = { topPins, selectedPinId, onPinClick, onDotHover };
+
   useEffect(() => {
     const map = mapRef.current;
-    if (!map) return;
+    if (!map || !ready) return;
+    const m: MapLibreMap = map;
+    const PIN_MERGE_PX = 34;
+    const CLEAR_SELECTED_PX = 38;
 
-    for (const marker of pinMarkersRef.current.values()) marker.remove();
-    pinMarkersRef.current = new Map();
-
-    for (const pin of topPins) {
-      if (pin.lon === null || pin.lat === null) continue;
-      const filled = pin.rank <= 6;
-      const el = document.createElement("div");
-      el.className = "map-pin";
-      el.dataset.testid = "map-pin";
-      el.dataset.propId = pin.propId;
-      el.dataset.rank = String(pin.rank);
-      el.style.width = "24px";
-      el.style.height = "24px";
-      el.style.borderRadius = "50%";
-      el.style.display = "flex";
-      el.style.alignItems = "center";
-      el.style.justifyContent = "center";
-      el.style.fontSize = "11px";
-      el.style.fontWeight = "600";
-      el.style.fontFamily = "var(--type-body-font-family, sans-serif)";
-      el.style.cursor = "pointer";
-      el.style.boxShadow = "0 1px 3px rgba(0,0,0,0.35)";
-      if (filled) {
-        el.style.background = "#1e4d2b";
-        el.style.color = "#fff";
-        el.style.border = "2px solid #ffffff";
-      } else {
-        el.style.background = "#ffffff";
-        el.style.color = "#1e4d2b";
-        el.style.border = "2px solid #1e4d2b";
-      }
-      el.textContent = String(pin.rank);
-      el.addEventListener("mouseenter", () => onDotHover?.(pin.propId));
-      el.addEventListener("mouseleave", () => onDotHover?.(null));
-      el.addEventListener("click", (e) => {
-        e.stopPropagation();
-        onPinClick?.(pin.propId);
-      });
-
-      const marker = new maplibregl.Marker({ element: el, anchor: "center" }).setLngLat([pin.lon, pin.lat]).addTo(map);
-      pinMarkersRef.current.set(pin.propId, marker);
-    }
-
-    return () => {
+    function clear() {
       for (const marker of pinMarkersRef.current.values()) marker.remove();
       pinMarkersRef.current = new Map();
+    }
+
+    function pinEl(label: string, kind: "filled" | "outlined" | "selected" | "group"): HTMLDivElement {
+      const el = document.createElement("div");
+      el.className = `map-pin map-pin--${kind}`;
+      el.dataset.testid = "map-pin";
+      el.textContent = label;
+      return el;
+    }
+
+    function layout() {
+      clear();
+      const { topPins: pins, selectedPinId: selId, onPinClick: click, onDotHover: hover } = pinPropsRef.current;
+      const placed = pins.filter((p): p is typeof p & { lon: number; lat: number } => p.lon !== null && p.lat !== null);
+      if (placed.length === 0) return;
+      const selected = placed.find((p) => p.propId === selId) ?? placed.find((p) => p.rank === 1) ?? null;
+      const rest = placed.filter((p) => p !== selected);
+
+      // Greedy grouping on screen position; each group tracks the running
+      // centroid of its members, which is where its marker is drawn.
+      const groups: Array<{ pins: typeof rest; x: number; y: number }> = [];
+      for (const p of rest) {
+        const pt = m.project([p.lon, p.lat]);
+        const g = groups.find((gr) => Math.hypot(gr.x - pt.x, gr.y - pt.y) < PIN_MERGE_PX);
+        if (g) {
+          g.pins.push(p);
+          g.x += (pt.x - g.x) / g.pins.length;
+          g.y += (pt.y - g.y) / g.pins.length;
+        } else groups.push({ pins: [p], x: pt.x, y: pt.y });
+      }
+
+      // Keep the selected pin readable: nudge any pin or group that would
+      // sit under it straight out along the line between them (or
+      // downwards when they coincide) until it clears the selected pin.
+      const selPt = selected ? m.project([selected.lon, selected.lat]) : null;
+      const offsetFor = (g: { x: number; y: number }): [number, number] => {
+        if (!selPt) return [0, 0];
+        const dx = g.x - selPt.x;
+        const dy = g.y - selPt.y;
+        const d = Math.hypot(dx, dy);
+        if (d >= CLEAR_SELECTED_PX) return [0, 0];
+        const ux = d < 1 ? 0 : dx / d;
+        const uy = d < 1 ? 1 : dy / d;
+        return [ux * (CLEAR_SELECTED_PX - d), uy * (CLEAR_SELECTED_PX - d)];
+      };
+
+      for (const g of groups) {
+        const offset = offsetFor(g);
+        if (g.pins.length === 1) {
+          const p = g.pins[0];
+          const el = pinEl(String(p.rank), p.rank <= 6 ? "filled" : "outlined");
+          el.dataset.propId = p.propId;
+          el.dataset.rank = String(p.rank);
+          el.setAttribute("aria-label", `Rank ${p.rank}`);
+          el.addEventListener("mouseenter", () => hover?.(p.propId));
+          el.addEventListener("mouseleave", () => hover?.(null));
+          el.addEventListener("click", (e) => {
+            e.stopPropagation();
+            click?.(p.propId);
+          });
+          pinMarkersRef.current.set(p.propId, new maplibregl.Marker({ element: el, anchor: "center", offset: offset }).setLngLat([p.lon, p.lat]).addTo(m));
+        } else {
+          const ranks = g.pins.map((p) => p.rank).sort((a, b) => a - b);
+          const el = pinEl(ranks.join(" · "), "group");
+          el.dataset.rank = ranks.join(",");
+          el.setAttribute("aria-label", `Ranks ${ranks.join(", ")}; zoom in to separate`);
+          el.title = "Zoom in to separate these homes";
+          el.addEventListener("click", (e) => {
+            e.stopPropagation();
+            let w = Infinity, so = Infinity, ea = -Infinity, n = -Infinity;
+            for (const p of g.pins) {
+              w = Math.min(w, p.lon); ea = Math.max(ea, p.lon);
+              so = Math.min(so, p.lat); n = Math.max(n, p.lat);
+            }
+            const target = m.cameraForBounds([[w, so], [ea, n]], { padding: 120, maxZoom: 17 });
+            const zoom = Math.max(m.getZoom() + 2, Math.min(17, target?.zoom ?? m.getZoom() + 2));
+            const center: [number, number] = [(w + ea) / 2, (so + n) / 2];
+            if (reducedMotion()) m.jumpTo({ center, zoom });
+            else m.easeTo({ center, zoom, duration: 700, essential: true });
+          });
+          const at = m.unproject([g.x, g.y]);
+          pinMarkersRef.current.set(`group-${ranks.join("-")}`, new maplibregl.Marker({ element: el, anchor: "center", offset: offset }).setLngLat(at).addTo(m));
+        }
+      }
+
+      if (selected) {
+        const el = pinEl(String(selected.rank), "selected");
+        el.dataset.propId = selected.propId;
+        el.dataset.rank = String(selected.rank);
+        el.setAttribute("aria-label", `Rank ${selected.rank}, selected`);
+        el.addEventListener("mouseenter", () => hover?.(selected.propId));
+        el.addEventListener("mouseleave", () => hover?.(null));
+        el.addEventListener("click", (e) => {
+          e.stopPropagation();
+          click?.(selected.propId);
+        });
+        pinMarkersRef.current.set(selected.propId, new maplibregl.Marker({ element: el, anchor: "center" }).setLngLat([selected.lon, selected.lat]).addTo(m));
+      }
+    }
+
+    layout();
+    m.on("zoomend", layout);
+    return () => {
+      m.off("zoomend", layout);
+      clear();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [JSON.stringify(topPins)]);
+  }, [ready, JSON.stringify(topPins), selectedPinId]);
 
   // ---------------------------------------------------------------------
   // "Locate on map" -- flies to a real parcel centroid only; never moves
@@ -747,11 +866,11 @@ export function BlockGroupMap({
         style={{
           width: "100%",
           height: "100%",
-          borderRadius: "var(--rounded-md)",
+          borderRadius: rounded ? "var(--rounded-md)" : 0,
           overflow: "hidden",
         }}
       />
-      <MapLegend selected={selectedGeoid !== null} shadeLabel={shadeLabel} />
+      <MapLegend selected={selectedGeoid !== null} shadeLabel={shadeLabel} showPins={topPins.some((p) => p.lon !== null && p.lat !== null)} />
       {selectedHome ? <SelectedHomeCard home={selectedHome} /> : null}
     </div>
   );
@@ -763,92 +882,64 @@ function SelectedHomeCard({
   home: NonNullable<BlockGroupMapProps["selectedHome"]>;
 }) {
   return (
-    <div
-      data-testid="map-selected-home-card"
-      style={{
-        position: "absolute",
-        left: "var(--space-3)",
-        bottom: "var(--space-3)",
-        maxWidth: "300px",
-        backgroundColor: "var(--theme-surface)",
-        color: "var(--theme-ink)",
-        borderRadius: "var(--rounded-md)",
-        padding: "var(--space-3)",
-        boxShadow: "0 4px 12px rgba(0,0,0,0.16)",
-      }}
-    >
-      <div style={{ fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)" }}>
-        {home.rank !== null ? `Rank ${home.rank} · selected home` : "Selected home"}
+    <div data-testid="map-selected-home-card" className="map-card map-card--home">
+      <div className="map-card__kicker">{home.rank !== null ? `Rank ${home.rank} · selected home` : "Selected home"}</div>
+      <div className="map-card__row">
+        <span className="map-card__address" title={home.address}>
+          {home.address}
+        </span>
+        <span className="map-card__tier">{home.tierLabel}</span>
       </div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: "var(--space-2)", marginTop: "2px" }}>
-        <div style={{ fontWeight: 600 }}>{home.address}</div>
-        <div style={{ fontSize: "var(--type-label-font-size)", fontWeight: 600, color: "var(--theme-brand-accent-text)", textAlign: "right", whiteSpace: "nowrap" }}>
-          {home.tierLabel}
-          <div style={{ fontWeight: 400, color: "var(--theme-ink-muted)", fontSize: "11px" }}>{home.tierSublabel}</div>
-        </div>
-      </div>
-      <div style={{ fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)", marginTop: "2px" }}>{home.metaLine}</div>
-      <a
-        href={`/home/${home.propId}`}
-        style={{ marginTop: "var(--space-2)", fontSize: "var(--type-label-font-size)", fontWeight: 600, color: "var(--theme-brand-accent-text)", display: "block" }}
-      >
-        Open full record →
+      {home.metaLine ? <div className="map-card__meta">{home.metaLine}</div> : null}
+      <a href={`/home/${home.propId}`} className="map-card__link">
+        <span>Open full record</span>
+        <span aria-hidden="true">→</span>
       </a>
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Legend — DESIGN.md's 5-step score ramp (low -> high, at the CURRENT
-// weights, since the ramp is an absolute mean score recomputed every
-// slider move — never a fixed number), the hatch swatch for "no gated homes /
-// not scored", and, only while a block group is selected, the home-dot
-// scale + the selected-outline swatch. Bottom-left overlay so it never
-// covers the basemap's (bottom-right) attribution control.
+// Legend (top-left card): what the shading means, the score ramp with its
+// two ends named, the hatch for block groups with no ranked homes, the pin
+// key, and -- only while a block group is selected -- the home-dot and
+// selected-outline keys.
 // ---------------------------------------------------------------------------
 
-function MapLegend({ selected, shadeLabel }: { selected: boolean; shadeLabel: string }) {
+function MapLegend({ selected, shadeLabel, showPins }: { selected: boolean; shadeLabel: string; showPins: boolean }) {
+  const team = shadeLabel !== "top-priority homes";
   return (
-    <div
-      data-testid="map-legend"
-      style={{
-        position: "absolute",
-        left: "var(--space-3)",
-        top: "var(--space-3)",
-        backgroundColor: "var(--theme-surface)",
-        color: "var(--theme-ink)",
-        borderRadius: "var(--rounded-md)",
-        padding: "var(--space-2) var(--space-3)",
-        boxShadow: "0 1px 4px rgba(0,0,0,0.2)",
-        fontSize: "var(--type-label-font-size)",
-        maxWidth: "260px",
-      }}
-    >
-      <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
-        <span style={{ display: "flex", alignItems: "center", gap: "2px" }}>
-          {SCORE_RAMP.map((color, i) => (
-            <span key={i} style={{ width: "14px", height: "10px", backgroundColor: color, display: "inline-block" }} />
-          ))}
-        </span>
-        <span style={{ color: "var(--theme-ink-muted)", whiteSpace: "nowrap" }}>
-          Fewer &harr; more {shadeLabel}
-        </span>
+    <div data-testid="map-legend" className="map-card map-card--legend">
+      <div className="map-card__title">{team ? "Team priority by area" : "Priority by area"}</div>
+      <div className="map-card__explain">
+        {team ? "Shading = the average team priority score of each block group's homes." : "Shading = share of each block group's homes in the top priority tier."}
       </div>
-
-      {selected ? (
-        <div style={{ marginTop: "6px", borderTop: "1px solid var(--theme-ink-muted)", paddingTop: "6px" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", marginBottom: "4px" }}>
-            <span
-              aria-hidden="true"
-              style={{ width: "10px", height: "10px", borderRadius: "50%", background: SCORE_RAMP[SCORE_RAMP.length - 1], border: "2px solid #ffffff", boxShadow: "0 0 0 1px rgba(0,0,0,0.25)" }}
-            />
-            <span>Home, colored the same way</span>
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
-            <span aria-hidden="true" style={{ width: "18px", height: "0px", borderTop: "3px solid #1e4d2b" }} />
-            <span>Selected block group</span>
-          </div>
+      <div className="map-legend__ramp" aria-hidden="true" style={{ background: `linear-gradient(90deg, ${SCORE_RAMP.join(", ")})` }} />
+      <div className="map-legend__ends">
+        <span>{team ? "lower" : "fewer"}</span>
+        <span>{team ? "higher team score" : "more top-priority homes"}</span>
+      </div>
+      <div className="map-legend__key">
+        <span className="map-legend__hatch" aria-hidden="true" />
+        No ranked homes · not served or not eligible
+      </div>
+      {showPins ? (
+        <div className="map-legend__key">
+          <span className="map-legend__pin" aria-hidden="true" />
+          Top 10 homes pinned
         </div>
+      ) : null}
+      {selected ? (
+        <>
+          <div className="map-legend__key">
+            <span className="map-legend__dot" aria-hidden="true" style={{ background: SCORE_RAMP[SCORE_RAMP.length - 1] }} />
+            Home, colored the same way
+          </div>
+          <div className="map-legend__key">
+            <span className="map-legend__outline" aria-hidden="true" />
+            Selected block group
+          </div>
+        </>
       ) : null}
     </div>
   );

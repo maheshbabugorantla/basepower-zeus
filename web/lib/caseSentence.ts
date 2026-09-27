@@ -115,8 +115,10 @@ function fmtAge3564(rawValue: number): string {
   return `**${pct}%** of the neighborhood is prime working age (35-64).`;
 }
 
-function fmtHomeValue(rawValue: number): string {
-  return `Travis CAD appraises this home at **${roundDollars(rawValue)}**.`;
+/** Names the home's own county appraisal district; never a default county. */
+function fmtHomeValue(rawValue: number, ctx: CaseSentenceContext): string {
+  const who = ctx.cadShort ?? "The county appraisal district";
+  return `${who} appraises this home at **${roundDollars(rawValue)}**.`;
 }
 
 /** The "installability" key's raw_value IS the year built (see
@@ -124,7 +126,10 @@ function fmtHomeValue(rawValue: number): string {
  * legacy flag description, not the actual value's meaning). */
 function fmtInstallability(rawValue: number): string {
   const year = Math.round(rawValue);
-  return `This home was **built in ${year}**, so installation should be straightforward.`;
+  // Only 2000-or-later wiring supports the "straightforward" claim
+  // (the scoring pass's own cutoff); an older build year is stated as a fact.
+  if (year >= 2000) return `This home was **built in ${year}**, so installation should be straightforward.`;
+  return `This home was **built in ${year}**.`;
 }
 
 function fmtHomePermits(rawValue: number): string | null {
@@ -132,7 +137,12 @@ function fmtHomePermits(rawValue: number): string | null {
   return `It already has a panel-upgrade, solar, EV, or generator permit on file.`;
 }
 
-const TEMPLATES: Record<string, (rawValue: number) => string | null> = {
+export interface CaseSentenceContext {
+  /** The home's county appraisal district, short form ("Travis CAD", "HCAD"). */
+  cadShort?: string;
+}
+
+const TEMPLATES: Record<string, (rawValue: number, ctx: CaseSentenceContext) => string | null> = {
   backup_intent: fmtBackupIntent,
   outage: fmtOutage,
   income_100k: fmtIncome100k,
@@ -164,7 +174,11 @@ const TEMPLATE_KEY_TIEBREAK_ORDER = [
  * template returns null (e.g. home_permits with no permit on file) is
  * skipped, not forced into an empty sentence.
  */
-export function buildCaseSentenceParts(signals: CaseSignalInput[], maxParts = 4): CaseSentencePart[] {
+export function buildCaseSentenceParts(
+  signals: CaseSignalInput[],
+  maxParts = 4,
+  ctx: CaseSentenceContext = {}
+): CaseSentencePart[] {
   const candidates = signals.filter(
     (s) => s.available && s.rawValue !== null && Object.prototype.hasOwnProperty.call(TEMPLATES, s.key)
   );
@@ -180,7 +194,7 @@ export function buildCaseSentenceParts(signals: CaseSignalInput[], maxParts = 4)
   for (const signal of sorted) {
     if (parts.length >= maxParts) break;
     const template = TEMPLATES[signal.key];
-    const text = template(signal.rawValue as number);
+    const text = template(signal.rawValue as number, ctx);
     if (text === null) continue;
     parts.push({ key: signal.key, text });
   }
@@ -202,4 +216,58 @@ export function splitBoldMarkers(text: string): Array<{ bold: boolean; text: str
   }
   if (lastIndex < text.length) parts.push({ bold: false, text: text.slice(lastIndex) });
   return parts;
+}
+
+// ---------------------------------------------------------------------------
+// Meter captions: one rep-facing line per score signal, the real value in
+// its own unit. Never "flag", "anchor", "term" or a bare 0/1 -- that detail
+// lives in the Signals tab. Keys are the /ranking/breakdown signal keys.
+// ---------------------------------------------------------------------------
+
+function roundedPercent(v: number): string {
+  return `${roundToWholePercent(v)} %`;
+}
+
+export function formatDollarsShort(value: number): string {
+  if (value >= 1_000_000) return `$${(value / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
+  if (value >= 1_000) return `$${Math.round(value / 1_000)}k`;
+  return roundDollars(value);
+}
+
+export function meterCaption(key: string, rawValue: number | null): string | null {
+  if (rawValue === null || !Number.isFinite(rawValue)) return null;
+  const v = rawValue;
+  switch (key) {
+    case "outage": {
+      const h = roundMinutesToHours(v);
+      return h === 0 ? "Under an hour without power a year" : `About ${h} hour${h === 1 ? "" : "s"} without power a year`;
+    }
+    case "backup_intent":
+      return `About ${roundRatePer1000ToPer100(v)} in 100 nearby homes added backup`;
+    case "home_permits":
+      return v >= 1 ? "Has its own solar, EV or generator permit" : "No solar, EV or generator permit on file";
+    case "installability":
+      if (v > 1800) return `Built ${Math.round(v)}`;
+      return v >= 1 ? "Built 2000 or later, or panel upgraded" : "Built before 2000";
+    case "home_value":
+      return `${formatDollarsShort(v)} appraisal`;
+    case "owner_65":
+      return v >= 1 ? "Homeowner 65+ exemption on file" : "No 65+ exemption on file";
+    case "age65":
+      return `${roundedPercent(v)} of neighbors are 65+`;
+    case "age_35_64":
+      return `${roundedPercent(v)} of neighbors are 35 to 64`;
+    case "income_100k":
+      return `${roundedPercent(v)} of households earn $100k+`;
+    case "electric_heat":
+      return `${roundedPercent(v)} of neighbors heat with electricity`;
+    case "empower":
+      return `About ${roundRatePer1000ToPer100(v)} in 100 Medicare users rely on powered devices`;
+    case "flood":
+      return v >= 1 ? "Inside FEMA high-risk zone" : "Outside FEMA high-risk zone";
+    case "permit_risk":
+      return `About ${Math.round(v)} days to a battery permit`;
+    default:
+      return null;
+  }
 }
