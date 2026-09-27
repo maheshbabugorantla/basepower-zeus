@@ -123,16 +123,18 @@ def test_flood_zones_sub_matches_raw_hit_count():
             )
 
 
-@pytest.mark.skip(
-    reason="WRITES to core.home_spatial via home_spatial.run_county() -- "
-    "hard rule this session: no DB writes. Safe to un-skip once run "
-    "against a non-production DB, or by a ticket that is allowed to write."
-)
 def test_rerun_with_no_upstream_change_writes_zero_rows():
     """Acceptance: 'Incremental. Re-running home_spatial with no changed
     sources touches 0 rows and finishes in seconds.' Runs one real batch
     for Travis twice in a row against the live DB and asserts the second
-    pass's rows_written is 0. NOT RUN this session — see the skip reason."""
+    pass's rows_written is 0.
+
+    WRITES to core.home_spatial. NOT run in the puct-ccn prep-task
+    session (hard rule there: no DB writes) -- excluded from that
+    session's pytest invocation with `--deselect tests/test_home_spatial.py
+    ::test_rerun_with_no_upstream_change_writes_zero_rows`, not skipped
+    here, so this file keeps its normal M3-P6 acceptance test intact for
+    everyone else."""
     with _connect() as conn:
         with conn.cursor() as cur:
             if not _table_exists(cur, "core", "home_spatial"):
@@ -197,16 +199,23 @@ def _ccn_pick_rule_invariants(cur, county_fips: str, label: str) -> None:
         f"after CCN resolution went live for this county"
     )
 
+    # pt IS NULL homes are excluded here on purpose: they were never
+    # tested against ANY polygon (HIFLD or CCN), so they keep the
+    # pre-existing pt-null behavior (territory_gate_reason=
+    # 'territory_not_base_served', null_reason=NULL, basis=NULL,
+    # untouched by this session's resolution_mode -- see the
+    # 'default_hifld' routing for g.pt is null in home_spatial.py) and
+    # are not expected to carry one of this rule's three reasons.
     cur.execute(
         "select distinct territory_null_reason from core.home_spatial "
-        "where county_fips = %s and resolved_territory_eia_id is null",
+        "where county_fips = %s and resolved_territory_eia_id is null and pt is not null",
         (county_fips,),
     )
     reasons = {row[0] for row in cur.fetchall()}
-    assert reasons, f"{label}: expected at least one null_reason value among unresolved homes"
+    assert reasons, f"{label}: expected at least one null_reason value among unresolved homes with a point"
     assert None not in reasons, (
-        f"{label}: found a home with resolved_territory_eia_id NULL and territory_null_reason "
-        f"also NULL -- 'missing means empty' requires a reason"
+        f"{label}: found a home WITH a point, resolved_territory_eia_id NULL, and "
+        f"territory_null_reason also NULL -- 'missing means empty' requires a reason"
     )
     assert reasons <= _CCN_NULL_REASONS, (
         f"{label}: unexpected null_reason value(s) {reasons - _CCN_NULL_REASONS} -- "

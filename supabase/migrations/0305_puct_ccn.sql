@@ -255,12 +255,26 @@ on conflict (ccn_company_name) do nothing;
 -- 'ccn_holder_unmapped' / 'multiply_certificated' are each their own
 -- hash state -- a crosswalk fix that flips a holder from "unmapped" to
 -- "mapped" (same eia_id count-wise coincidentally) still gets picked up.
--- NOTE: this formula change is global (every county's hash changes once,
--- not just Williamson/Travis), so the FIRST post-deploy run of
--- home_spatial for EVERY already-loaded county (Harris included) will
--- write every row once, even though nothing about Harris's actual
--- resolution changed -- a one-time cost of changing the hash formula
--- itself, not a bug.
+-- Guarded (advisor review caught the naive version of this): the
+-- formula appends '|' || territory_null_reason only via
+-- `coalesce('|' || r.territory_null_reason, '')`, so for every row
+-- where territory_null_reason is NULL (Harris always; every other
+-- already-loaded county's default path) the appended segment is ''  --
+-- BYTE-IDENTICAL to the pre-this-session hash string, so Harris's
+-- ~836k rows do NOT get rewritten by this change. Only Williamson (which
+-- had a non-null reason, 'utility_not_confirmed', that the OLD formula
+-- never hashed at all) and Travis (whose territory_basis literal changes
+-- from 'service_area_polygon' to 'puct_ccn' for nearly every home with a
+-- point, which alone would have changed the hash regardless) actually
+-- get rewritten.
+--
+-- A home with NO point (68,448 in Travis today) is explicitly routed to
+-- the UNCHANGED 'default_hifld' mode when g.pt is null (see
+-- resolution_mode's guard for this, added after an advisor review caught
+-- that the naive 'ccn_counties' routing would have mislabeled these as
+-- tested-and-'no_ccn_match', and silently ungated their existing
+-- 'territory_not_base_served' status) -- their hash, and their gate
+-- outcome, are UNCHANGED by this session.
 --
 -- Apply steps (once the user confirms the pick rule above), estimated:
 --   0. This branch (worktree-agent-ad1861480a870dd31) must be merged
@@ -276,30 +290,47 @@ on conflict (ccn_company_name) do nothing;
 --      pooler, per platform convention for migrations).
 --   2. Run `python3 -m pipelines.run puct_ccn --backfill` -- discovery
 --      is automatic (pipelines.core.registry globs pipelines/sources/
---      *.py by filename, no manual registration step) once this
---      module's __main__ refusal-to-run guard is removed by whichever
---      ticket picks this up; 3 files, 148 features total, well under a
---      minute.
+--      *.py by filename and calls its run(), no manual registration and
+--      no code change needed -- puct_ccn.py's `if __name__ ==
+--      "__main__"` refusal only blocks running that file DIRECTLY with
+--      `python3 pipelines/sources/puct_ccn.py`, it does NOT block
+--      `pipelines.run`, which imports the module and calls run()
+--      itself); 3 files, 148 features total, well under a minute.
+--   2.5. Web label gap (found this session, not yet fixed -- out of this
+--      ticket's owned paths): web/components/GateCounts.tsx and
+--      web/app/home/[prop_id]/page.tsx's reason-label maps only know
+--      'territory_not_base_served' / 'utility_not_confirmed' /
+--      'territories_not_loaded' / 'crosswalk_not_loaded'. This session's
+--      three new reasons ('no_ccn_match', 'ccn_holder_unmapped',
+--      'multiply_certificated') have NO label yet -- add them there
+--      (a web-dev ticket) before or alongside step 4, or the UI will
+--      show an unlabeled/fallback reason for every Williamson/Travis
+--      home in one of those three states.
 --   3. DONE (this session): pipelines/sources/home_spatial.py's territory
---      section implements the rule above (resolution_mode CTE). Nothing
---      further to land here -- just review it (still uncommitted-to-DB,
---      no DB writes were made building/testing it).
+--      section implements the rule above (resolution_mode CTE), with the
+--      pt-is-null guard and the hash-formula fix described above (both
+--      added after an advisor review). Nothing further to land here --
+--      just review it (still uncommitted-to-DB, no DB writes were made
+--      building/testing it).
 --   4. Re-run `python3 -m pipelines.run home_spatial --county 48491`
---      and `--county 48453` (per-county, resumable, per
---      0304_spatial_precompute.sql's design). Because this session ALSO
---      changed the input_hash formula (added territory_null_reason --
---      see above), the FIRST post-deploy run should really be run for
---      EVERY already-loaded county (48201, 48453, 48491), not just the
---      two CCN counties, since every existing row's hash is now stale.
---      Row counts: Harris ~836k (from M3-P6's own figures), Travis
---      373,513 with a point, Williamson 158,475 -- roughly 1.2M rows
---      being force-rewritten once. checks/M3-P6.md's own measured
---      guidance (not this migration's guess) is "budget a few minutes
---      per county" for a full pass with the subdivided tables already in
---      place, so plan on roughly 10-15 minutes total for all three
---      counties, not the ~70s/1.2M-homes territory-only micro-benchmark
---      alone (that number excludes block-group/flood work and the
---      per-row write).
+--      and `--county 48453` ONLY (per-county, resumable, per
+--      0304_spatial_precompute.sql's design) -- Harris does NOT need a
+--      rerun: the input_hash fix above keeps Harris's hash byte-
+--      identical, so a Harris rerun would compute ~836k rows and write
+--      zero of them (safe, but pointless; skip it). Rows actually
+--      WRITTEN (changed): all 158,475 Williamson rows (their null_reason
+--      changes even where eia_id stays null) plus most of Travis's
+--      373,513 rows-with-a-point (territory_basis literal changes from
+--      'service_area_polygon' to 'puct_ccn' for nearly all of them,
+--      changing their hash even where the eia_id number happens to
+--      match) -- roughly 530,000 rows total, not ~1.2M. Travis's 68,448
+--      no-point rows are explicitly UNCHANGED (see above) and will NOT
+--      be rewritten. checks/M3-P6.md's own measured guidance (not this
+--      migration's guess) is "budget a few minutes per county" for a
+--      full pass with the subdivided tables already in place, so plan
+--      on roughly 5-10 minutes total for these two counties, not the
+--      ~70s/1.2M-homes territory-only micro-benchmark alone (that number
+--      excludes block-group/flood work and the per-row write).
 --   5. `python3 -m pipelines.run refresh_scores` (or whatever wraps
 --      core.refresh_all_scores()) to propagate into
 --      core.mv_home_signals -- see checks/M3-P6.md for that step's own

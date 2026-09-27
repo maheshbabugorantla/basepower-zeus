@@ -342,6 +342,18 @@ resolution_mode as (
             when (select count(*) from core.territories) = 0 then 'fail_open_no_territories'
             when (select count(*) from core.utility_crosswalk) = 0 then 'fail_open_no_crosswalk'
             when g.county_fips = %(harris_fips)s then 'harris_pin'
+            -- A home with no point (68,448 in Travis today) was never
+            -- tested against ANY polygon, HIFLD or CCN -- routing it
+            -- through 'ccn_counties' would wrongly label it
+            -- 'no_ccn_match' (a real answer: 0 CCN holders matched) when
+            -- the truth is "not tested at all". 'default_hifld' with
+            -- g.pt null reproduces the EXACT pre-existing behavior for
+            -- these rows (tm.eia_id is null when pt is null, giving the
+            -- same gate_reason='territory_not_base_served',
+            -- null_reason=null, basis=null this session found live in
+            -- core.home_spatial before touching anything).
+            when g.county_fips in (%(williamson_fips)s, %(travis_fips)s) and g.pt is null
+                then 'default_hifld'
             when g.county_fips in (%(williamson_fips)s, %(travis_fips)s)
                  and ((select count(*) from core.electric_ccn) = 0
                       or (select count(*) from core.electric_ccn_crosswalk) = 0)
@@ -469,8 +481,20 @@ select
         coalesce(r.crosswalk_source_id::text, '') || '|' ||
         coalesce(fm.flood_source_id::text, '') || '|' ||
         coalesce(r.resolved_territory_eia_id, '') || '|' ||
-        coalesce(r.territory_basis, '') || '|' ||
-        coalesce(r.territory_null_reason, '')
+        coalesce(r.territory_basis, '') ||
+        -- Appends '|' + territory_null_reason ONLY when it's non-null
+        -- (concatenation with a NULL yields NULL, so the outer coalesce
+        -- falls through to '' instead) -- keeps the hash BYTE-IDENTICAL
+        -- to the pre-this-session formula for every row whose
+        -- null_reason is null (Harris always; every other already-
+        -- loaded county too), so this addition does not force a global
+        -- rewrite. It only changes the hash for Williamson/Travis rows
+        -- that now carry a null_reason ('no_ccn_match' /
+        -- 'ccn_holder_unmapped' / 'multiply_certificated' /
+        -- 'utility_not_confirmed'), which is exactly the point: two
+        -- rows with the same (null) eia_id and (null) basis but a
+        -- DIFFERENT reason must not hash the same.
+        coalesce('|' || r.territory_null_reason, '')
     ) as input_hash
 from resolved r
 left join bg_match bm on bm.prop_id = r.prop_id
