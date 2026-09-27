@@ -9,6 +9,7 @@ import { ParcelMap } from "../../../components/ParcelMap";
 import { SolarPanel } from "../../../components/SolarPanel";
 import { ScoreExplainer } from "../../../components/ScoreExplainer";
 import { PropensityBadge, type PropensityReason } from "../../../components/PropensityBadge";
+import { utilityStatusForHome } from "../../../lib/priorityTier";
 import { PermitPath, type PermitPathKind, type PermitPathStatsRow, type PermitRulesCitation } from "../../../components/PermitPath";
 import { GridValue } from "../../../components/GridValue";
 import { COUNTY_CANDIDATES, CAD_NAME } from "../../../lib/counties";
@@ -114,6 +115,24 @@ interface HomePropensityDbRow {
   decile: number | null;
   reasons: PropensityReason[];
   extrapolated_from: string | null;
+}
+
+// "Before you knock": already has backup? (core.home_coverage) -- a
+// primary-key lookup, same table/bucket values the ranking screen's
+// "Hide homes that already have backup" toggle uses (api.top-homes
+// route's excludeBackup predicate), so a rep sees the identical fact
+// here that decided whether this home was even on the list.
+async function getHomeCoverageBucket(propId: string): Promise<string | null> {
+  try {
+    const rows = await query<{ bucket: string | null }>(
+      `select bucket from core.home_coverage where prop_id = $1`,
+      [propId]
+    );
+    return rows[0]?.bucket ?? null;
+  } catch (err) {
+    console.error("home-detail: failed to load core.home_coverage", err);
+    return null;
+  }
 }
 
 async function getHomePropensity(propId: string): Promise<HomePropensityDbRow | null> {
@@ -748,7 +767,7 @@ export default async function HomeDetailPage({
   const incomeAge = homeSignals?.block_group_geoid ? await getIncomeAge(homeSignals.block_group_geoid) : null;
   const permitSourceIds = home.permits.map((p) => p.source_id).filter((s): s is string => !!s);
 
-  const [sourcesById, scoreContext, homePropensity, parcelGeojson, rulesHaveRun, texasOutagePercentile, permitPathStatsRow, permitRuleRow] = await Promise.all([
+  const [sourcesById, scoreContext, homePropensity, parcelGeojson, rulesHaveRun, texasOutagePercentile, permitPathStatsRow, permitRuleRow, coverageBucket] = await Promise.all([
     getSourcesByIds(
       Array.from(
         new Set([
@@ -772,6 +791,7 @@ export default async function HomeDetailPage({
       : Promise.resolve(null),
     permitPath === "city_battery_permit" ? getPermitPathStats() : Promise.resolve(null),
     getPermitRuleCitation(permitPath),
+    getHomeCoverageBucket(home.prop_id),
   ]);
 
   const permitPathStats: PermitPathStatsRow | null = permitPathStatsRow
@@ -868,7 +888,7 @@ export default async function HomeDetailPage({
             marginTop: 0,
           }}
         >
-          Likelihood of adding backup in the next 12 months
+          Priority
         </h2>
         {homePropensity === null ? (
           <MissingState
@@ -886,6 +906,84 @@ export default async function HomeDetailPage({
             showReasons
           />
         )}
+      </Panel>
+
+      {/* "Before you knock" -- the door-brief checklist a rep reads
+          standing on the porch: already has backup (de-prioritize/skip
+          if so), utility service status (distinct from priority, T2),
+          flood zone, permit path. Every fact here is one already fetched
+          for a panel further down this page -- this panel just surfaces
+          the ones that change what a rep says or does before knocking. */}
+      <Panel>
+        <h2
+          style={{
+            fontFamily: "var(--type-heading-font-family)",
+            fontSize: "var(--type-heading-font-size)",
+            fontWeight: "var(--type-heading-font-weight)",
+            marginTop: 0,
+          }}
+        >
+          Before you knock
+        </h2>
+        <dl style={{ display: "grid", gap: "var(--space-3)", margin: 0 }}>
+          <div>
+            <dt style={{ color: "var(--theme-ink-muted)", fontSize: "var(--type-label-font-size)" }}>
+              Already has backup?
+            </dt>
+            <dd style={{ margin: "var(--space-1) 0 0 0" }}>
+              {coverageBucket === "base_customer" || coverageBucket === "other_backup" ? (
+                <strong>
+                  Yes{coverageBucket === "base_customer" ? " -- already a Base customer" : " -- another installer’s backup on file"}. Say so and move on.
+                </strong>
+              ) : (
+                "No backup on file -- worth a knock."
+              )}
+            </dd>
+          </div>
+          <div>
+            <dt style={{ color: "var(--theme-ink-muted)", fontSize: "var(--type-label-font-size)" }}>
+              Utility service
+            </dt>
+            <dd style={{ margin: "var(--space-1) 0 0 0" }}>
+              {(() => {
+                const status = utilityStatusForHome({
+                  gateReason: homeSignals?.gate_reason ?? null,
+                  territoryNullReason: homeSignals?.territory_null_reason ?? null,
+                });
+                return (
+                  <>
+                    {status.label}
+                    <div style={{ fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)" }}>
+                      {status.action}
+                    </div>
+                  </>
+                );
+              })()}
+            </dd>
+          </div>
+          <div>
+            <dt style={{ color: "var(--theme-ink-muted)", fontSize: "var(--type-label-font-size)" }}>Flood zone</dt>
+            <dd style={{ margin: "var(--space-1) 0 0 0" }}>
+              {homeSignals?.flood_flag === null || homeSignals?.flood_flag === undefined ? (
+                <MissingState variant="not-loaded" reason={homeSignals?.flood_null_reason ?? "Flood zones not loaded"} />
+              ) : homeSignals.flood_flag ? (
+                "Inside a FEMA high-risk flood zone -- ask about it."
+              ) : (
+                "Outside FEMA high-risk flood zones."
+              )}
+            </dd>
+          </div>
+          <div>
+            <dt style={{ color: "var(--theme-ink-muted)", fontSize: "var(--type-label-font-size)" }}>Permit path</dt>
+            <dd style={{ margin: "var(--space-1) 0 0 0" }}>
+              {permitPath === "city_battery_permit"
+                ? "City of Austin battery permit path applies."
+                : permitPath === "state_rules_only"
+                  ? "State rules only -- no city permit path on file."
+                  : "Not resolvable yet."}
+            </dd>
+          </div>
+        </dl>
       </Panel>
 
       <Panel>
