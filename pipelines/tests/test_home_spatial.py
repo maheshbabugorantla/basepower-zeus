@@ -174,6 +174,45 @@ def test_boundary_source_ids_never_empty_for_a_resolved_home():
             assert bad == 0, f"{bad} home_spatial row(s) with a resolved block group but empty boundary_source_ids"
 
 
+def test_block_group_never_crosses_into_an_unverified_county():
+    """Data-correctness fix (2026-09-26): core.home_spatial.block_group_geoid
+    must never carry a GEOID whose own county_fips prefix differs from the
+    parcel's county_fips, EXCEPT the one documented, verified exception --
+    TCAD (Travis, 48453) parcels whose real geometry sits inside Williamson
+    (48491), per pipelines/sources/wcad_parcels.py's module docstring and
+    its own TCAD-in-Williamson overlap-dedup logic. Any other cross-county
+    GEOID (e.g. a Williamson/WCAD or Harris/HCAD parcel matching a
+    neighboring county's block group) means the bg_match lateral join in
+    pipelines/sources/home_spatial.py isn't scoping by county -- a real
+    parcel outside HCAD's/WCAD's own single-county roll would be a data
+    error, never a legitimate cross-county appraisal, per those modules'
+    own docstrings."""
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            if not _table_exists(cur, "core", "home_spatial"):
+                pytest.skip("core.home_spatial not migrated yet")
+            cur.execute("select count(*) from core.home_spatial where block_group_geoid is not null")
+            (n,) = cur.fetchone()
+            if n == 0:
+                pytest.skip("no home_spatial rows with a resolved block group yet")
+            cur.execute(
+                """
+                select hs.prop_id, hs.county_fips, hs.block_group_geoid
+                from core.home_spatial hs
+                where hs.block_group_geoid is not null
+                  and left(hs.block_group_geoid, 5) != hs.county_fips
+                  and not (hs.county_fips = %s and left(hs.block_group_geoid, 5) = %s)
+                """,
+                (TRAVIS, WILLIAMSON),
+            )
+            bad = cur.fetchall()
+            assert bad == [], (
+                f"{len(bad)} home_spatial row(s) carry an unverified cross-county "
+                f"block_group_geoid (not the documented Travis-into-Williamson "
+                f"exception): {bad[:10]}"
+            )
+
+
 def test_input_hash_never_null():
     """Every row must carry an input_hash (the incremental-skip key) —
     a null hash would make every future run recompute that row forever."""

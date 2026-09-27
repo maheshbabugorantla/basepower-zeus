@@ -67,6 +67,7 @@ SOURCE = "home_spatial"
 BATCH_SIZE = 20_000
 HARRIS_FIPS = "48201"
 WILLIAMSON_FIPS = "48491"
+TRAVIS_FIPS = "48453"
 HARRIS_PIN_EIA_ID = "8901"
 
 Runner = Literal["cron", "cli"]
@@ -98,6 +99,33 @@ geo as (
     left join core.parcel_geoms pg on pg.prop_id = b.prop_id
 ),
 bg_match as (
+    -- Data-correctness fix (2026-09-26, cross-county block-group bug):
+    -- the live version of this lateral join matched g.pt against EVERY
+    -- county's block groups with no county scoping at all, so a parcel
+    -- near a county line could silently pick up a NEIGHBORING county's
+    -- GEOID via ST_Within (verified live: 42 Williamson/WCAD parcels
+    -- matched a Travis 48453-prefixed block group, 110 Harris/HCAD
+    -- parcels matched Fort Bend/Montgomery/Waller block groups, plus
+    -- unverified Travis/TCAD crossings into Bastrop/Hays/Comal). HCAD
+    -- and WCAD each appraise only their own county (pipelines/sources/
+    -- hcad_parcels.py, wcad_parcels.py -- no documented cross-county
+    -- roll for either), so any match outside g.county_fips for those
+    -- counties is a real bug, not a real home -- fixed here by scoping
+    -- the match to g.county_fips.
+    --
+    -- The ONE exception, kept exactly as-is: TCAD (Travis, 48453) is
+    -- separately verified and DOCUMENTED to appraise some parcels whose
+    -- real geometry sits inside Williamson (48491) -- see
+    -- pipelines/sources/wcad_parcels.py's module docstring ("The 137
+    -- TCAD-rolled parcels already sitting in Williamson... county
+    -- assignment is geometry-based, not the parcel's own county_fips
+    -- attribute", per 0102_m1_materialize.sql) and that module's own
+    -- overlap-dedup logic built specifically around this fact. Every
+    -- OTHER cross-county match this fix drops was never documented or
+    -- verified anywhere in this repo, so per the real-data rule
+    -- ("nothing invented") it is not assumed real -- those rows get a
+    -- null block_group_geoid instead (missing means empty, never a
+    -- force-assigned neighboring-county GEOID).
     select
         g.prop_id,
         bg.geoid as block_group_geoid,
@@ -106,7 +134,12 @@ bg_match as (
     left join lateral (
         select bg.geoid, bg.source_id
         from core.block_groups bg
-        where g.pt is not null and extensions.ST_Within(g.pt, bg.geom)
+        where g.pt is not null
+          and extensions.ST_Within(g.pt, bg.geom)
+          and (
+              bg.county_fips = g.county_fips
+              or (g.county_fips = %(travis_fips)s and bg.county_fips = %(williamson_fips)s)
+          )
         limit 1
     ) bg on true
 ),
@@ -320,6 +353,7 @@ def _run_batch(conn: psycopg.Connection, *, county_fips: str, after_prop_id: str
                 "limit": limit,
                 "harris_fips": HARRIS_FIPS,
                 "williamson_fips": WILLIAMSON_FIPS,
+                "travis_fips": TRAVIS_FIPS,
                 "harris_pin_eia_id": HARRIS_PIN_EIA_ID,
             },
         )
