@@ -17,6 +17,8 @@ colors:
   brand-strong: "#1e4d2b"
   brand-strong-hover: "#102a17"
   focus: "#048ee5"
+  # Brand mark: Base brand gold, the Zeus mark's thunderbolt only
+  brand-gold: "#f7c33c"
   # Score ramp (sequential, choropleth + score bars), low -> high
   score-1: "#d6f0b4"
   score-2: "#b2dd79"
@@ -173,6 +175,10 @@ Hex values are Base's own, extracted from the live site. Contrast was checked ag
 
   The minimum pairwise ΔE is 39.6 under simulated deuteranopia, protanopia and tritanopia. Light fills always carry their edge color and a text label.
 
+### Brand mark
+- The Zeus mark is an engraved fist gripping a thunderbolt inside a sunburst roundel over transmission towers (`web/public/brand/zeus-badge-*`, `web/components/brand/`). The engraving is `brand-strong` on light and `dark-ink` on dark (`--theme-brand-mark-ink`).
+- **Brand gold** #f7c33c (Base's `--color-brand-gold`, `--color-brand-gold` here) fills the mark's bolt and its animated current, and nothing else in the chrome. In data it keeps its grid-value signal meaning; the mark never sits inside a chart.
+
 ### Named Rules
 **The Green Means Score Rule.** Green belongs to the ranking. Signals, states and chrome never use the score ramp, so a green cell always means "ranks higher".
 
@@ -191,6 +197,8 @@ Hex values are Base's own, extracted from the live site. Contrast was checked ag
 - **Body** (0.9375rem/400, 1.5): prose, capped at 70ch.
 - **Label** (0.8125rem/500): controls, chips, table headers, units.
 - **Data** (Geist Mono 0.8125rem): raw identifiers and hashes.
+
+**Wordmark only:** ZEUS is set in Cinzel 900 (Google Fonts), a Roman inscriptional capital that matches the engraved mark. It appears only in the Zeus lockup, never in UI text.
 
 The scale uses a fixed rem ratio of about 1.2, not fluid type. `text-wrap: balance` applies to titles and headings.
 

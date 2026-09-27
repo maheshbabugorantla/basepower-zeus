@@ -155,6 +155,12 @@
   --component-table-row-selected-background-color: var(--color-brand-subtle);
   --component-table-row-selected-text-color: var(--color-ink);
 
+  /* ---- brand mark (DESIGN.md §2 "Brand mark") ----
+   * Base's brand gold (basepowercompany.com --color-brand-gold) fills the
+   * Zeus mark's thunderbolt and nothing else in the chrome; in data it keeps
+   * its grid-value signal meaning (--color-signal-grid). */
+  --color-brand-gold: #f7c33c;
+
   /* ---- shadow (DESIGN.md §4 Elevation) ---- */
   --shadow-float: 0 4px 12px #0000001a;
 
@@ -173,6 +179,8 @@
   --theme-ink: var(--color-ink);
   --theme-ink-muted: var(--color-ink-muted);
   --theme-brand-accent-text: var(--color-brand-strong);
+  --theme-brand-mark-ink: var(--color-brand-strong);
+  --theme-brand-mark-bolt: var(--color-brand-gold);
   --theme-score-1: var(--color-score-1);
   --theme-score-2: var(--color-score-2);
   --theme-score-3: var(--color-score-3);
@@ -189,6 +197,8 @@
     --theme-ink: var(--color-dark-ink);
     --theme-ink-muted: var(--color-dark-ink-muted);
     --theme-brand-accent-text: var(--color-dark-brand);
+    --theme-brand-mark-ink: var(--color-dark-ink);
+    --theme-brand-mark-bolt: var(--color-brand-gold);
     --theme-score-1: var(--color-dark-score-1);
     --theme-score-2: var(--color-dark-score-2);
     --theme-score-3: var(--color-dark-score-3);
@@ -205,6 +215,8 @@
   --theme-ink: var(--color-dark-ink);
   --theme-ink-muted: var(--color-dark-ink-muted);
   --theme-brand-accent-text: var(--color-dark-brand);
+  --theme-brand-mark-ink: var(--color-dark-ink);
+  --theme-brand-mark-bolt: var(--color-brand-gold);
   --theme-score-1: var(--color-dark-score-1);
   --theme-score-2: var(--color-dark-score-2);
   --theme-score-3: var(--color-dark-score-3);

@@ -8,6 +8,7 @@ import { ExportButton } from "./ExportButton";
 import { ThemeToggle } from "./ThemeToggle";
 import { FreshnessSummary, type SourceFreshnessRow } from "./FreshnessSummary";
 import type { CountyOption } from "../lib/counties";
+import { ZeusLogo } from "./brand/ZeusLogo";
 
 // DESIGN.md §5 Navigation: "The top bar holds the wordmark, the county
 // switcher (Travis, Harris), the freshness summary (quiet unless something
@@ -88,20 +89,7 @@ export function TopBar({
   return (
     <header className="top-bar">
       <div className="top-bar__brand">
-        <svg
-          width="20"
-          height="20"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="var(--theme-brand-accent-text)"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          aria-hidden="true"
-        >
-          <path d="M13 2 4 14h7l-1 8 9-12h-7z" />
-        </svg>
-        <span className="top-bar__wordmark">Base Power Zeus</span>
+        <ZeusLogo size="sm" href="/" />
       </div>
 
       <PrimaryNav />
