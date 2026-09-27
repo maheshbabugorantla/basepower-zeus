@@ -319,42 +319,6 @@
   font-weight: 600;
 }
 
-.export-button-wrap {
-  position: relative;
-  display: inline-flex;
-}
-
-.export-button-wrap .btn[aria-disabled="true"] {
-  background-color: var(--color-surface-sunken);
-  color: var(--color-ink-disabled);
-  border-color: var(--color-surface-sunken);
-  cursor: not-allowed;
-}
-
-.export-button-tooltip {
-  position: absolute;
-  top: calc(100% + var(--space-2));
-  right: 0;
-  z-index: 10;
-  width: max-content;
-  max-width: 220px;
-  padding: var(--space-2) var(--space-3);
-  background-color: var(--theme-ink);
-  color: var(--theme-canvas);
-  border-radius: var(--rounded-sm);
-  font-family: var(--type-label-font-family);
-  font-size: var(--type-label-font-size);
-  opacity: 0;
-  visibility: hidden;
-  transition: opacity var(--motion-duration) var(--motion-ease);
-}
-
-.export-button-wrap:hover .export-button-tooltip,
-.export-button-wrap:focus-within .export-button-tooltip {
-  opacity: 1;
-  visibility: visible;
-}
-
 /* ---------------------------------------------------------------------- */
 /* Breadcrumb (home detail)                                               */
 /* ---------------------------------------------------------------------- */
