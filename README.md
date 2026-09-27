@@ -1,14 +1,21 @@
 # Base Power Zeus
 
-> Built during the **Base Power Deep Tech Hackathon** (Austin, TX, September 2026) by [Mahesh Babu Gorantla](https://github.com/maheshbabugorantla), [Sreedhar Reddy Arolla](https://github.com/sreedhararolla), [Pranay Dheeru](https://github.com/pranaydheeru) & [Pranav Narahari](https://github.com/pnav1023).
+> Built during the **[Base Power Deep Tech Hackathon](https://luma.com/aitx-94j6?tk=kluent)** (Austin, TX, September 2026) by [Mahesh Babu Gorantla](https://github.com/maheshbabugorantla), [Sreedhar Reddy Arolla](https://github.com/sreedhararolla), [Pranay Dheeru](https://github.com/pranaydheeru) & [Pranav Narahari](https://github.com/pnav1023).
 
 ![Zeus: an engraved fist gripping a gold thunderbolt inside a sunburst roundel over transmission towers, beside the ZEUS wordmark](docs/media/zeus-hero.png)
 
-**Know which door to knock next.** Zeus ranks Texas homes for Base Power outreach by how likely each one is to add home backup power, and shows the reason on every row. Every number on screen opens the public file it came from, and missing data says so instead of being guessed.
+**Know which door to knock next.** Zeus is a customer-screening tool for Base Power's go-to-market team. It screens every parcel in a county from public records, keeps owner-occupied single-family homes, checks whether Base serves each home's utility, and ranks those qualified leads by how likely each is to add home backup power in the next 12 months. Every lead carries the reason it qualifies, and every number on screen opens the public file it came from; missing data says so instead of being guessed.
 
-- **Live app:** https://base-power-zeus.vercel.app
-- **Repo:** https://github.com/maheshbabugorantla/basepower-zeus
-- **Now ranking:** 1,057,261 owner-occupied single-family homes across Travis, Harris and Williamson Counties (Overview page)
+| Submission | |
+|---|---|
+| **Project** | Base Power Zeus: customer screening for home backup power in Texas |
+| **Demo video (2–5 min, Loom)** | _add the Loom link here_ · 55 s screen capture below and in [`docs/media/zeus-demo.mp4`](docs/media/zeus-demo.mp4) |
+| **Live app** | https://base-power-zeus.vercel.app |
+| **Repo** | https://github.com/maheshbabugorantla/basepower-zeus |
+| **Team** | [Team](#team) |
+| **Write-up** | [Problem → who it helps → solution → impact](#write-up) |
+| **Synthetic data** | None. Every row traces to a downloaded public file; see [Datasets & provenance](#datasets--provenance) |
+| **Scale** | 1,057,261 owner-occupied single-family homes ranked across Travis, Harris and Williamson Counties (Overview page) |
 
 The app opens on a map of real census block groups shaded by how many top-priority homes each holds, beside a ranked list of homes. Rank 1 opens in place with:
 - a plain-English case for the knock, built from that home's strongest real signals
@@ -20,6 +27,16 @@ The app opens on a map of real census block groups shaded by how many top-priori
 
 Full-quality recording: [`docs/media/zeus-demo.mp4`](docs/media/zeus-demo.mp4) (55 s, 1440×900, recorded live against https://base-power-zeus.vercel.app with Playwright, starting at `/?intro`).
 
+## Write-up
+
+**Problem.** Base Power sells home batteries in Texas, and every outreach hour is expensive. Most homes are not a fit: renters, homes on a utility Base doesn't serve, homes that already have backup. Territory plans built on neighborhood hunches spend rep time on unqualified doors and miss the households most ready to buy.
+
+**Who it helps.** Base's growth, territory and field-sales teams choosing where to spend the next week of outreach, and the managers who have to justify that list.
+
+**Solution.** Zeus screens every parcel in Travis, Harris and Williamson Counties from public records. A home qualifies when it is owner-occupied and single-family, and every lead says whether Base serves its utility. Each qualified home is then ranked by how likely it is to add backup in the next 12 months, from real buying signals: its utility's outage record, neighbors already installing backup, home value and age, a recent panel upgrade, permit friction. Reps get a ranked lead list beside a map, a plain-English reason for every lead, a "before you knock" checklist, and a CSV of exactly the leads on screen. Every figure opens its source file.
+
+**Impact.** The screen does the qualification work up front: in Travis County it narrows 441,961 appraisal-roll parcels to 159,649 homes Base can serve. Tested on 735 later installs the model never saw, homes in the top-priority tier installed backup at 3.12 times the average rate, so each door knocked in that tier is about three times as likely to be a ready buyer. Across three counties, 1,057,261 owner-occupied single-family homes are ranked and ready to work.
+
 ## What it does, and for whom
 
 Two audiences use the same screen:
@@ -29,7 +46,7 @@ Two audiences use the same screen:
 
 | Page | What it answers |
 |---|---|
-| **Ranking** | Which homes in this county are most likely to add backup, and why. Map and list on one screen, rank 1 expanded, camera glides to any city, ZIP or neighborhood. |
+| **Ranking** | Which qualified homes in this county are most likely to add backup, and why. Map and lead list on one screen, rank 1 expanded, type-ahead City, ZIP and Neighborhood filters with a camera glide to the pick, and a CSV export of exactly the filtered leads (top 5,000). |
 | **Home record** | Everything about one home under its address, in tabs: Summary (the case, six meters, six facts, recent permits, priority, a "before you knock" checklist), Signals, Permits, Parcel & solar, Sources. |
 | **Overview** | The territory at a glance: outage minutes by utility, the storm record, how many parcels reach the ranked list per county, and battery permit times. |
 | **Sources** | How leads are prioritized, the model's accuracy check, spot checks on the data, and every downloaded file with its fingerprint. |
@@ -68,6 +85,40 @@ Useful URLs while developing:
 | `/?intro=0` | Skips the reel and the redirect; use it in every test and screenshot script |
 | `/ranking?county=48201` | Ranking for Harris County (`48453` Travis, `48491` Williamson) |
 | `/ranking?mode=weighted` | Opens in Team priorities |
+
+## Reproduce the demo
+
+**On the live app** (no setup): open https://base-power-zeus.vercel.app/?intro and follow the same path as the demo video.
+
+1. The intro reel plays (about 11 seconds) and lands on **Ranking** for Travis County, with rank 1 expanded.
+2. Click a highlighted figure in rank 1's case sentence: its source opens (dataset, retrieval time, SHA-256, raw file).
+3. Switch to **Team priorities**, open **Adjust priorities**, and move a slider; the list re-ranks and the map re-shades.
+4. Open **Filters** and pick `78731` in ZIP; the camera glides to the ZIP and the list narrows.
+5. Click **Open full record** on a lead: the home record's Summary, Signals, Permits, Parcel & solar and Sources tabs.
+6. Visit **Overview** (territory at a glance) and **Sources** (every downloaded file, named and fingerprinted).
+
+**Locally**: copy the sample env file and fill in the values you have. The web app only needs read access to a database that the pipelines have already loaded.
+
+```bash
+cp .env.example .env     # names only; the filled-in .env stays untracked
+```
+
+| Variable | Used by | Needed for | Where to get it |
+|---|---|---|---|
+| `POSTGRES_URL_READONLY` | web | every page (role `zeus_web_ro`, `SELECT`/`EXECUTE` only) | Supabase pooler URL for a read-only role |
+| `SUPABASE_URL` | web, pipelines | Supabase Storage, where every raw file is kept | Supabase project settings → API |
+| `SUPABASE_PUBLISHABLE_KEY` | web | signed links to raw source files | Supabase project settings → API |
+| `GOOGLE_MAPS_API_KEY` | web | the Solar panel on the home record (Google Solar API, live) | Google Cloud console, Solar API enabled |
+| `POSTGRES_URL` | pipelines | loads (transaction pooler, port 6543, `prepare_threshold=None`) | Supabase |
+| `POSTGRES_URL_NON_POOLING` | pipelines | migrations and long backfills (session pooler, port 5432) | Supabase |
+| `SUPABASE_SECRET_KEY` | pipelines | uploading raw files to Storage (service role) | Supabase project settings → API |
+| `CRON_SECRET` | pipelines | the bearer token every `/cron/*` route checks | any long random string |
+| `ERCOT_USERNAME`, `ERCOT_PASSWORD`, `ERCOT_SUBSCRIPTION_KEY` | pipelines | ERCOT settlement prices | ERCOT API Explorer account |
+| `CENSUS_API_KEY` | pipelines | American Community Survey downloads | Census Bureau API key sign-up |
+| `GEMINI_API_KEY`, `BRIEF_MODEL` | pipelines | "why this home" summaries | Google AI Studio |
+| `TYPESAFE_AI_JEV_API_KEY` | pipelines | spot checks on permit labels | TypeSafe AI |
+
+Minimum to run the web app against an already-loaded database: `POSTGRES_URL_READONLY`, `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` (`GOOGLE_MAPS_API_KEY` is optional). Loading the data from scratch runs the pipelines in [Quick start](#quick-start).
 
 ## Tech stack & architecture
 
@@ -188,7 +239,7 @@ This repo's non-negotiable rule, enforced in CI:
 | No-mock scan | `python3 scripts/no_mock_check.py` | Fake-data libraries, `random`, literal record arrays, zero-filling, fixture sidecars |
 | Ticket graph | `python3 scripts/dag.py tickets/<Mn>/` | Wave order, cycles, overlapping `owns` paths |
 | Script tests | `python3 -m unittest discover -s scripts/tests` | The checkers themselves |
-| Web tests | `cd web && npx vitest run` | 184 tests in 45 files at the time of writing; database suites run when the read-only URL is set |
+| Web tests | `cd web && npx vitest run` | 189 tests in 46 files at the time of writing; database suites run when the read-only URL is set |
 | Types and build | `cd web && npm run typecheck && npm run build` | The production build |
 | Pipeline checks | `python3 -m pipelines.check manifest\|rows\|provenance` | Re-downloads and re-hashes raw files, row counts, source ids on every `api.*` view |
 
@@ -199,9 +250,17 @@ This repo's non-negotiable rule, enforced in CI:
 Two Vercel projects in team `gorantlasubs-gmailcoms-projects`: `base-power-zeus` (web, linked from `web/`) and `base-power-zeus-pipelines` (linked from `pipelines/`). Deploys go through the CLI, preview first, and only a verified preview is promoted:
 
 ```bash
-cd web
-vercel deploy --scope gorantlasubs-gmailcoms-projects              # preview
-vercel promote <preview-url> --scope gorantlasubs-gmailcoms-projects
+# One time: link web/ to the project (writes web/.vercel/project.json, gitignored)
+(cd web && vercel link --scope gorantlasubs-gmailcoms-projects --project base-power-zeus)
+
+# Vercel Hobby blocks CLI deploys whose git commit author isn't linked to the
+# Vercel account, so deploy a git-free export of the committed web/ folder.
+rm -rf /tmp/deploy-web && mkdir -p /tmp/deploy-web
+git archive main web | tar -x -C /tmp/deploy-web --strip-components=1
+mkdir -p /tmp/deploy-web/.vercel && cp web/.vercel/project.json /tmp/deploy-web/.vercel/
+cd /tmp/deploy-web
+vercel deploy --scope gorantlasubs-gmailcoms-projects --yes        # preview
+vercel promote <preview-url> --scope gorantlasubs-gmailcoms-projects --yes
 ```
 
 Static assets (the brand mark, the intro reel art, the map worker, icons) ship with the web build under `web/public/` and are served from Vercel's CDN. `/brand`, `/intro` and `/maplibre` carry `Cache-Control: public, max-age=86400, stale-while-revalidate=604800` (`web/next.config.ts`), so browsers reuse them for a day and refresh them in the background for a week. The Hobby plan limits functions to 300 s, so long backfills run from the CLI (`runner='cli'` in `ops.pipeline_runs`).
@@ -230,12 +289,24 @@ DESIGN.md, PRODUCT.md  design system and product brief
 - **The model is validated in Travis only.** Harris and Williamson scores reuse the Travis model without local validation.
 - **EIA-861 2025 figures are an early release**, marked "not fully edited" wherever they appear.
 - **Outage exposure is utility-wide.** SAIDI describes a utility's average customer, not a single home.
+- **No free-text address search.** Searching every home by street address needs a trigram index on addresses; without it the lookup would scan the parcel table on each keystroke, which the app's own guard forbids. Leads are found through the ranked list, the map and the City, ZIP and Neighborhood filters.
+- **The CSV export is capped at 5,000 leads** per download.
 
 **Next steps**
 1. Load full Harris and Williamson appraisal rolls, and Harris year built.
 2. Add permit sources for Houston and Williamson County cities.
 3. Validate the model on Harris installs once permits exist there.
 4. Refresh EIA-861 when the final 2025 release lands.
+5. Add address search behind a trigram index.
+
+## Team
+
+| Name | Role | Contact |
+|---|---|---|
+| Mahesh Babu Gorantla | _add role_ | [@maheshbabugorantla](https://github.com/maheshbabugorantla) |
+| Sreedhar Reddy Arolla | _add role_ | [@sreedhararolla](https://github.com/sreedhararolla) |
+| Pranay Dheeru | _add role_ | [@pranaydheeru](https://github.com/pranaydheeru) |
+| Pranav Narahari | _add role_ | [@pnav1023](https://github.com/pnav1023) |
 
 ## Credits
 
