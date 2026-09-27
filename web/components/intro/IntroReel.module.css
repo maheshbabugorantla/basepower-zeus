@@ -1,0 +1,197 @@
+/* The first-visit intro reel. It sits above everything in the app (the
+ * highest layer in use elsewhere is the skip link at 100), and takes every
+ * pointer event while it plays, so a click anywhere skips it. Colours come
+ * from DESIGN.md tokens; the reel's own night ground is the canvas's first
+ * fill (#121110, the same tone the boot script covers the page with). */
+
+.reel {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+  cursor: pointer;
+  background: #121110; /* until the canvas paints its first frame */
+}
+
+.reel[data-painted="true"] {
+  background: transparent;
+}
+
+.canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  transform-origin: 50% 55%;
+  will-change: opacity, filter, transform;
+}
+
+/* ---- funnel counter (from reel B), over the live map ---- */
+
+.funnel {
+  position: absolute;
+  left: clamp(16px, 4vw, 64px);
+  top: 50%;
+  width: min(380px, calc(100vw - 32px));
+  transform: translateY(-50%);
+  padding: var(--space-6);
+  border-radius: var(--rounded-md);
+  background: var(--theme-surface);
+  color: var(--theme-ink);
+  box-shadow: var(--shadow-float);
+  opacity: 0;
+  font-family: var(--type-body-font-family);
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
+.funnelCount {
+  display: block;
+  font-size: clamp(2.5rem, 4vw, 3.5rem);
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: -0.02em;
+}
+
+.funnelUnit {
+  display: block;
+  margin-top: var(--space-2);
+  font-size: var(--type-body-font-size);
+  color: var(--theme-ink-muted);
+}
+
+.ladder {
+  list-style: none;
+  margin: var(--space-6) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.rung {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-1) var(--space-3);
+  align-items: baseline;
+  font-size: var(--type-label-font-size);
+  color: var(--theme-ink-muted);
+  transition: color var(--motion-duration) var(--motion-ease);
+}
+
+.rung[data-active="true"] {
+  color: var(--theme-ink);
+  font-weight: 600;
+}
+
+.rungBar {
+  grid-column: 1 / -1;
+  height: 6px;
+  border-radius: 2px;
+  background: var(--theme-divider);
+  overflow: hidden;
+}
+
+.rungFill {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--theme-score-3);
+  transform-origin: left center;
+  transform: scaleX(0);
+}
+
+.rung[data-last="true"] .rungFill {
+  background: var(--theme-brand-accent-text);
+}
+
+.funnelSource {
+  margin: var(--space-4) 0 0;
+  font-size: 0.75rem;
+  color: var(--theme-ink-muted);
+}
+
+/* ---- live captions (scenes 4-5) ---- */
+
+.caption {
+  position: absolute;
+  left: 50%;
+  bottom: clamp(24px, 6vh, 56px);
+  max-width: min(640px, calc(100vw - 32px));
+  transform: translateX(-50%);
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--rounded-md);
+  background: rgba(18, 17, 16, 0.88);
+  color: #f0eeeb;
+  font: 500 1rem/1.4 var(--type-body-font-family);
+  text-align: center;
+  text-wrap: balance;
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* ---- the badge sting (from reel C) ---- */
+
+.sting {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-6);
+  background: #121110;
+  opacity: 0;
+  pointer-events: none;
+  /* the lockup sits on night ground in both themes */
+  --theme-brand-mark-ink: var(--color-dark-ink);
+  --theme-brand-mark-bolt: var(--color-brand-gold);
+}
+
+.tagline {
+  margin: 0;
+  color: #d9d3c2;
+  font: 500 clamp(1rem, 1.6vw, 1.375rem)/1.3 var(--type-body-font-family);
+  letter-spacing: 0.01em;
+}
+
+/* ---- skip ---- */
+
+.skip {
+  position: absolute;
+  top: calc(env(safe-area-inset-top, 0px) + 16px);
+  right: 16px;
+  height: 36px;
+  padding: 0 14px;
+  border: 1px solid rgba(240, 238, 235, 0.45);
+  border-radius: var(--rounded-sm);
+  background: rgba(18, 17, 16, 0.72);
+  color: #f0eeeb;
+  font: 500 var(--type-label-font-size) var(--type-label-font-family);
+  cursor: pointer;
+  transition: background-color var(--motion-duration) var(--motion-ease);
+}
+
+.skip:hover {
+  background: rgba(18, 17, 16, 0.92);
+}
+
+.skip:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reel {
+    display: none;
+  }
+}
