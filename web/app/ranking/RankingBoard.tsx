@@ -372,7 +372,6 @@ export function RankingBoard({
   // city or ZIP in this county's geo rollup also drives the same
   // city/ZIP drilldown the selects below use, so typing "78731" narrows
   // the whole board, not just the visible page.
-  const [searchQuery, setSearchQuery] = useState("");
 
   // Keyboard: Up/Down moves the highlighted row (scoped to the rail
   // list, not window), Enter expands it.
@@ -769,41 +768,10 @@ export function RankingBoard({
   const rangeStart = pageIndex * DEFAULT_PAGE_SIZE + 1;
   const predictedRangeStart = predictedPageIndex * DEFAULT_PAGE_SIZE + 1;
 
-  // Search: filters the currently loaded page's real rows by address/ZIP
-  // (client-side, on data already fetched -- never a fabricated match).
-  // A query landing exactly on a city or ZIP this county's geo rollup
-  // already knows about also drives the real city/ZIP drilldown, so
-  // typing "78731" narrows the whole board (a new fetch), not just the
-  // visible page.
-  const searchNormalized = searchQuery.trim().toLowerCase();
-  function matchesSearch(situsNum: string | null, situsStreet: string | null, situsCity: string | null, situsZip: string | null): boolean {
-    if (!searchNormalized) return true;
-    const haystack = [situsNum, situsStreet, situsCity, situsZip].filter(Boolean).join(" ").toLowerCase();
-    return haystack.includes(searchNormalized);
-  }
-  const displayedPredictedRows = predictedRows.filter((r) => matchesSearch(r.situsNum, r.situsStreet, r.situsCity, r.situsZip));
-  const displayedRows = rows.filter((r) => matchesSearch(r.situsNum, r.situsStreet, r.situsCity, r.situsZip));
-
-  const isFirstSearchRun = useRef(true);
-  useEffect(() => {
-    if (isFirstSearchRun.current) {
-      isFirstSearchRun.current = false;
-      return;
-    }
-    const debounceTimer = setTimeout(() => {
-      const q = searchQuery.trim();
-      if (!q) return;
-      const zipMatch = geoRollup.find((r) => r.situsZip === q);
-      if (zipMatch) {
-        handleSelectZip(q);
-        return;
-      }
-      const cityMatch = cityBuckets.find((b) => b.key.toLowerCase() === q.toLowerCase());
-      if (cityMatch) handleSelectCity(cityMatch.key);
-    }, 400);
-    return () => clearTimeout(debounceTimer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchQuery]);
+  // The rail has no search box: City, ZIP and Neighborhood live in the
+  // Filters popover, and the list always shows the filtered ranking as-is.
+  const displayedPredictedRows = predictedRows;
+  const displayedRows = rows;
 
   // Filters count -- the two toggles are always "set" one way or the
   // other (mock: "Filters 2" with both toggles showing as chips), plus
@@ -912,14 +880,6 @@ export function RankingBoard({
           </div>
 
           <div className="ranking-rail__controls">
-            <input
-              type="search"
-              className="ranking-rail__search"
-              placeholder="Find address or ZIP"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              aria-label="Find address or ZIP"
-            />
             <div className="popover-anchor">
               <button
                 type="button"
