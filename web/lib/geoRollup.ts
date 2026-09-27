@@ -75,8 +75,8 @@ export function bucketBy(rows: GeoRollupRow[], keyOf: (row: GeoRollupRow) => str
   }));
   buckets.sort((a, b) => {
     if (b.homeCount !== a.homeCount) return b.homeCount - a.homeCount;
-    if (a.key === "") return 1;
-    if (b.key === "") return -1;
+    if (!a.key) return 1;  // null block group (no neighborhood) sorts last; was === "" and crashed on null
+    if (!b.key) return -1;
     return a.key.localeCompare(b.key);
   });
   return buckets;
