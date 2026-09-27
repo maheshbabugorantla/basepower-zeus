@@ -11,8 +11,9 @@ import { MissingState } from "../../components/ui/MissingState";
 import type { SignalKey, PredictedHomeRow } from "../api/top-homes/route";
 import { PredictedHomesTable } from "./PredictedHomesTable";
 import { onIntroCue } from "../../lib/introBus";
-import { CAD_SHORT, homeMetaLine, streetLine } from "../../lib/homeRowFormat";
+import { CAD_SHORT, homeMetaLine, streetLine, titleCaseAddress } from "../../lib/homeRowFormat";
 import { bucketBy, filterRows, countyTotals, type GeoRollupRow } from "../../lib/geoRollup";
+import { TypeaheadSelect } from "../../components/ui/TypeaheadSelect";
 import { decileRangeForTier, tierMeta, tierForDecile, PRIORITY_TIER_ORDER, type PriorityTierKey } from "../../lib/priorityTier";
 
 // M4-W2: predicted (api.home_propensity.p_install_12m) is the ranking
@@ -170,18 +171,6 @@ async function fetchPage(params: {
 // the city/ZIP filter's real states (null = "All", "" = the no-value
 // bucket, anything else = an exact value) need distinct sentinel strings
 // that can never collide with a real city name or ZIP.
-const ALL_VALUE = "__all__";
-const NULL_BUCKET_VALUE = "__none__";
-
-function toSelectValue(key: string): string {
-  return key === "" ? NULL_BUCKET_VALUE : key;
-}
-
-function fromSelectValue(value: string): string | null {
-  if (value === ALL_VALUE) return null;
-  if (value === NULL_BUCKET_VALUE) return "";
-  return value;
-}
 
 function blockGroupLabel(geoid: string): string {
   if (!/^\d{12}$/.test(geoid)) return `Block group ${geoid}`;
@@ -894,7 +883,7 @@ export function RankingBoard({
                 Filters <span className="count-badge">{activeFilterCount}</span>
               </button>
               {filtersOpen ? (
-                <div className="popover-panel" role="dialog" aria-label="Filters">
+                <div className="popover-panel popover-panel--start" role="dialog" aria-label="Filters">
                   <label style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", fontSize: "var(--type-body-font-size)" }}>
                     <input
                       type="checkbox"
@@ -925,51 +914,42 @@ export function RankingBoard({
                     </select>
                   </label>
                   <div data-testid="geo-drilldown" style={{ display: "flex", flexDirection: "column", gap: "var(--space-2)", marginTop: "var(--space-3)" }}>
-                    <label style={{ display: "flex", flexDirection: "column", gap: "2px", fontSize: "var(--type-label-font-size)" }}>
-                      City
-                      <select
-                        data-testid="drilldown-city"
-                        value={selectedCity ?? ALL_VALUE}
-                        onChange={(e) => handleSelectCity(fromSelectValue(e.target.value))}
-                      >
-                        <option value={ALL_VALUE}>All ({geoRollup.reduce((s, r) => s + r.homeCount, 0).toLocaleString()} homes)</option>
-                        {cityBuckets.map((b) => (
-                          <option key={b.key || NULL_BUCKET_VALUE} value={toSelectValue(b.key)}>
-                            {(b.key || "No city on file")} ({b.homeCount.toLocaleString()} homes)
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <label style={{ display: "flex", flexDirection: "column", gap: "2px", fontSize: "var(--type-label-font-size)" }}>
-                      ZIP
-                      <select
-                        data-testid="drilldown-zip"
-                        value={selectedZip ?? ALL_VALUE}
-                        onChange={(e) => handleSelectZip(fromSelectValue(e.target.value))}
-                      >
-                        <option value={ALL_VALUE}>All ({rowsForCity.reduce((s, r) => s + r.homeCount, 0).toLocaleString()} homes)</option>
-                        {zipBuckets.map((b) => (
-                          <option key={b.key || NULL_BUCKET_VALUE} value={toSelectValue(b.key)}>
-                            {(b.key || "No ZIP on file")} ({b.homeCount.toLocaleString()} homes)
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <label style={{ display: "flex", flexDirection: "column", gap: "2px", fontSize: "var(--type-label-font-size)" }}>
-                      Neighborhood
-                      <select
-                        data-testid="drilldown-blockgroup"
-                        value={selectedGeoid ?? ALL_VALUE}
-                        onChange={(e) => handleSelectGeoid(fromSelectValue(e.target.value))}
-                      >
-                        <option value={ALL_VALUE}>All ({rowsForZip.reduce((s, r) => s + r.homeCount, 0).toLocaleString()} homes)</option>
-                        {bgBuckets.map((b) => (
-                          <option key={b.key} value={b.key}>
-                            {blockGroupLabel(b.key)} ({b.homeCount.toLocaleString()} homes)
-                          </option>
-                        ))}
-                      </select>
-                    </label>
+                    <TypeaheadSelect
+                      label="City"
+                      testId="drilldown-city"
+                      value={selectedCity}
+                      allLabel={`All (${geoRollup.reduce((sum, r) => sum + r.homeCount, 0).toLocaleString()} homes)`}
+                      options={cityBuckets.map((b) => ({
+                        key: b.key,
+                        label: b.key ? titleCaseAddress(b.key) : "No city on file",
+                        meta: `${b.homeCount.toLocaleString()} homes`,
+                      }))}
+                      onChange={(key) => handleSelectCity(key)}
+                    />
+                    <TypeaheadSelect
+                      label="ZIP"
+                      testId="drilldown-zip"
+                      value={selectedZip}
+                      allLabel={`All (${rowsForCity.reduce((sum, r) => sum + r.homeCount, 0).toLocaleString()} homes)`}
+                      options={zipBuckets.map((b) => ({
+                        key: b.key,
+                        label: b.key || "No ZIP on file",
+                        meta: `${b.homeCount.toLocaleString()} homes`,
+                      }))}
+                      onChange={(key) => handleSelectZip(key)}
+                    />
+                    <TypeaheadSelect
+                      label="Neighborhood"
+                      testId="drilldown-blockgroup"
+                      value={selectedGeoid}
+                      allLabel={`All (${rowsForZip.reduce((sum, r) => sum + r.homeCount, 0).toLocaleString()} homes)`}
+                      options={bgBuckets.map((b) => ({
+                        key: b.key,
+                        label: blockGroupLabel(b.key),
+                        meta: `${b.homeCount.toLocaleString()} homes`,
+                      }))}
+                      onChange={(key) => setSelectedGeoid(key)}
+                    />
                   </div>
                   {selectedCity !== null || selectedZip !== null || selectedGeoid !== null ? (
                     <div

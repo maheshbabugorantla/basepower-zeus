@@ -2384,3 +2384,101 @@ button:focus-visible,
   flex-basis: 100%;
   font-style: italic;
 }
+
+/* Type-ahead select (components/ui/TypeaheadSelect): looks like the other
+ * form controls at rest, narrows its list as you type. The list is inline
+ * so it scrolls inside the Filters popover rather than floating over it. */
+.typeahead {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: var(--type-label-font-size);
+}
+
+.typeahead__label {
+  color: var(--theme-ink);
+}
+
+.typeahead__input {
+  height: 32px;
+  padding: 0 28px 0 var(--space-2);
+  border: 1px solid var(--color-control-border);
+  border-radius: var(--rounded-sm);
+  background: var(--theme-surface)
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M2.5 4.5 6 8l3.5-3.5' fill='none' stroke='%2354524f' stroke-width='1.5'/%3E%3C/svg%3E")
+    no-repeat right 10px center;
+  color: var(--theme-ink);
+  font: inherit;
+  font-size: var(--type-label-font-size);
+  text-overflow: ellipsis;
+}
+
+.typeahead__input:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 1px;
+}
+
+.typeahead__list {
+  max-height: 200px;
+  overflow-y: auto;
+  border: 1px solid var(--theme-divider);
+  border-radius: var(--rounded-sm);
+  background-color: var(--theme-surface);
+}
+
+.typeahead__option {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--space-3);
+  padding: 5px var(--space-2);
+  cursor: pointer;
+}
+
+.typeahead__option--active {
+  background-color: var(--theme-selected-fill);
+}
+
+.typeahead__option--selected .typeahead__option-label {
+  font-weight: 600;
+}
+
+.typeahead__option-label {
+  color: var(--theme-ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.typeahead__option-meta {
+  flex: none;
+  color: var(--theme-ink-muted);
+  font-size: 12px;
+}
+
+.typeahead__status {
+  padding: 5px var(--space-2);
+  color: var(--theme-ink-muted);
+  font-size: 12px;
+}
+
+/* Filters is now the first control in the rail row, so its panel opens from
+ * the button's left edge and stays inside the rail instead of spilling over
+ * the map (where the map canvas covers it). */
+.popover-panel.popover-panel--start {
+  left: 0;
+  right: auto;
+}
+
+/* The one native select left in the Filters popover (Priority tier) matches
+ * the type-ahead fields beside it. */
+.popover-panel select {
+  height: 32px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--color-control-border);
+  border-radius: var(--rounded-sm);
+  background-color: var(--theme-surface);
+  color: var(--theme-ink);
+  font: inherit;
+  font-size: var(--type-label-font-size);
+}
