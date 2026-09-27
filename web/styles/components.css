@@ -376,32 +376,617 @@
 /* Ranking board layout (Main.dc.html: rail + map + table, one screen)    */
 /* ---------------------------------------------------------------------- */
 
+/* Redesign (Mock A, 2026-09-27): the ranking page's own <main> content
+ * area is exactly the workspace -- no page scroll at >=1280px. `main`
+ * (app/layout.tsx) keeps its normal space-6 padding on every OTHER
+ * route; this page alone pulls it back out with negative margins so the
+ * board can claim the full space-6-trimmed viewport, then re-applies the
+ * same padding as its own so nothing touches the window edge. */
+.ranking-page {
+  /* 65px measured top-bar height (padding + content) + the space-6
+   * padding this page pulls back out below (48px). Adjusted from the
+   * measured innerHeight/scrollHeight during redesign QA. */
+  height: calc(100dvh - 65px - (var(--space-6) * 2));
+  margin: calc(var(--space-6) * -1);
+  padding: var(--space-6);
+  min-height: 560px;
+}
+
 .ranking-board {
   display: grid;
-  /* Map-as-dominant-surface pivot, rebalanced once the rail lost
-     QualityPanel (now on /sources): map ~60-65% of the map+list
-     workspace at desktop, list ~35-40% with a hard 440px floor so a
-     row's address/tier/reasons never get squeezed again. Rail stays a
-     narrow, secondary column outside that split (Adjust priorities +
-     the two toggles only, now). */
-  grid-template-columns: minmax(190px, 220px) minmax(0, 1.5fr) minmax(440px, 1fr);
-  gap: var(--space-6);
+  /* Redesign (Mock A): two columns -- map everywhere else, a fixed
+     470px rail on the right (the mock's own number). The rail owns its
+     own internal scroll; this grid itself never scrolls at >=1280px. */
+  grid-template-columns: minmax(0, 1fr) 470px;
+  gap: var(--space-4);
   align-items: stretch;
-  height: calc(100vh - 160px);
-  min-height: 680px;
+  height: 100%;
+  min-height: 560px;
 }
 
 .ranking-board__rail {
   display: flex;
   flex-direction: column;
-  gap: var(--space-6);
-  overflow-y: auto;
   min-height: 0;
+  background-color: var(--theme-surface);
+  border-radius: var(--component-panel-rounded);
+  overflow: hidden;
 }
 
 .ranking-board__map-panel {
   height: 100%;
+  min-height: 420px;
+}
+
+.ranking-rail__header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-4) var(--space-4) var(--space-3);
+  border-bottom: 1px solid var(--theme-divider);
+}
+
+.ranking-rail__question {
+  font-family: var(--type-heading-font-family);
+  font-size: var(--type-heading-font-size);
+  font-weight: var(--type-heading-font-weight);
+  margin: 0;
+  text-wrap: balance;
+}
+
+.ranking-rail__status {
+  font-size: var(--type-label-font-size);
+  color: var(--theme-ink-muted);
+  font-family: var(--type-data-font-family);
+}
+
+.ranking-rail__controls {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.ranking-rail__search {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 36px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--color-control-border);
+  border-radius: var(--rounded-sm);
+  background-color: var(--theme-surface);
+  color: var(--theme-ink);
+  font-family: var(--type-body-font-family);
+  font-size: var(--type-label-font-size);
+}
+
+.ranking-rail__listhead {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  font-size: var(--type-label-font-size);
+  color: var(--theme-ink-muted);
+  background-color: var(--theme-canvas);
+  border-bottom: 1px solid var(--theme-divider);
+  flex-wrap: wrap;
+}
+
+.ranking-rail__listhead b {
+  color: var(--theme-ink);
+  font-size: var(--type-body-font-size);
+}
+
+.ranking-rail__list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.ranking-rail__list:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: -2px;
+}
+
+/* Segmented mode control ("Most likely to add backup" / "Team priorities"). */
+.modes {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  border: 1px solid var(--theme-divider);
+  border-radius: var(--rounded-sm);
+  overflow: hidden;
+  background-color: var(--theme-canvas);
+}
+
+.modes__option {
+  padding: var(--space-2);
+  text-align: center;
+  font-family: var(--type-label-font-family);
+  font-size: var(--type-label-font-size);
+  font-weight: 500;
+  color: var(--theme-ink-muted);
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.modes__option--on {
+  background-color: var(--color-brand-strong);
+  color: #fff;
+  font-weight: 600;
+}
+
+.chips {
+  display: flex;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  font-size: 11px;
+  color: var(--theme-ink-muted);
+}
+
+.chips span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.chips__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: var(--color-brand-strong);
+  display: inline-block;
+}
+
+.chips__dot--off {
+  background-color: var(--theme-divider);
+}
+
+/* Filters / Adjust priorities popovers -- DESIGN.md "no modal where an
+ * inline popover/disclosure would do", elevation z-index dropdown. */
+.popover-anchor {
+  position: relative;
+  display: inline-flex;
+}
+
+.popover-panel {
+  /* Redesign QA fix: the rail is the rightmost column, so a popover
+   * anchored left:0 off a button near the rail's right edge (e.g.
+   * "Adjust priorities") overflowed past the window edge. Anchoring
+   * right:0 instead keeps every popover inside the rail's own width. */
+  position: absolute;
+  top: calc(100% + var(--space-2));
+  right: 0;
+  z-index: 20;
+  width: 320px;
+  max-width: calc(100vw - 2 * var(--space-4));
+  max-height: 60vh;
+  overflow-y: auto;
+  background-color: var(--theme-surface);
+  border-radius: var(--component-panel-rounded);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.16);
+  padding: var(--space-4);
+}
+
+.popover-panel--wide {
+  width: 380px;
+}
+
+.count-badge {
+  background-color: var(--color-brand-subtle);
+  color: var(--theme-brand-accent-text);
+  border-radius: var(--rounded-sm);
+  padding: 0 6px;
+  font-family: var(--type-data-font-family);
+  font-size: 11px;
+  margin-left: 6px;
+}
+
+/* In-row expansion ("the case for a knock" -- replaces the old
+ * below-the-board "Why this home" panel, critique P0). */
+.row-expand {
+  margin-top: var(--space-2);
+  padding-top: var(--space-2);
+  border-top: 1px dashed var(--theme-divider);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  font-size: var(--type-body-font-size);
+}
+
+.row-expand__actions {
+  display: flex;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  font-size: var(--type-label-font-size);
+  font-weight: 600;
+}
+
+.row-expand__link {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--theme-brand-accent-text);
+  font-weight: 600;
+  font-size: inherit;
+  cursor: pointer;
+}
+
+.predicted-homes-table__row--expanded {
+  background-color: var(--color-brand-subtle);
+}
+
+.case-for-knock {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.case-for-knock__sentence {
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.4;
+  max-width: 62ch;
+}
+
+.case-for-knock__sentence--compact {
+  font-size: var(--type-body-font-size);
+  max-width: 58ch;
+}
+
+.case-sentence__figure {
+  font-weight: 600;
+  background-color: var(--color-brand-subtle);
+  border-radius: 2px;
+  padding: 0 3px;
+  text-decoration: underline dotted var(--color-brand-strong);
+  text-underline-offset: 3px;
+}
+
+.case-for-knock__sources {
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--theme-ink-muted);
+}
+
+.case-meters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: var(--space-2) var(--space-3);
+  margin-top: var(--space-2);
+}
+
+.case-meter__label {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--theme-ink-muted);
+}
+
+.case-meter__track {
+  height: 6px;
+  background-color: var(--theme-divider);
+  border-radius: 2px;
+  margin: 4px 0;
+  overflow: hidden;
+}
+
+.case-meter__fill {
+  display: block;
+  height: 100%;
+  background-color: var(--color-brand-strong);
+  border-radius: 2px;
+}
+
+.case-meter__value {
+  font-size: 12px;
+}
+
+.case-meter__unit {
+  color: var(--theme-ink-muted);
+}
+
+.case-meter__track--hatch {
+  background-image: repeating-linear-gradient(45deg, var(--color-not-loaded-bg) 0 3px, var(--color-surface-sunken) 3px 6px);
+}
+
+.case-meter--na .case-meter__label span:last-child {
+  color: var(--theme-ink-muted);
+}
+
+/* ---------------------------------------------------------------------- */
+/* Home record tab shell (Mock B)                                         */
+/* ---------------------------------------------------------------------- */
+
+.home-tabs {
+  display: flex;
+  gap: 2px;
+  border-bottom: 1px solid var(--theme-divider);
+  flex-wrap: wrap;
+}
+
+.home-tabs__tab {
+  padding: var(--space-2) var(--space-3);
+  font-family: var(--type-label-font-family);
+  font-size: var(--type-label-font-size);
+  font-weight: 500;
+  color: var(--theme-ink-muted);
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  cursor: pointer;
+}
+
+.home-tabs__tab--on {
+  color: var(--theme-brand-accent-text);
+  border-color: var(--color-brand-strong);
+  font-weight: 600;
+}
+
+.home-tabs__tab small {
+  font-family: var(--type-data-font-family);
+  font-size: 11px;
+  margin-left: 4px;
+  color: var(--color-ink-disabled);
+}
+
+.home-summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: var(--space-4);
+  align-items: start;
+  padding-top: var(--space-2);
+}
+
+.home-summary h2 {
+  margin-bottom: var(--space-1) !important;
+}
+
+@media (max-width: 899px) {
+  .home-summary {
+    grid-template-columns: 1fr;
+  }
+}
+
+.home-summary__facts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-2) var(--space-5);
+  border-top: 1px solid var(--theme-divider);
+  padding-top: var(--space-2);
+  margin-top: var(--space-2);
+  font-size: 13px;
+}
+
+.home-summary__facts small {
+  display: block;
+  font-size: 11.5px;
+  color: var(--theme-ink-muted);
+}
+
+.priority-card {
+  background-color: var(--color-brand-strong);
+  color: #fff;
+  border-radius: var(--component-panel-rounded);
+  padding: var(--space-3) var(--space-4);
+}
+
+.priority-card__kicker {
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: var(--color-brand-subtle);
+}
+
+.priority-card__big {
+  font-size: 30px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+  margin-top: 4px;
+}
+
+.priority-card__sub {
+  margin-top: var(--space-2);
+  font-size: 13.5px;
+  line-height: 1.45;
+  color: #e8f3d8;
+}
+
+.priority-card__link {
+  display: inline-block;
+  margin-top: var(--space-3);
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--color-brand-subtle);
+}
+
+.knock-checklist {
+  border: 1px solid var(--theme-divider);
+  border-radius: var(--component-panel-rounded);
+  padding: var(--space-3) var(--space-4);
+}
+
+.knock-checklist h3 {
+  font-size: 14px;
+  margin: 0 0 var(--space-2) 0;
+}
+
+.knock-checklist__item {
+  display: grid;
+  grid-template-columns: 22px 1fr;
+  gap: var(--space-2);
+  padding: var(--space-1) 0;
+  border-top: 1px solid var(--theme-divider);
+  font-size: 12.5px;
+  line-height: 1.35;
+}
+
+.knock-checklist__item:first-child {
+  border-top: none;
+}
+
+.knock-checklist__icon {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 1px solid var(--color-control-border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  color: var(--theme-ink-muted);
+}
+
+.knock-checklist__icon--ok {
+  background-color: var(--color-brand-subtle);
+  border-color: var(--color-brand-subtle);
+  color: var(--color-brand-strong);
+  font-weight: 600;
+}
+
+.knock-checklist__item small {
+  display: block;
+  color: var(--theme-ink-muted);
+  font-size: 12px;
+}
+
+.permit-preview-row {
+  display: grid;
+  grid-template-columns: 120px 90px 1fr 90px;
+  gap: var(--space-2) var(--space-4);
+  font-size: 12.5px;
+  padding: var(--space-1) 0;
+}
+
+.permit-preview-row div:nth-child(3) {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Storm record fixed grid (Mock C)                                        */
+/* ---------------------------------------------------------------------- */
+
+.storm-grid {
+  display: flex;
+  flex-direction: column;
+  font-variant-numeric: tabular-nums;
+}
+
+.storm-grid__row {
+  display: grid;
+  grid-template-columns: 90px 1fr 1fr 1fr;
+  gap: var(--space-2) var(--space-3);
+  padding: var(--space-2) 0;
+  border-top: 1px solid var(--theme-divider);
+  font-size: 12.5px;
+  align-items: baseline;
+}
+
+.storm-grid__row--head {
+  border-top: none;
+  color: var(--theme-ink-muted);
+  font-size: 11px;
+  padding-bottom: var(--space-1);
+}
+
+.storm-grid__county {
+  font-weight: 600;
+}
+
+.storm-grid__muted {
+  color: var(--theme-ink-muted);
+}
+
+/* ---------------------------------------------------------------------- */
+/* Ranking readiness by county (Mock C)                                    */
+/* ---------------------------------------------------------------------- */
+
+.readiness-grid {
+  display: flex;
+  flex-direction: column;
+  font-variant-numeric: tabular-nums;
+  font-size: 12.5px;
+}
+
+.readiness-grid__row {
+  display: grid;
+  grid-template-columns: 90px repeat(5, 1fr);
+  gap: var(--space-2);
+  padding: var(--space-2) 0;
+  border-top: 1px solid var(--theme-divider);
+  align-items: baseline;
+}
+
+.readiness-grid__row--head {
+  border-top: none;
+  color: var(--theme-ink-muted);
+  font-size: 11px;
+  padding-bottom: var(--space-1);
+}
+
+.readiness-grid__county {
+  font-weight: 600;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Overview 2x2 grid (Mock C)                                              */
+/* ---------------------------------------------------------------------- */
+
+.overview-page {
+  height: calc(100dvh - 65px - (var(--space-6) * 2));
+  margin: calc(var(--space-6) * -1);
+  padding: var(--space-6);
   min-height: 640px;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: var(--space-3);
+}
+
+.overview-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr 1fr;
+  gap: var(--space-4);
+  min-height: 0;
+}
+
+.overview-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.overview-panel__go {
+  margin-top: auto;
+  padding-top: var(--space-2);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.overview-prov {
+  display: flex;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--theme-ink-muted);
+  border-top: 1px solid var(--theme-divider);
+  padding-top: var(--space-2);
+}
+
+@media (max-width: 1023px) {
+  .overview-page {
+    height: auto;
+    margin: 0;
+    padding: 0;
+  }
+
+  .overview-grid {
+    grid-template-columns: 1fr;
+    grid-template-rows: none;
+  }
 }
 
 /* City/ZIP/Neighborhood filters: one row, always -- a native <select>
@@ -416,14 +1001,17 @@
   text-overflow: ellipsis;
 }
 
-/* Three explicit breakpoints (layout review): desktop >=1280 (3-col,
- * map dominant per above); tablet 900-1279 (map full-width above the
- * list at a fixed 420px, rail stacks above both); phone <900 (map
- * full-width at 320px, list below). No horizontal overflow at any of
- * them -- 1fr columns everywhere below 1280, and the map panel's height
- * is an explicit px value at these sizes rather than a %-of-parent
- * (which breaks once the parent's own height goes to auto). */
+/* Two explicit breakpoints (layout review): desktop >=1280 (2-col, map
+ * dominant per above); below 1280 (map full-width at a fixed height
+ * above the scrolling rail, per the ticket -- no three-stack). No
+ * horizontal overflow at either of them. */
 @media (max-width: 1279px) {
+  .ranking-page {
+    height: auto;
+    margin: 0;
+    padding: 0;
+  }
+
   .ranking-board {
     grid-template-columns: 1fr;
     height: auto;
@@ -436,6 +1024,10 @@
   .ranking-board__map-panel {
     height: 420px;
     min-height: 420px;
+  }
+
+  .ranking-rail__list {
+    overflow-y: visible;
   }
 }
 

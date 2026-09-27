@@ -57,7 +57,9 @@ export interface CountyOutageContext {
 
 export interface OutageSummaryData {
   distributors: DistributorReliabilityRow[];
-  countyContext: CountyOutageContext | null;
+  /** Redesign (Mock C, 2026-09-27): Overview is territory-wide now -- one
+   * EAGLE-I county-context line per scored county, not just Travis. */
+  countyContext: CountyOutageContext[];
 }
 
 const NOT_AVAILABLE_REASON = "Not reported to EIA-861 (IEEE)";
@@ -121,11 +123,17 @@ function DistributorRow({ row }: { row: DistributorReliabilityRow }) {
   );
 }
 
-function CountyContextLine({ context }: { context: CountyOutageContext | null }) {
+function CountyContextLine({
+  context,
+  fallbackCountyName,
+}: {
+  context: CountyOutageContext | null;
+  fallbackCountyName: string;
+}) {
   if (context === null) {
     return (
       <p style={textStyle("var(--theme-ink-muted)")}>
-        County context (EAGLE-I):{" "}
+        County context (EAGLE-I), {fallbackCountyName}:{" "}
         <MissingState
           variant="not-loaded"
           reason="The EAGLE-I outage pipeline has not loaded a county row yet."
@@ -176,13 +184,54 @@ function CountyContextLine({ context }: { context: CountyOutageContext | null })
   );
 }
 
+/** Groups by county (each county's own utilities), sorted by SAIDI
+ * descending within the county -- a not-reported (null SAIDI) distributor
+ * always sorts last, never mixed into the ranked figures. This is what
+ * makes "Austin Energy/Bluebonnet/Oncor/Pedernales listed twice" (the
+ * critique's dedupe bug) impossible by construction: each row belongs to
+ * exactly one county group. */
+function groupAndSortByCounty(rows: DistributorReliabilityRow[]): Map<string, DistributorReliabilityRow[]> {
+  const byCounty = new Map<string, DistributorReliabilityRow[]>();
+  for (const row of rows) {
+    if (!byCounty.has(row.county)) byCounty.set(row.county, []);
+    byCounty.get(row.county)!.push(row);
+  }
+  for (const list of byCounty.values()) {
+    list.sort((a, b) => {
+      if (a.saidiInclMajor === null && b.saidiInclMajor === null) return 0;
+      if (a.saidiInclMajor === null) return 1;
+      if (b.saidiInclMajor === null) return -1;
+      return b.saidiInclMajor - a.saidiInclMajor;
+    });
+  }
+  return byCounty;
+}
+
 export function OutageSummary({ data }: { data: OutageSummaryData }) {
+  const grouped = groupAndSortByCounty(data.distributors);
+  const contextByCounty = new Map(data.countyContext.map((c) => [c.countyName, c]));
+
   return (
     <>
-      {data.distributors.map((row) => (
-        <DistributorRow key={row.baseName} row={row} />
+      {Array.from(grouped.entries()).map(([county, rows]) => (
+        <div key={county} style={{ marginBottom: "var(--space-3)" }}>
+          <p
+            style={{
+              margin: "0 0 var(--space-1) 0",
+              fontFamily: "var(--type-label-font-family)",
+              fontSize: "var(--type-label-font-size)",
+              fontWeight: 600,
+              color: "var(--theme-ink-muted)",
+            }}
+          >
+            {county} County
+          </p>
+          {rows.map((row) => (
+            <DistributorRow key={`${county}-${row.baseName}`} row={row} />
+          ))}
+          <CountyContextLine context={contextByCounty.get(county) ?? null} fallbackCountyName={county} />
+        </div>
       ))}
-      <CountyContextLine context={data.countyContext} />
     </>
   );
 }

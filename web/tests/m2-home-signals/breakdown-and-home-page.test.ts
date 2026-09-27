@@ -61,8 +61,13 @@ describe.skipIf(!process.env.POSTGRES_URL)("/home/[prop_id] — M2-P8 built year
 
       const { renderToStaticMarkup } = await import("react-dom/server");
       const html = renderToStaticMarkup(await HomeDetailPage({ params: Promise.resolve({ prop_id: propId }) }));
-
-      expect(html).toMatch(/Built \d{4}|Year built not loaded|Not loaded/);
+      // Redesign (Mock B, 2026-09-27): the build year moved from an
+      // inline "Built 2024" sentence into a fact tile (the year as the
+      // headline value, "Built" as its <small> label below) -- checked
+      // against the rendered TEXT (tags stripped), not a literal
+      // "Built 2024" substring, since the two now sit in separate nodes.
+      const text = html.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ");
+      expect(text).toMatch(/\bBuilt\b[\s\S]{0,40}\b\d{4}\b|\b\d{4}\b[\s\S]{0,40}\bBuilt\b|Year built not loaded|Not loaded/);
       // Never a raw snake_case reason/table/column name on screen.
       expect(html).not.toMatch(/\bcore\.mv_home_signals\b/);
       expect(html).not.toMatch(/no_permit_coverage(?!<)/); // raw code never shown untranslated

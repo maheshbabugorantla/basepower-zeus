@@ -1,0 +1,105 @@
+import { describe, expect, it } from "vitest";
+import {
+  buildCaseSentenceParts,
+  containsBannedVocabulary,
+  roundMinutesToHours,
+  roundRatePer1000ToPer100,
+  roundToWholePercent,
+  splitBoldMarkers,
+  type CaseSignalInput,
+} from "../../lib/caseSentence";
+
+// These three figures (87.08, 181.98, 83.0) are real values already
+// quoted in the app/critique (3901 Watersedge, 2026-09-27) -- not
+// invented for this test, per the real-data rule. No live DB call is
+// needed to check a pure rounding function against a number already on
+// record.
+
+describe("caseSentence rounding helpers", () => {
+  it("rounds a per-1,000-homes rate to a per-100 figure a rep can say out loud", () => {
+    expect(roundRatePer1000ToPer100(87.08)).toBe(9);
+  });
+
+  it("rounds outage minutes to whole hours", () => {
+    expect(roundMinutesToHours(181.98)).toBe(3);
+  });
+
+  it("rounds an already-percentage-point value to a whole percent", () => {
+    expect(roundToWholePercent(83.0)).toBe(83);
+  });
+});
+
+describe("splitBoldMarkers", () => {
+  it("splits **bold** markers out of a sentence", () => {
+    const parts = splitBoldMarkers("About **9 in 100 nearby homes** added a battery.");
+    expect(parts).toEqual([
+      { bold: false, text: "About " },
+      { bold: true, text: "9 in 100 nearby homes" },
+      { bold: false, text: " added a battery." },
+    ]);
+  });
+});
+
+function signal(overrides: Partial<CaseSignalInput> & { key: string; rawValue: number }): CaseSignalInput {
+  return {
+    label: overrides.key,
+    rawUnit: "",
+    term: 1,
+    anchorValue: null,
+    anchorBasis: null,
+    available: true,
+    ...overrides,
+  };
+}
+
+describe("buildCaseSentenceParts", () => {
+  const signals: CaseSignalInput[] = [
+    signal({ key: "backup_intent", rawValue: 87.08, term: 1.0 }),
+    signal({ key: "installability", rawValue: 2024, term: 1.0 }),
+    signal({ key: "outage", rawValue: 181.98, term: 0.25 }),
+    signal({ key: "income_100k", rawValue: 83.0, term: 1.0 }),
+    // Not templated -- must never appear as a sentence fragment.
+    signal({ key: "flood", rawValue: 0, term: 0.9 }),
+  ];
+
+  it("orders the strongest terms first and never invents a fragment for an untemplated signal", () => {
+    const parts = buildCaseSentenceParts(signals, 4);
+    expect(parts.map((p) => p.key)).not.toContain("flood");
+    expect(parts.length).toBeGreaterThan(0);
+    // Every term-1.0 signal outranks the term-0.25 outage signal.
+    const outageIndex = parts.findIndex((p) => p.key === "outage");
+    expect(outageIndex).toBe(parts.length - 1);
+  });
+
+  it("never uses banned Census/model vocabulary in the rendered sentence text", () => {
+    const parts = buildCaseSentenceParts(signals, 4);
+    for (const part of parts) {
+      expect(containsBannedVocabulary(part.text), `banned vocabulary in: ${part.text}`).toBe(false);
+    }
+  });
+
+  it("renders the real quoted figures rounded to rep-facing units", () => {
+    const parts = buildCaseSentenceParts(signals, 4);
+    const joined = parts.map((p) => p.text).join(" ");
+    expect(joined).toContain("9 in 100 nearby homes");
+    expect(joined).toContain("built in 2024");
+    expect(joined).toContain("83%");
+    expect(joined).toContain("3 hours");
+  });
+
+  it("skips a signal whose template legitimately has nothing to say (home_permits with no permit on file)", () => {
+    const parts = buildCaseSentenceParts(
+      [signal({ key: "home_permits", rawValue: 0, term: 0.5 })],
+      4
+    );
+    expect(parts).toEqual([]);
+  });
+
+  it("leaves a missing (unavailable) signal out of the prose entirely", () => {
+    const parts = buildCaseSentenceParts(
+      [signal({ key: "outage", rawValue: 181.98, term: 1, available: false })],
+      4
+    );
+    expect(parts).toEqual([]);
+  });
+});

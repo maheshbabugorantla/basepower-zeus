@@ -16,10 +16,18 @@ import { REASON_META } from "./TopHomesTable";
 //
 // M2-P8: 10 signals now (owner_65, home_permits, installability,
 // home_value joined outage/backup_intent/age65/electric_heat/empower/
-// flood), grouped under 3 plain headings per the ticket, plus an
-// "Evidence-based defaults" button (api.default_weights, a 2026-09-26
-// time-split study on real Austin permits — see
+// flood), plus an "Evidence-based defaults" button (api.default_weights,
+// a 2026-09-26 time-split study on real Austin permits — see
 // checks/M2-P8-ranking-evidence.md) alongside "Reset to equal".
+//
+// Redesign (2026-09-27, critique P2 "13 flat sliders with no grouping"):
+// regrouped from 3 plain headings into PRODUCT.md's own four signal
+// families (outage exposure / grid value / installability / household
+// fit) — the exact same signal->family map REASON_META already uses for
+// every chip and meter dot (components/TopHomesTable.tsx), so a slider's
+// group and its dot color always agree with the rest of the app. Lives
+// behind an "Adjust priorities" disclosure (RankingBoard.tsx), not on
+// the default path.
 
 export const SIGNAL_LABELS: Record<SignalKey, string> = {
   outage: "Outage exposure",
@@ -46,11 +54,17 @@ export interface SliderGroup {
   keys: SignalKey[];
 }
 
-// Ticket-specified grouping: "Outage & grid", "This home", "Neighborhood".
+// PRODUCT.md's four signal families, in the DESIGN.md chip order
+// (outage / grid / installability / household) -- REASON_META (below,
+// imported from TopHomesTable.tsx) is the single source of truth for
+// which family each key belongs to; this array just walks that same map
+// grouped by family; a signal absent from REASON_META would be a bug
+// there, not something to special-case here.
 export const SLIDER_GROUPS: SliderGroup[] = [
-  { heading: "Outage & grid", keys: ["outage"] },
-  { heading: "This home", keys: ["home_value", "home_permits", "owner_65", "installability", "flood", "permit_risk"] },
-  { heading: "Neighborhood", keys: ["backup_intent", "age65", "electric_heat", "empower", "income_100k", "age_35_64"] },
+  { heading: "Outage exposure", keys: ["outage"] },
+  { heading: "Grid value", keys: ["home_value"] },
+  { heading: "Installability", keys: ["backup_intent", "home_permits", "installability", "flood", "permit_risk"] },
+  { heading: "Household fit", keys: ["empower", "age65", "electric_heat", "owner_65", "income_100k", "age_35_64"] },
 ];
 
 export const SIGNAL_ORDER: SignalKey[] = SLIDER_GROUPS.flatMap((g) => g.keys);

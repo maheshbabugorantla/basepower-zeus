@@ -29,6 +29,20 @@ import { ZeusLogo } from "./brand/ZeusLogo";
 function CountySwitcherInner({ counties }: { counties: CountyOption[] }) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
+
+  // Redesign (user decision, 2026-09-27): the county switcher only makes
+  // sense on a page that actually filters or scopes by county.
+  //   - "/" (Overview) is territory-wide now (every scored county at
+  //     once, Mock C) -- it reads no ?county= at all, so the switcher
+  //     has nothing to switch.
+  //   - "/sources" scopes nothing by county either (its QualityPanel
+  //     uses a fixed default county for its own unrelated reasons, and
+  //     its export link/manifest carry no ?county= param) -- hidden here
+  //     too, so it never implies a control it doesn't back.
+  //   - "/ranking" and "/home/[prop_id]" keep it ("/home" as "Go to
+  //     county", per the existing T4 fix below).
+  if (pathname === "/" || pathname?.startsWith("/sources")) return null;
+
   // T4 fix: /home/[prop_id] has no ?county= concept at all -- that page
   // is keyed by prop_id, and a home's county comes from ITS OWN record,
   // never the search params. The switcher used to rewrite ?county= on

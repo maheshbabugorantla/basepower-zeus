@@ -2,19 +2,24 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { WeightSliders, equalWeights, SIGNAL_LABELS } from "../../components/WeightSliders";
 
-// M2-P8: WeightSliders now renders 10 sliders under 3 plain headings,
-// plus "Evidence-based defaults" alongside "Reset to equal". No DB
-// needed — this only exercises the component's own markup.
+// M2-P8: WeightSliders now renders 10 sliders, plus "Evidence-based
+// defaults" alongside "Reset to equal". No DB needed — this only
+// exercises the component's own markup.
+//
+// Redesign (2026-09-27): regrouped from 3 plain headings into PRODUCT.md's
+// four signal families (outage exposure / grid value / installability /
+// household fit) — the same family each signal's chip/meter already uses.
 
-describe("WeightSliders (M2-P8)", () => {
+describe("WeightSliders (M2-P8, redesign grouping)", () => {
   const html = renderToStaticMarkup(
     <WeightSliders weights={equalWeights()} onChange={() => {}} onReset={() => {}} defaultWeights={null} />
   );
 
-  it("renders the 3 group headings from the ticket", () => {
-    expect(html).toContain("Outage &amp; grid");
-    expect(html).toContain("This home");
-    expect(html).toContain("Neighborhood");
+  it("renders the 4 signal-family headings", () => {
+    expect(html).toContain("Outage exposure");
+    expect(html).toContain("Grid value");
+    expect(html).toContain("Installability");
+    expect(html).toContain("Household fit");
   });
 
   it("renders a slider for all 13 signals with their plain-language labels", () => {
