@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { query } from "../lib/db";
 import { Panel } from "../components/ui/Panel";
 import { MissingState } from "../components/ui/MissingState";
@@ -10,7 +11,6 @@ import {
 } from "../components/OutageSummary";
 import { StatRow, StatList } from "../components/ui/StatRow";
 import { PermitTimelinePanel, type PermitQuarterRow } from "../components/PermitTimelinePanel";
-import { PredictionProof, type ModelCardData } from "../components/PredictionProof";
 import { getCountiesWithScoredHomes } from "../lib/counties.server";
 import { COUNTY_CANDIDATES, resolveCounty } from "../lib/counties";
 import { StormRecordPanel, type StormRecordCounty } from "../components/StormRecordPanel";
@@ -460,57 +460,6 @@ async function getPermitTimelineByQuarter(): Promise<PermitQuarterRow[]> {
   }
 }
 
-interface ModelCardDbRow {
-  model_version: string;
-  algorithm: string;
-  auc_oot: string | number | null;
-  pr_auc_oot: string | number | null;
-  top_decile_lift_oot: string | number | null;
-  calibration: { decile: number; n: number; predicted_mean_p: number; observed_rate: number }[] | null;
-  n_test: number | null;
-  n_positive_test: number | null;
-  notes: string | null;
-}
-
-function toNum(value: string | number | null): number | null {
-  return value === null ? null : Number(value);
-}
-
-/** M4-W2: api.model_card -- every number the "How we know it works" panel shows. */
-async function getModelCard(): Promise<ModelCardData | null> {
-  try {
-    const rows = await query<ModelCardDbRow>(
-      `select model_version, algorithm, auc_oot, pr_auc_oot, top_decile_lift_oot, calibration, n_test, n_positive_test, notes
-       from api.model_card
-       order by trained_through desc, model_version desc
-       limit 1`
-    );
-    const row = rows[0];
-    if (!row) return null;
-    return {
-      modelVersion: row.model_version,
-      algorithm: row.algorithm,
-      aucOot: toNum(row.auc_oot),
-      prAucOot: toNum(row.pr_auc_oot),
-      topDecileLiftOot: toNum(row.top_decile_lift_oot),
-      calibration: row.calibration
-        ? row.calibration.map((c) => ({
-            decile: c.decile,
-            n: c.n,
-            predictedMeanP: c.predicted_mean_p,
-            observedRate: c.observed_rate,
-          }))
-        : null,
-      nTest: row.n_test,
-      nPositiveTest: row.n_positive_test,
-      notes: row.notes,
-    };
-  } catch (err) {
-    console.error("page: failed to load api.model_card", err);
-    return null;
-  }
-}
-
 async function getSourcesLoadedCount(): Promise<number | null> {
   try {
     const rows = await query<{ n: string | number }>(`select count(*) as n from api.sources`);
@@ -535,7 +484,7 @@ export default async function HomePage({
   ]);
   const county = resolveCounty(requestedCounty, scoredCounties);
   const scoredCountyFips = scoredCounties.map((c) => c.fips);
-  const [distributors, countyContext, gateCounts, topHomesCount, sourcesLoadedCount, permitTimeline, modelCard, stormRecords] =
+  const [distributors, countyContext, gateCounts, topHomesCount, sourcesLoadedCount, permitTimeline, stormRecords] =
     await Promise.all([
       getDistributorReliability(scoredCountyFips),
       getCountyOutageContext(),
@@ -543,7 +492,6 @@ export default async function HomePage({
       getTopHomesCount(county.fips),
       getSourcesLoadedCount(),
       getPermitTimelineByQuarter(),
-      getModelCard(),
       getStormRecords(scoredCountyFips),
     ]);
 
@@ -689,19 +637,9 @@ export default async function HomePage({
         <PermitTimelinePanel rows={permitTimeline} />
       </Panel>
 
-      <Panel>
-        <h2
-          style={{
-            fontFamily: "var(--type-heading-font-family)",
-            fontSize: "var(--type-heading-font-size)",
-            fontWeight: "var(--type-heading-font-weight)",
-            marginTop: 0,
-          }}
-        >
-          How we know it works
-        </h2>
-        <PredictionProof modelCard={modelCard} />
-      </Panel>
+      <p style={{ margin: 0 }}>
+        <Link href="/sources#how-leads-are-prioritized">How leads are prioritized &amp; the model&rsquo;s accuracy check →</Link>
+      </p>
 
       <Panel>
         <h2

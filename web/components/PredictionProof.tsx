@@ -94,7 +94,7 @@ export function PredictionProof({ modelCard }: { modelCard: ModelCardData | null
         </div>
         <div>
           <div style={{ fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)" }}>
-            Top 10% of homes installed at
+            In the holdout period, the model&rsquo;s top 10% installed backup at
           </div>
           {topDecileLiftOot === null ? (
             <MissingState variant="not-loaded" reason="Top-decile lift not available" />
@@ -103,6 +103,10 @@ export function PredictionProof({ modelCard }: { modelCard: ModelCardData | null
               {topDecileLiftOot.toFixed(2)}&times; the average rate
             </div>
           )}
+          <p style={{ margin: "var(--space-1) 0 0 0", fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)", maxWidth: "36ch" }}>
+            A measure of historical adoption concentration in that holdout, not a promise about future outreach
+            results.
+          </p>
         </div>
       </div>
 

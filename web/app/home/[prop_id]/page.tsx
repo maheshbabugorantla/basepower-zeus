@@ -9,19 +9,16 @@ import { ParcelMap } from "../../../components/ParcelMap";
 import { SolarPanel } from "../../../components/SolarPanel";
 import { ScoreExplainer } from "../../../components/ScoreExplainer";
 import { PropensityBadge, type PropensityReason } from "../../../components/PropensityBadge";
+import { utilityStatusForHome, buildYearNote } from "../../../lib/priorityTier";
 import { PermitPath, type PermitPathKind, type PermitPathStatsRow, type PermitRulesCitation } from "../../../components/PermitPath";
 import { GridValue } from "../../../components/GridValue";
-import { COUNTY_CANDIDATES } from "../../../lib/counties";
+import { COUNTY_CANDIDATES, CAD_NAME } from "../../../lib/counties";
 
 // M3-W1: which appraisal district this home's parcel roll comes from,
 // per county (Travis CAD / Harris CAD (HCAD) / Williamson CAD (WCAD)) --
 // never a hardcoded "Travis CAD" regardless of which county the parcel
-// actually sits in.
-const CAD_NAME: Record<string, string> = {
-  "48453": "Travis CAD",
-  "48201": "Harris CAD (HCAD)",
-  "48491": "Williamson CAD (WCAD)",
-};
+// actually sits in. Moved to lib/counties.ts (CAD_NAME) so
+// EligibilityFunnel's caller can use the identical map (T7 fix).
 import {
   DataTable,
   DataTableBody,
@@ -115,14 +112,33 @@ interface TopHomeRankRow {
 interface HomePropensityDbRow {
   p_install_12m: string | number;
   relative_to_county: string | number | null;
+  decile: number | null;
   reasons: PropensityReason[];
   extrapolated_from: string | null;
+}
+
+// "Before you knock": already has backup? (core.home_coverage) -- a
+// primary-key lookup, same table/bucket values the ranking screen's
+// "Hide homes that already have backup" toggle uses (api.top-homes
+// route's excludeBackup predicate), so a rep sees the identical fact
+// here that decided whether this home was even on the list.
+async function getHomeCoverageBucket(propId: string): Promise<string | null> {
+  try {
+    const rows = await query<{ bucket: string | null }>(
+      `select bucket from core.home_coverage where prop_id = $1`,
+      [propId]
+    );
+    return rows[0]?.bucket ?? null;
+  } catch (err) {
+    console.error("home-detail: failed to load core.home_coverage", err);
+    return null;
+  }
 }
 
 async function getHomePropensity(propId: string): Promise<HomePropensityDbRow | null> {
   try {
     const rows = await query<HomePropensityDbRow>(
-      `select p_install_12m, relative_to_county, reasons, extrapolated_from
+      `select p_install_12m, relative_to_county, decile, reasons, extrapolated_from
        from api.home_propensity
        where prop_id = $1`,
       [propId]
@@ -205,6 +221,16 @@ interface IncomeAgeRow {
 const GATE_REASON_LABEL: Record<string, string> = {
   territory_not_base_served: "Not in a utility Base serves (HIFLD polygon match, or Base's served-utilities list does not mark it mapped=yes)",
 };
+
+/** territory_null_reason codes with a known plain-language line in
+ * MissingState's own REASON_TEXT map -- rendered via MissingState
+ * (never the generic "(raw_code)" fallback further below). */
+const KNOWN_UTILITY_NULL_REASONS = new Set([
+  "utility_not_confirmed",
+  "multiply_certificated",
+  "no_ccn_match",
+  "ccn_holder_unmapped",
+]);
 
 // M2-W4: regulated (no retail choice, e.g. Austin Energy municipal) vs
 // deregulated (retail choice, e.g. Oncor) market, from api.retail_market
@@ -751,7 +777,7 @@ export default async function HomeDetailPage({
   const incomeAge = homeSignals?.block_group_geoid ? await getIncomeAge(homeSignals.block_group_geoid) : null;
   const permitSourceIds = home.permits.map((p) => p.source_id).filter((s): s is string => !!s);
 
-  const [sourcesById, scoreContext, homePropensity, parcelGeojson, rulesHaveRun, texasOutagePercentile, permitPathStatsRow, permitRuleRow] = await Promise.all([
+  const [sourcesById, scoreContext, homePropensity, parcelGeojson, rulesHaveRun, texasOutagePercentile, permitPathStatsRow, permitRuleRow, coverageBucket] = await Promise.all([
     getSourcesByIds(
       Array.from(
         new Set([
@@ -775,6 +801,7 @@ export default async function HomeDetailPage({
       : Promise.resolve(null),
     permitPath === "city_battery_permit" ? getPermitPathStats() : Promise.resolve(null),
     getPermitRuleCitation(permitPath),
+    getHomeCoverageBucket(home.prop_id),
   ]);
 
   const permitPathStats: PermitPathStatsRow | null = permitPathStatsRow
@@ -815,7 +842,11 @@ export default async function HomeDetailPage({
   return (
     <div style={{ display: "grid", gap: "var(--space-6)" }}>
       <nav aria-label="Breadcrumb" className="breadcrumb">
-        <Link href="/ranking">Ranking</Link>
+        {/* T4 fix: a home's OWN county (home.county_fips), not whatever
+            county happened to be selected on the page that linked here --
+            a Williamson home must send "Back to lead list" back to
+            Williamson, never silently to Travis. */}
+        <Link href={home.county_fips ? `/ranking?county=${home.county_fips}` : "/ranking"}>{countyName} lead list</Link>
         <span className="breadcrumb__separator" aria-hidden="true">
           /
         </span>
@@ -842,8 +873,11 @@ export default async function HomeDetailPage({
           </div>
           <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "var(--space-1)", textAlign: "right" }}>
             {homePropensity ? null : (
-              <a href="/ranking" style={{ fontSize: "var(--type-label-font-size)", maxWidth: "220px" }}>
-                See where it ranks
+              <a
+                href={home.county_fips ? `/ranking?county=${home.county_fips}` : "/ranking"}
+                style={{ fontSize: "var(--type-label-font-size)", maxWidth: "220px" }}
+              >
+                See {countyName}&rsquo;s lead list
               </a>
             )}
           </div>
@@ -864,7 +898,7 @@ export default async function HomeDetailPage({
             marginTop: 0,
           }}
         >
-          Likelihood of adding backup in the next 12 months
+          Priority
         </h2>
         {homePropensity === null ? (
           <MissingState
@@ -875,12 +909,104 @@ export default async function HomeDetailPage({
           <PropensityBadge
             pInstall12m={Number(homePropensity.p_install_12m)}
             relativeToCounty={homePropensity.relative_to_county === null ? null : Number(homePropensity.relative_to_county)}
+            decile={homePropensity.decile}
             countyName={countyName}
             extrapolatedFrom={homePropensity.extrapolated_from}
             reasons={homePropensity.reasons}
             showReasons
           />
         )}
+      </Panel>
+
+      {/* "Before you knock" -- the door-brief checklist a rep reads
+          standing on the porch: already has backup (de-prioritize/skip
+          if so), utility service status (distinct from priority, T2),
+          flood zone, permit path. Every fact here is one already fetched
+          for a panel further down this page -- this panel just surfaces
+          the ones that change what a rep says or does before knocking. */}
+      <Panel>
+        <h2
+          style={{
+            fontFamily: "var(--type-heading-font-family)",
+            fontSize: "var(--type-heading-font-size)",
+            fontWeight: "var(--type-heading-font-weight)",
+            marginTop: 0,
+          }}
+        >
+          Before you knock
+        </h2>
+        <dl style={{ display: "grid", gap: "var(--space-3)", margin: 0 }}>
+          <div>
+            <dt style={{ color: "var(--theme-ink-muted)", fontSize: "var(--type-label-font-size)" }}>
+              Already has backup?
+            </dt>
+            <dd style={{ margin: "var(--space-1) 0 0 0" }}>
+              {coverageBucket === "base_customer" || coverageBucket === "other_backup" ? (
+                <strong>
+                  Yes{coverageBucket === "base_customer" ? " -- already a Base customer" : " -- another installer’s backup on file"}. Say so and move on.
+                </strong>
+              ) : (
+                "No backup on file -- worth a knock."
+              )}
+            </dd>
+          </div>
+          <div>
+            <dt style={{ color: "var(--theme-ink-muted)", fontSize: "var(--type-label-font-size)" }}>
+              Utility service
+            </dt>
+            <dd style={{ margin: "var(--space-1) 0 0 0" }}>
+              {(() => {
+                const status = utilityStatusForHome({
+                  gateReason: homeSignals?.gate_reason ?? null,
+                  territoryNullReason: homeSignals?.territory_null_reason ?? null,
+                });
+                return (
+                  <>
+                    {status.label}
+                    <div style={{ fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)" }}>
+                      {status.action}
+                    </div>
+                  </>
+                );
+              })()}
+            </dd>
+          </div>
+          <div>
+            <dt style={{ color: "var(--theme-ink-muted)", fontSize: "var(--type-label-font-size)" }}>Flood zone</dt>
+            <dd style={{ margin: "var(--space-1) 0 0 0" }}>
+              {homeSignals?.flood_flag === null || homeSignals?.flood_flag === undefined ? (
+                <MissingState variant="not-loaded" reason={homeSignals?.flood_null_reason ?? "Flood zones not loaded"} />
+              ) : homeSignals.flood_flag ? (
+                "Inside a FEMA high-risk flood zone -- ask about it."
+              ) : (
+                "Outside FEMA high-risk flood zones."
+              )}
+            </dd>
+          </div>
+          <div>
+            <dt style={{ color: "var(--theme-ink-muted)", fontSize: "var(--type-label-font-size)" }}>Permit path</dt>
+            <dd style={{ margin: "var(--space-1) 0 0 0" }}>
+              {permitPath === "city_battery_permit"
+                ? "City of Austin battery permit path applies."
+                : permitPath === "state_rules_only"
+                  ? "State rules only -- no city permit path on file."
+                  : "Not resolvable yet."}
+            </dd>
+          </div>
+          <div>
+            <dt style={{ color: "var(--theme-ink-muted)", fontSize: "var(--type-label-font-size)" }}>Build year</dt>
+            <dd style={{ margin: "var(--space-1) 0 0 0" }}>
+              {homeSignals?.yr_built == null ? (
+                <MissingState
+                  variant="not-loaded"
+                  reason={homeSignals?.yr_built_null_reason ?? "Build year not available"}
+                />
+              ) : (
+                buildYearNote(homeSignals.yr_built)
+              )}
+            </dd>
+          </div>
+        </dl>
       </Panel>
 
       <Panel>
@@ -913,16 +1039,19 @@ export default async function HomeDetailPage({
             <strong>Excluded from ranking:</strong>{" "}
             {GATE_REASON_LABEL[homeSignals.gate_reason] ?? homeSignals.gate_reason}
           </div>
-        ) : homeSignals.territory_null_reason === "utility_not_confirmed" ? (
+        ) : KNOWN_UTILITY_NULL_REASONS.has(homeSignals.territory_null_reason ?? "") ? (
           // M-utility-gate copy fix: Williamson's every HIFLD territory
           // polygon overlaps, so which utility actually serves this home
-          // can't be resolved from the polygon alone. The raw code is
-          // passed straight through -- MissingState's own REASON_TEXT map
-          // (components/ui/MissingState.tsx) is the one place every
-          // null_reason code becomes plain text, per CLAUDE.md's "Added
-          // after M2-W3" rule -- never a second hardcoded copy of it here.
+          // can't be resolved from the polygon alone -- 'utility_not_
+          // confirmed'. M-ccn adds the PUCT CCN-mapping outcomes
+          // ('multiply_certificated'/'no_ccn_match'/'ccn_holder_unmapped'),
+          // now live in the DB. The raw code is passed straight through --
+          // MissingState's own REASON_TEXT map (components/ui/MissingState.tsx)
+          // is the one place every null_reason code becomes plain text, per
+          // CLAUDE.md's "Added after M2-W3" rule -- never a second
+          // hardcoded copy of it here.
           <div style={{ marginBottom: "var(--space-4)" }}>
-            <MissingState variant="not-loaded" reason={homeSignals.territory_null_reason} />
+            <MissingState variant="not-loaded" reason={homeSignals.territory_null_reason as string} />
           </div>
         ) : homeSignals.territory_null_reason ? (
           <div style={{ marginBottom: "var(--space-4)" }}>

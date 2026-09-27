@@ -57,7 +57,21 @@ describe.skipIf(!process.env.POSTGRES_URL)("Overview — gated count matches the
     // a substring match anywhere on the page, so relabeling the wrong
     // count as "gated" (the original bug) would still fail this.
     expect(overviewText).toContain(`Owner-occupied single-family homes with a mapped lot ${gatedFormatted} homes`);
-    expect(rankingText).toContain(`Owner-occupied, with a mapped lot ${gatedFormatted}`);
+
+    // Layout-review redesign: the Ranking funnel panel was removed --
+    // /ranking's scope line now states the same api.gate_counts numbers
+    // directly (eligible = sum of every reason == gatedCount; "Base
+    // serves" = the 'passed' reason). Read straight from api.gate_counts,
+    // never derived by subtraction, matching web/app/ranking/page.tsx's
+    // own computation exactly.
+    const servedRows = await query<{ reason: string; home_count: string | number }>(
+      `select reason, home_count from api.gate_counts where county_fips = $1`,
+      [TRAVIS_COUNTY_FIPS]
+    );
+    const servedHomes = servedRows.find((r) => r.reason === "passed")?.home_count ?? 0;
+    const servedFormatted = Number(servedHomes).toLocaleString();
+    expect(rankingText).toContain(`${gatedFormatted} eligible homes`);
+    expect(rankingText).toContain(`Base serves ${servedFormatted}`);
 
     // The original bug used the (larger, independent) all-homestead count
     // as the "gated" figure. Guard against that regression whenever the

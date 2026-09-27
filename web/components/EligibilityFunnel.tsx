@@ -14,7 +14,19 @@ export interface FunnelStep {
   ratio: number;
 }
 
-export function EligibilityFunnel({ steps, note }: { steps: FunnelStep[]; note?: string }) {
+export function EligibilityFunnel({
+  steps,
+  note,
+  // T7 fix: this footer used to hardcode "the 2026 Travis Central
+  // Appraisal District roll" regardless of which county's funnel is
+  // shown -- callers now pass the real per-county appraisal-district
+  // name (lib/counties.ts CAD_NAME).
+  appraisalDistrictName = "Travis Central Appraisal District",
+}: {
+  steps: FunnelStep[];
+  note?: string;
+  appraisalDistrictName?: string;
+}) {
   return (
     <Panel>
       <h2
@@ -57,7 +69,7 @@ export function EligibilityFunnel({ steps, note }: { steps: FunnelStep[]; note?:
         ))}
       </div>
       <p style={{ fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)", marginBottom: 0 }}>
-        From the 2026 Travis Central Appraisal District roll. The next panel shows which of these homes Base can serve.
+        From the {appraisalDistrictName}&rsquo;s roll. The next panel shows which of these homes Base can serve.
       </p>
     </Panel>
   );

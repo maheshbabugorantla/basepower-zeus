@@ -149,8 +149,12 @@ describe.skipIf(!process.env.POSTGRES_URL_READONLY)("M2-W5 score breakdown + sum
     // contributions by construction (buildTemplateSentence's own sort) —
     // cross-checked here against an independent sort over the same real
     // `signals` array, so the template can never silently drift from the
-    // breakdown it was built from.
-    const available = signals.filter((s) => s.available && s.contribution !== null);
+    // breakdown it was built from. flood is excluded (T9 fix): it's a
+    // penalty-only installability term, excluded from
+    // api.homes_ranked_weighted's own `reasons` top-3 candidates too
+    // (TopHomesTable.tsx's REASON_META comment), so it must never be
+    // named as this home's "strongest signal" here either.
+    const available = signals.filter((s) => s.available && s.contribution !== null && s.key !== "flood");
     const top2 = [...available].sort((a, b) => (b.contribution ?? 0) - (a.contribution ?? 0)).slice(0, 2);
     for (const s of top2) {
       expect(template).toContain(s.label.split(" (")[0]);

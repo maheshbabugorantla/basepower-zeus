@@ -150,6 +150,19 @@ export interface BlockGroupMapProps {
    * own fitToGeoids) -- the map fits its viewport to their combined
    * bounds. null/[] resets to the county's default center/zoom. */
   fitToGeoids?: string[] | null;
+  /** Layout-review pivot: shade by priority (share of this block group's
+   * homes in decile 1, "Top priority" -- from api.home_geo_rollup's
+   * top10Count/homeCount, computed by RankingBoard) instead of the
+   * team-weighted score, when in predicted mode (the default). Reuses
+   * the identical feature-state/ramp/hatch machinery scoreFillExpression
+   * already provides (still keyed on feature-state "score", per the
+   * pinned M2-W3 test) -- this just changes what value gets set there,
+   * never a second rendering path. When provided (non-null), the
+   * weighted-score fetch effect below is skipped entirely. */
+  priorityByGeoid?: Map<string, number> | null;
+  /** Legend + a11y label for what the ramp means -- "top-priority homes"
+   * (predicted, default) vs "weighted score" (manager's secondary mode). */
+  shadeLabel?: string;
 }
 
 const SOURCE_ID = "blockgroups";
@@ -174,6 +187,8 @@ export function BlockGroupMap({
   onDotHover,
   height = "100%",
   fitToGeoids = null,
+  priorityByGeoid = null,
+  shadeLabel = "top-priority homes",
 }: BlockGroupMapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
@@ -340,7 +355,7 @@ export function BlockGroupMap({
   // recolor when the TABLE'S OWN fetch happened to run).
   // ---------------------------------------------------------------------
   useEffect(() => {
-    if (!ready) return;
+    if (!ready || priorityByGeoid) return;
     let cancelled = false;
     const timer = setTimeout(async () => {
       try {
@@ -368,6 +383,20 @@ export function BlockGroupMap({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready, JSON.stringify(weights), countyFips]);
+
+  // ---------------------------------------------------------------------
+  // Priority shading (layout-review pivot) — reuses the identical
+  // feature-state "score" key and ramp the weighted-score effect above
+  // sets, just fed from RankingBoard's already-fetched api.home_geo_
+  // rollup share (top10Count/homeCount) instead of a live re-score
+  // fetch. No network request here at all.
+  // ---------------------------------------------------------------------
+  useEffect(() => {
+    if (!ready || !priorityByGeoid) return;
+    scoresRef.current = priorityByGeoid;
+    const map = mapRef.current as unknown as { __applyScores?: () => void } | null;
+    map?.__applyScores?.();
+  }, [ready, priorityByGeoid]);
 
   // ---------------------------------------------------------------------
   // Hover / selected outlines.
@@ -406,14 +435,15 @@ export function BlockGroupMap({
     const map = mapRef.current;
     if (!map || !ready) return;
 
-    if (!fitToGeoids || fitToGeoids.length === 0) {
-      const mapCenter = COUNTY_MAP_CENTER[countyFips] ?? COUNTY_MAP_CENTER["48453"];
-      map.easeTo({ center: mapCenter.center, zoom: mapCenter.zoom });
-      return;
-    }
-
-    const wanted = new Set(fitToGeoids);
+    // Layout-review fix: fit the WHOLE county's block groups on load
+    // (padding 24) instead of a fixed center/zoom guess, whenever no
+    // specific city/ZIP/neighborhood is selected -- same bbox logic
+    // below, just unfiltered (every feature the source has) instead of
+    // filtered to a wanted-geoid set.
+    const hasSelection = !!fitToGeoids && fitToGeoids.length > 0;
+    const wanted = hasSelection ? new Set(fitToGeoids) : null;
     let cancelled = false;
+    let usedFallbackCenter = false;
 
     // `map` is narrowed non-null above, but TS doesn't carry that through
     // a nested function declaration's closure -- `m` is the same value,
@@ -424,13 +454,25 @@ export function BlockGroupMap({
       if (cancelled) return;
       let features: ReturnType<MapLibreMap["querySourceFeatures"]>;
       try {
-        features = m.querySourceFeatures(SOURCE_ID, {
-          filter: ["in", ["get", "geoid"], ["literal", Array.from(wanted)]] as unknown as ExpressionSpecification,
-        });
+        features = wanted
+          ? m.querySourceFeatures(SOURCE_ID, {
+              filter: ["in", ["get", "geoid"], ["literal", Array.from(wanted)]] as unknown as ExpressionSpecification,
+            })
+          : m.querySourceFeatures(SOURCE_ID);
       } catch {
         return; // source not parsed yet -- the sourcedata listener below retries
       }
-      if (features.length === 0) return;
+      if (features.length === 0) {
+        // Nothing parsed yet for a whole-county fit -- ease to the
+        // fallback center once so the map isn't blank while waiting,
+        // then let the next sourcedata event try the real fit.
+        if (!hasSelection && !usedFallbackCenter) {
+          usedFallbackCenter = true;
+          const mapCenter = COUNTY_MAP_CENTER[countyFips] ?? COUNTY_MAP_CENTER["48453"];
+          m.easeTo({ center: mapCenter.center, zoom: mapCenter.zoom, duration: 0 });
+        }
+        return;
+      }
       const bbox: [number, number, number, number] = [Infinity, Infinity, -Infinity, -Infinity];
       for (const f of features) {
         if (f.geometry && "coordinates" in f.geometry) extendBbox(bbox, f.geometry.coordinates);
@@ -441,7 +483,7 @@ export function BlockGroupMap({
           [bbox[0], bbox[1]],
           [bbox[2], bbox[3]],
         ],
-        { padding: 48, maxZoom: 15, duration: 500 }
+        { padding: 24, maxZoom: 15, duration: 500 }
       );
     }
 
@@ -520,7 +562,7 @@ export function BlockGroupMap({
           overflow: "hidden",
         }}
       />
-      <MapLegend selected={selectedGeoid !== null} />
+      <MapLegend selected={selectedGeoid !== null} shadeLabel={shadeLabel} />
     </div>
   );
 }
@@ -534,47 +576,32 @@ export function BlockGroupMap({
 // covers the basemap's (bottom-right) attribution control.
 // ---------------------------------------------------------------------------
 
-function MapLegend({ selected }: { selected: boolean }) {
+function MapLegend({ selected, shadeLabel }: { selected: boolean; shadeLabel: string }) {
   return (
     <div
       data-testid="map-legend"
       style={{
         position: "absolute",
         left: "var(--space-3)",
-        bottom: "var(--space-3)",
+        top: "var(--space-3)",
         backgroundColor: "var(--theme-surface)",
         color: "var(--theme-ink)",
         borderRadius: "var(--rounded-md)",
         padding: "var(--space-2) var(--space-3)",
         boxShadow: "0 1px 4px rgba(0,0,0,0.2)",
         fontSize: "var(--type-label-font-size)",
-        maxWidth: "220px",
+        maxWidth: "260px",
       }}
     >
-      <div style={{ display: "flex", alignItems: "center", gap: "2px", marginBottom: "4px" }}>
-        {SCORE_RAMP.map((color, i) => (
-          <span key={i} style={{ width: "18px", height: "10px", backgroundColor: color, display: "inline-block" }} />
-        ))}
-      </div>
-      <div style={{ display: "flex", justifyContent: "space-between", color: "var(--theme-ink-muted)" }}>
-        <span>Lower</span>
-        <span>Higher weighted score</span>
-      </div>
-      <div style={{ color: "var(--theme-ink-muted)", marginBottom: "6px" }}>at current weights</div>
-
       <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
-        <span
-          aria-hidden="true"
-          style={{
-            width: "14px",
-            height: "14px",
-            display: "inline-block",
-            backgroundColor: NOT_LOADED_HATCH_BG,
-            border: `1px solid ${NOT_LOADED_HATCH_STRIPE}`,
-            backgroundImage: `repeating-linear-gradient(45deg, ${NOT_LOADED_HATCH_STRIPE} 0, ${NOT_LOADED_HATCH_STRIPE} 1px, transparent 1px, transparent 4px)`,
-          }}
-        />
-        <span>No homes Base can serve here</span>
+        <span style={{ display: "flex", alignItems: "center", gap: "2px" }}>
+          {SCORE_RAMP.map((color, i) => (
+            <span key={i} style={{ width: "14px", height: "10px", backgroundColor: color, display: "inline-block" }} />
+          ))}
+        </span>
+        <span style={{ color: "var(--theme-ink-muted)", whiteSpace: "nowrap" }}>
+          Fewer &harr; more {shadeLabel}
+        </span>
       </div>
 
       {selected ? (
@@ -584,7 +611,7 @@ function MapLegend({ selected }: { selected: boolean }) {
               aria-hidden="true"
               style={{ width: "10px", height: "10px", borderRadius: "50%", background: SCORE_RAMP[SCORE_RAMP.length - 1], border: "2px solid #ffffff", boxShadow: "0 0 0 1px rgba(0,0,0,0.25)" }}
             />
-            <span>Home, colored by its weighted score</span>
+            <span>Home, colored the same way</span>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
             <span aria-hidden="true" style={{ width: "18px", height: "0px", borderTop: "3px solid #1e4d2b" }} />

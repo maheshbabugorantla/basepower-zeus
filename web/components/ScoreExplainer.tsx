@@ -6,13 +6,17 @@
  *
  * PUBLIC PROPS CONTRACT (do not change without updating every caller):
  *
- *   <ScoreExplainer propId={propId} weights={weights} />
+ *   <ScoreExplainer propId={propId} weights={weights} countyName={countyName} />
  *
- *   propId  — a home's prop_id, the same id every other page uses.
- *   weights — the same Record<SignalKey, number> shape WeightSliders
- *             produces/consumes elsewhere (web/app/api/top-homes/route.ts's
- *             SignalKey union). Pass live slider state to follow the
- *             sliders, or a fixed object (e.g. equalWeights()) to pin it.
+ *   propId     — a home's prop_id, the same id every other page uses.
+ *   weights    — the same Record<SignalKey, number> shape WeightSliders
+ *                produces/consumes elsewhere (web/app/api/top-homes/route.ts's
+ *                SignalKey union). Pass live slider state to follow the
+ *                sliders, or a fixed object (e.g. equalWeights()) to pin it.
+ *   countyName — plain county name (T7 fix: the outage-basis line below
+ *                used to hardcode "Travis County average" regardless of
+ *                which county's home this is); optional, defaults to
+ *                "Travis" only for pre-existing callers that don't pass it.
  *
  * Mounted from /ranking (this ticket — see app/ranking/RankingBoard.tsx).
  * The home detail page (web/app/home/[prop_id]/page.tsx) is owned by a
@@ -52,6 +56,7 @@ const SUMMARY_FETCH_TIMEOUT_MS = 8000;
 export interface ScoreExplainerProps {
   propId: string;
   weights: Record<SignalKey, number>;
+  countyName?: string;
 }
 
 export interface BreakdownSignal {
@@ -93,7 +98,17 @@ function formatNumber(value: number, decimals = 1): string {
  * web/tests/m2-explain (real-breakdown-data tests), not used outside
  * this file otherwise. */
 export function buildTemplateSentence(signals: BreakdownSignal[]): string {
-  const available = signals.filter((s) => s.available && s.contribution !== null);
+  // T9 fix: flood is excluded from api.homes_ranked_weighted's own
+  // `reasons` top-3 candidates (TopHomesTable.tsx's REASON_META comment:
+  // "flood is never returned in `reasons` -- the SQL function excludes
+  // it from 'top signal' candidates", because it's an eligibility/
+  // installability penalty term, not a demonstrated-interest signal).
+  // This deterministic fallback sentence must exclude it too, or a home
+  // where flood happens to have the highest raw contribution would name
+  // flood as its "strongest signal" while every other reasons-derived
+  // summary on the same page (and the DB's own reasons array) never
+  // would -- exactly the inconsistency a real reviewer caught.
+  const available = signals.filter((s) => s.available && s.contribution !== null && s.key !== "flood");
   const top2 = [...available].sort((a, b) => (b.contribution ?? 0) - (a.contribution ?? 0)).slice(0, 2);
   if (top2.length === 0) {
     return "No signal has usable data for this home yet — every score input is currently marked not loaded or not available.";
@@ -104,7 +119,7 @@ export function buildTemplateSentence(signals: BreakdownSignal[]): string {
   return `This home's two strongest scored signals are ${describe(top2[0])} and ${describe(top2[1])}.`;
 }
 
-export function ScoreExplainer({ propId, weights }: ScoreExplainerProps) {
+export function ScoreExplainer({ propId, weights, countyName = "Travis" }: ScoreExplainerProps) {
   const [signals, setSignals] = useState<BreakdownSignal[] | null>(null);
   const [outageBasis, setOutageBasis] = useState<string | null>(null);
   const [outageDistributorName, setOutageDistributorName] = useState<string | null>(null);
@@ -323,7 +338,7 @@ export function ScoreExplainer({ propId, weights }: ScoreExplainerProps) {
                 {s.key === "outage" && s.available ? (
                   <div style={{ marginTop: "var(--space-1)", fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)" }}>
                     {outageBasis === "county_eaglei_proxy"
-                      ? `Travis County average (EAGLE-I), used because ${outageDistributorName ?? "this home's utility"} doesn't report to EIA`
+                      ? `${countyName} County average (EAGLE-I), used because ${outageDistributorName ?? "this home's utility"} doesn't report to EIA`
                       : outageBasis === "distributor_saidi"
                         ? `${outageDistributorName ?? "This distributor"}'s own reported SAIDI (EIA-861)`
                         : null}

@@ -212,10 +212,23 @@
 .top-bar {
   display: flex;
   align-items: center;
-  gap: var(--space-4);
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
   padding: var(--space-3) var(--space-6);
   background-color: var(--theme-surface);
   border-bottom: 1px solid var(--theme-divider);
+}
+
+/* Layout-review fix: at phone widths the top bar's brand + nav + county
+ * switcher + export button never fit on one line -- they used to keep
+ * shrinking past their own min-content width, pushing the whole page
+ * wider than the viewport (a real horizontal-scroll bug, not just a
+ * tight fit). flex-wrap above lets it wrap onto a second line instead;
+ * this just drops the spacer's push so wrapped rows start left-aligned. */
+@media (max-width: 899px) {
+  .top-bar__spacer {
+    display: none;
+  }
 }
 
 .top-bar__brand {
@@ -365,11 +378,17 @@
 
 .ranking-board {
   display: grid;
-  grid-template-columns: minmax(280px, 340px) minmax(0, 1.4fr) minmax(0, 1.6fr);
+  /* Map-as-dominant-surface pivot, rebalanced once the rail lost
+     QualityPanel (now on /sources): map ~60-65% of the map+list
+     workspace at desktop, list ~35-40% with a hard 440px floor so a
+     row's address/tier/reasons never get squeezed again. Rail stays a
+     narrow, secondary column outside that split (Adjust priorities +
+     the two toggles only, now). */
+  grid-template-columns: minmax(190px, 220px) minmax(0, 1.5fr) minmax(440px, 1fr);
   gap: var(--space-6);
   align-items: stretch;
-  height: calc(100vh - 260px);
-  min-height: 560px;
+  height: calc(100vh - 160px);
+  min-height: 680px;
 }
 
 .ranking-board__rail {
@@ -380,9 +399,30 @@
   min-height: 0;
 }
 
-/* M2-W1 (responsive fix): stack rail -> map -> table below 1280px, in
- * that DOM order, instead of squeezing three columns into one-word-per-
- * line widths. */
+.ranking-board__map-panel {
+  height: 100%;
+  min-height: 640px;
+}
+
+/* City/ZIP/Neighborhood filters: one row, always -- a native <select>
+ * otherwise sizes itself to its widest OPTION text ("All (163,859
+ * homes)"), which alone is wider than a 440px list column and forces
+ * the three filters to wrap onto separate lines. width:100% + min-width:0
+ * lets each one shrink to its flex share instead; the visible/selected
+ * text still truncates with an ellipsis rather than overflowing. */
+[data-testid="geo-drilldown"] select {
+  width: 100%;
+  min-width: 0;
+  text-overflow: ellipsis;
+}
+
+/* Three explicit breakpoints (layout review): desktop >=1280 (3-col,
+ * map dominant per above); tablet 900-1279 (map full-width above the
+ * list at a fixed 420px, rail stacks above both); phone <900 (map
+ * full-width at 320px, list below). No horizontal overflow at any of
+ * them -- 1fr columns everywhere below 1280, and the map panel's height
+ * is an explicit px value at these sizes rather than a %-of-parent
+ * (which breaks once the parent's own height goes to auto). */
 @media (max-width: 1279px) {
   .ranking-board {
     grid-template-columns: 1fr;
@@ -391,6 +431,18 @@
 
   .ranking-board__rail {
     overflow-y: visible;
+  }
+
+  .ranking-board__map-panel {
+    height: 420px;
+    min-height: 420px;
+  }
+}
+
+@media (max-width: 899px) {
+  .ranking-board__map-panel {
+    height: 320px;
+    min-height: 320px;
   }
 }
 
@@ -436,6 +488,88 @@
   font-family: var(--type-label-font-family);
   font-size: var(--type-label-font-size);
   color: var(--theme-ink-muted);
+}
+
+/* Layout-review fix: predicted-mode lead-list rows as a CSS grid
+ * "table" (role=table/row/cell) instead of an HTML <table> -- a real
+ * <table> let a long address wrap into the Priority column and let
+ * reason chips overlap the row below at 1440px, because table columns
+ * can grow past a colgroup hint. Grid columns are hard-sized instead:
+ * content that doesn't fit truncates/clips inside its own column, it
+ * never bleeds into a neighbor. */
+.predicted-homes-table {
+  display: flex;
+  flex-direction: column;
+}
+
+.predicted-homes-table__row {
+  display: grid;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--theme-divider);
+  min-width: 0;
+}
+
+.predicted-homes-table__row--head {
+  font-family: var(--type-label-font-family);
+  font-size: var(--type-label-font-size);
+  font-weight: var(--type-label-font-weight);
+  color: var(--theme-ink-muted);
+  padding-bottom: var(--space-2);
+}
+
+.predicted-homes-table__row--body:hover,
+.predicted-homes-table__row--body[data-hovered] {
+  background-color: var(--theme-surface-sunken);
+}
+
+/* One line only here (unlike the weighted-mode table's 2-line clamp) --
+ * this list prioritizes row density (>=5 rows visible at 1440x900) over
+ * showing a full multi-word street name; the full address is always one
+ * click away on /home/[prop_id]. */
+.predicted-homes-table__home-cell .top-homes-address {
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.predicted-homes-table__home-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+/* Map-as-dominant-surface pivot: the list is a narrow side column now --
+ * tier + utility sit on one row (wrapping to two only if the column gets
+ * very tight), reason chips wrap onto their own line(s) below instead of
+ * being clipped to a fixed-width column. */
+.predicted-homes-table__priority-cell {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.predicted-homes-table__utility {
+  font-size: var(--type-label-font-size);
+  color: var(--theme-ink-muted);
+}
+
+.predicted-homes-table__reasons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.predicted-homes-table__reasons .chip {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .top-homes-score {

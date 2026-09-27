@@ -59,6 +59,11 @@ const REASON_TEXT: Record<string, string> = {
   // from the polygon alone -- still ranked/scored, just not counted as
   // Base-servable until confirmed at the address.
   utility_not_confirmed: "Utility not confirmed — check the address with the utility",
+  // M-ccn (not in the DB yet -- see GateCounts.tsx's own comment): PUCT
+  // Certificate of Convenience and Necessity (CCN) mapping outcomes.
+  multiply_certificated: "More than one utility is licensed here — not confirmed",
+  no_ccn_match: "No licensed utility found on the state map",
+  ccn_holder_unmapped: "Utility not on Base's list yet",
   utility_not_in_retail_market_file: "This utility isn't in the market list yet",
   zip_not_in_empower: "This ZIP isn't in the Medicare device data",
 };

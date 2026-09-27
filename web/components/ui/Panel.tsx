@@ -4,13 +4,21 @@ import type { HTMLAttributes, ReactNode } from "react";
 // 24px padding. Panels never nest — do not render a <Panel> inside another
 // <Panel>.
 
-export interface PanelProps extends HTMLAttributes<HTMLDivElement> {
+export interface PanelProps extends HTMLAttributes<HTMLElement> {
   children: ReactNode;
+  /** Renders the same surface as a native <details> instead of a <div> --
+   * for a manager-only disclosure (e.g. "Adjust priorities") that should
+   * collapse without a second custom component. Still just one panel
+   * surface with a <summary> as its first child. */
+  as?: "div" | "details";
+  /** Only meaningful with as="details" -- native open/closed state. */
+  open?: boolean;
 }
 
-export function Panel({ children, style, ...rest }: PanelProps) {
+export function Panel({ children, style, as = "div", ...rest }: PanelProps) {
+  const Tag = as;
   return (
-    <div
+    <Tag
       {...rest}
       style={{
         // DESIGN.md maps panel.backgroundColor to {colors.surface} (a
@@ -28,6 +36,6 @@ export function Panel({ children, style, ...rest }: PanelProps) {
       }}
     >
       {children}
-    </div>
+    </Tag>
   );
 }

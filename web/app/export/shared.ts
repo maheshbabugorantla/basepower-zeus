@@ -1,4 +1,5 @@
 import "server-only";
+import { plainReason, isEligibleReason } from "../../lib/priorityTier";
 
 // M5-W1: shared plumbing for /export/homes and /export/coverage --
 // plain-CSV, streamed, read-only role, real DB rows only (no synthetic
@@ -135,8 +136,15 @@ export interface PropensityReason {
   value: number | null;
 }
 
+// Plain-language reasons -- same source (lib/priorityTier's REASON_
+// PHRASES) the ranking screen and door brief use, so a rep reading the
+// exported CSV sees the identical wording, never the model's raw
+// feature/direction pair.
 export function formatPredictedReasons(reasons: PropensityReason[]): string {
-  return reasons.map((r) => `${r.feature} (${r.direction})`).join("; ");
+  return reasons
+    .filter((r) => r.direction === "raises" && isEligibleReason(r.feature))
+    .map((r) => plainReason(r.feature))
+    .join("; ");
 }
 
 /** territory_eia_id -> permit path, the same CASE logic
@@ -182,7 +190,11 @@ export function formatUtilityStatus(
   if (territoryBasis === "service_area_polygon") {
     return "Confirmed Base-served utility match";
   }
-  return "";
+  // No unresolved null_reason and no special basis flag: this row only
+  // exists in the export because its gate passed (a served, confirmed
+  // utility) -- "" here would read as "no status", which is exactly the
+  // "unknown reads as confirmed" bug T2 calls out. Say so plainly.
+  return "Base serves this utility";
 }
 
 export function csvResponseHeaders(filename: string): HeadersInit {

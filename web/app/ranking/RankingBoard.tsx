@@ -2,6 +2,7 @@
 
 import type { MouseEvent as ReactMouseEvent, ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { BlockGroupMap, type MapDot } from "../../components/BlockGroupMap";
 import { TopHomesTable, TopHomesPagination, type TopHomeRow } from "../../components/TopHomesTable";
 import { WeightSliders, equalWeights } from "../../components/WeightSliders";
@@ -10,8 +11,8 @@ import { Panel } from "../../components/ui/Panel";
 import { MissingState } from "../../components/ui/MissingState";
 import type { SignalKey, PredictedHomeRow } from "../api/top-homes/route";
 import { PredictedHomesTable } from "./PredictedHomesTable";
-import { PredictionProof, type ModelCardData } from "../../components/PredictionProof";
 import { bucketBy, filterRows, countyTotals, type GeoRollupRow } from "../../lib/geoRollup";
+import { decileRangeForTier, tierMeta, PRIORITY_TIER_ORDER, type PriorityTierKey } from "../../lib/priorityTier";
 
 // M4-W2: predicted (api.home_propensity.p_install_12m) is the ranking
 // DEFAULT; "Team-weighted score" is the alternative, unchanged (M2-W1's)
@@ -93,7 +94,9 @@ async function fetchPredictedPage(params: {
   withTotal: boolean;
   hideOldHomes?: boolean;
   excludeBackup?: boolean;
+  tier?: PriorityTierKey | "all";
 }): Promise<{ rows: PredictedHomeRow[]; total: number | null }> {
+  const [minDecile, maxDecile] = decileRangeForTier(params.tier ?? "all");
   const response = await fetch("/api/top-homes", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -109,6 +112,8 @@ async function fetchPredictedPage(params: {
       pageSize: params.pageSize ?? DEFAULT_PAGE_SIZE,
       hideOldHomes: params.hideOldHomes ?? false,
       excludeBackup: params.excludeBackup ?? true,
+      minDecile,
+      maxDecile,
     }),
   });
   if (!response.ok) throw new Error(`Ranking request failed (HTTP ${response.status})`);
@@ -191,7 +196,6 @@ export function RankingBoard({
   defaultWeights = null,
   predictedRows: initialPredictedRows,
   predictedTotal: initialPredictedTotal,
-  modelCard = null,
   countyName = "Travis",
   countyFips = TRAVIS_COUNTY_FIPS,
   geoRollup = [],
@@ -202,6 +206,7 @@ export function RankingBoard({
   initialBlockGroupGeoid = null,
   initialHideOldHomes = false,
   initialHideExistingBackup = true,
+  initialTier = "all",
 }: {
   rows: TopHomeRow[];
   /** Real gate-passed county home count (api.homes_ranked_weighted_count), server-rendered. */
@@ -214,7 +219,6 @@ export function RankingBoard({
   predictedRows: PredictedHomeRow[];
   predictedTotal: number | null;
   /** api.model_card, server-rendered for the "How we know it works" panel. */
-  modelCard?: ModelCardData | null;
   countyName?: string;
   /** M3-W1: the county the ranking/map/table are scoped to — follows
    * the top-bar county switcher via app/ranking/page.tsx's `?county=`. */
@@ -233,6 +237,8 @@ export function RankingBoard({
   initialBlockGroupGeoid?: string | null;
   initialHideOldHomes?: boolean;
   initialHideExistingBackup?: boolean;
+  /** Lead-list "Priority" filter -- decile range under the hood (lib/priorityTier). */
+  initialTier?: PriorityTierKey | "all";
 }) {
   // M4-W2: predicted is the default ranking mode; "weighted" is the
   // team-adjustment alternative (unchanged M2-W1 behavior).
@@ -248,6 +254,11 @@ export function RankingBoard({
   // is excluded from outreach ranking by default; toggle restores them).
   // Wired straight through to api.homes_ranked_weighted's p_exclude_backup.
   const [hideExistingBackup, setHideExistingBackup] = useState(initialHideExistingBackup);
+  // Priority tier filter -- "all" means every tier; otherwise a
+  // decileRangeForTier(tier) range is sent to /api/top-homes. Only
+  // affects predicted mode (the model's own decile); has no effect in
+  // team-weighted mode, which has no decile.
+  const [tierFilter, setTierFilter] = useState<PriorityTierKey | "all">(initialTier);
 
   // M-drilldown (item 3): city/ZIP filter state -- null = "All", ""
   // (empty string) = the "no value on file" bucket, same convention as
@@ -408,6 +419,7 @@ export function RankingBoard({
             withTotal: true,
             hideOldHomes,
             excludeBackup: hideExistingBackup,
+            tier: tierFilter,
           }),
           selectedGeoid
             ? fetchPredictedPage({
@@ -420,6 +432,7 @@ export function RankingBoard({
                 withTotal: false,
                 hideOldHomes,
                 excludeBackup: hideExistingBackup,
+                tier: tierFilter,
               })
             : Promise.resolve({ rows: [] as PredictedHomeRow[], total: null }),
         ]);
@@ -437,7 +450,7 @@ export function RankingBoard({
     }, DEBOUNCE_MS);
 
     return () => clearTimeout(debounceTimer);
-  }, [mode, selectedGeoid, selectedCity, selectedZip, hideOldHomes, hideExistingBackup]);
+  }, [mode, selectedGeoid, selectedCity, selectedZip, hideOldHomes, hideExistingBackup, tierFilter]);
 
   useEffect(() => {
     return () => {
@@ -459,6 +472,7 @@ export function RankingBoard({
         withTotal: false,
         hideOldHomes,
         excludeBackup: hideExistingBackup,
+        tier: tierFilter,
       });
       if (mySeq !== predictedSeqRef.current) return;
       setPredictedRows(page.rows);
@@ -600,6 +614,8 @@ export function RankingBoard({
       else params.delete("zip");
       if (selectedGeoid !== null) params.set("bg", selectedGeoid);
       else params.delete("bg");
+      if (tierFilter !== "all") params.set("tier", tierFilter);
+      else params.delete("tier");
       const next = `${window.location.pathname}?${params.toString()}`;
       if (`${window.location.pathname}${window.location.search}` !== next) {
         window.history.replaceState(window.history.state, "", next);
@@ -607,32 +623,29 @@ export function RankingBoard({
     }, DEBOUNCE_MS);
     return () => clearTimeout(syncTimer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, weights, hideExistingBackup, hideOldHomes, selectedCity, selectedZip, selectedGeoid]);
-
-  const countyTop10 = countyTotals(geoRollup).top10Count;
+  }, [mode, weights, hideExistingBackup, hideOldHomes, selectedCity, selectedZip, selectedGeoid, tierFilter]);
 
   // M-drilldown (item 3, revised): shared drill-down state for the three
-  // <select>s, the "Top areas" bucket strip, and the map's fitToGeoids --
-  // computed once per render (geoRollup is small: one row per city/ZIP/
-  // block-group tuple) rather than three separate inline computations.
+  // <select>s and the map's fitToGeoids -- computed once per render
+  // (geoRollup is small: one row per city/ZIP/block-group tuple) rather
+  // than three separate inline computations.
   const rowsForCity = selectedCity !== null ? filterRows(geoRollup, { city: selectedCity }) : geoRollup;
   const rowsForZip = selectedZip !== null ? filterRows(rowsForCity, { zip: selectedZip }) : rowsForCity;
+  // Map shading (layout-review pivot): share of each block group's homes
+  // in decile 1 ("Top priority"), straight from the same api.home_geo_
+  // rollup rows already fetched for the dropdowns -- no second query.
+  // A block group with 0 homes never appears here (its geoRollup row
+  // wouldn't exist), so this is never a divide-by-zero.
+  const priorityByGeoid = new Map<string, number>();
+  for (const r of geoRollup) {
+    if (r.blockGroupGeoid && r.homeCount > 0) {
+      priorityByGeoid.set(r.blockGroupGeoid, r.top10Count / r.homeCount);
+    }
+  }
+
   const cityBuckets = bucketBy(geoRollup, (r) => r.situsCity ?? "");
   const zipBuckets = bucketBy(rowsForCity, (r) => r.situsZip ?? "");
-  const bgBuckets = bucketBy(rowsForZip, (r) => r.blockGroupGeoid);
-  // "Top areas" strip: the next drill level down from wherever the visitor
-  // currently is, ranked by top10Count (count of the county's top-10%
-  // homes in that area) rather than plain home count, per the
-  // coordinator's revised spec -- capped at 5 so it reads as a strip, not
-  // another table.
-  const topAreasLevel: "city" | "zip" | "blockGroup" | null =
-    selectedGeoid !== null ? null : selectedZip !== null ? "blockGroup" : selectedCity !== null ? "zip" : "city";
-  const topAreasBuckets = (
-    topAreasLevel === "city" ? cityBuckets : topAreasLevel === "zip" ? zipBuckets : topAreasLevel === "blockGroup" ? bgBuckets : []
-  )
-    .slice()
-    .sort((a, b) => b.top10Count - a.top10Count)
-    .slice(0, 5);
+  const bgBuckets = bucketBy(rowsForZip, (r) => r.blockGroupGeoid ?? "");
   // Map follow (coordinator's revised spec): fit to the selected area's
   // block groups, not only a single block-group selection -- the rollup
   // (already filtered to the current city/ZIP) IS that set of block
@@ -652,18 +665,27 @@ export function RankingBoard({
     <div className="ranking-board">
       <div className="ranking-board__rail">
         {leftRail}
-        <Panel>
-          <h2
+        {/* Ranking is ordered by the model's likelihood by default (T-review
+            item: "not on the default path"). Manager-only choices --
+            switching to a team-weighted score, and the sliders that drive
+            it -- live behind this disclosure so a rep opening this page
+            never has to look at them. Closed by default. */}
+        <Panel as="details" data-testid="adjust-priorities-disclosure">
+          <summary
             style={{
+              cursor: "pointer",
               fontFamily: "var(--type-heading-font-family)",
               fontSize: "var(--type-heading-font-size)",
               fontWeight: "var(--type-heading-font-weight)",
-              margin: "0 0 var(--space-2) 0",
             }}
           >
-            Rank homes by
-          </h2>
-          <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-2)" }}>
+            Adjust priorities (team choice)
+          </summary>
+          <p style={{ margin: "var(--space-2) 0 var(--space-3) 0", fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)" }}>
+            The list below is ordered by the model&rsquo;s likelihood of adding backup by default. Switch to a
+            team-weighted score only if your team wants to rank by its own signal mix instead.
+          </p>
+          <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-2)", marginBottom: "var(--space-4)" }}>
             <label style={{ display: "flex", alignItems: "flex-start", gap: "var(--space-2)" }}>
               <input
                 type="radio"
@@ -673,9 +695,9 @@ export function RankingBoard({
                 data-testid="ranking-mode-predicted"
               />
               <span>
-                <strong>Most likely to add backup</strong> (predicted)
+                <strong>Most likely to add backup</strong> (default)
                 <div style={{ fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)" }}>
-                  A model trained on real installs -- see &ldquo;How we know it works&rdquo; below.
+                  A model trained on real installs — see &ldquo;How leads are prioritized&rdquo; for the accuracy check.
                 </div>
               </span>
             </label>
@@ -695,37 +717,12 @@ export function RankingBoard({
               </span>
             </label>
           </div>
-        </Panel>
-        <Panel data-testid="prediction-proof-panel">
-          <h2
-            style={{
-              fontFamily: "var(--type-heading-font-family)",
-              fontSize: "var(--type-heading-font-size)",
-              fontWeight: "var(--type-heading-font-weight)",
-              margin: "0 0 var(--space-2) 0",
-            }}
-          >
-            How we know it works
-          </h2>
-          <PredictionProof modelCard={modelCard} />
-        </Panel>
-        {/* M4-W2: WeightSliders' own "Weights" heading is owned by a
-            different ticket (M2-W1) and isn't editable here, so the
-            "Team adjustment (optional)" label wraps it as an outer
-            heading instead of replacing the inner one -- reported as a
-            deviation. Moving any slider switches to Team-weighted mode,
-            since a slider has no effect while predicted mode is active. */}
-        <div>
-          <h2
-            style={{
-              fontFamily: "var(--type-heading-font-family)",
-              fontSize: "var(--type-heading-font-size)",
-              fontWeight: "var(--type-heading-font-weight)",
-              margin: "0 0 var(--space-2) 0",
-            }}
-          >
-            Team adjustment (optional)
-          </h2>
+          {/* M4-W2: WeightSliders' own "Weights" heading is owned by a
+              different ticket (M2-W1) and isn't editable here, so the
+              "Team adjustment (optional)" label wraps it as an outer
+              heading instead of replacing the inner one -- reported as a
+              deviation. Moving any slider switches to Team-weighted mode,
+              since a slider has no effect while predicted mode is active. */}
           <WeightSliders
             weights={weights}
             onChange={(next) => {
@@ -735,7 +732,10 @@ export function RankingBoard({
             onReset={() => setWeights(equalWeights())}
             defaultWeights={defaultWeights}
           />
-        </div>
+        </Panel>
+        <p style={{ margin: 0, fontSize: "var(--type-label-font-size)" }}>
+          <Link href="/sources#how-leads-are-prioritized">How leads are prioritized &amp; the model&rsquo;s accuracy check →</Link>
+        </p>
         <Panel>
           <label style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", fontSize: "var(--type-body-font-size)" }}>
             <input
@@ -766,19 +766,21 @@ export function RankingBoard({
         </Panel>
       </div>
 
-      <Panel style={{ display: "flex", flexDirection: "column", minHeight: 0, height: "100%" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: "var(--space-2)" }}>
-          <h2
-            style={{
-              fontFamily: "var(--type-heading-font-family)",
-              fontSize: "var(--type-heading-font-size)",
-              fontWeight: "var(--type-heading-font-weight)",
-              margin: 0,
-            }}
-          >
-            Block groups by weighted score
-          </h2>
-        </div>
+      <Panel className="ranking-board__map-panel" style={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
+        {/* Layout-review pivot: the map is the dominant surface now (its
+            own legend, top-left on the map itself, states what the
+            shading means in one line) -- this heading is just a plain
+            section label, not a second explanation. */}
+        <h2
+          style={{
+            fontFamily: "var(--type-heading-font-family)",
+            fontSize: "var(--type-heading-font-size)",
+            fontWeight: "var(--type-heading-font-weight)",
+            margin: "0 0 var(--space-2) 0",
+          }}
+        >
+          {mode === "predicted" ? "Priority by area" : "Team-weighted score (a separate view)"}
+        </h2>
         <div style={{ flex: "1 1 auto", minHeight: 0 }}>
           <BlockGroupMap
             key={countyFips}
@@ -793,6 +795,8 @@ export function RankingBoard({
             hoveredPropId={hoveredPropId}
             onDotHover={handleDotHover}
             fitToGeoids={fitToGeoids}
+            priorityByGeoid={mode === "predicted" ? priorityByGeoid : null}
+            shadeLabel={mode === "predicted" ? "top-priority homes" : "weighted score"}
           />
         </div>
       </Panel>
@@ -818,17 +822,17 @@ export function RankingBoard({
               {(mode === "weighted" ? loading : predictedLoading) ? "Re-ranking…" : ""}
             </span>
           </div>
-          <p style={{ margin: "var(--space-1) 0 0 0", fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)" }}>
-            {mode === "weighted"
-              ? "Click a home to see the full score breakdown below."
-              : "Ranked by the model's predicted 12-month likelihood."}
-          </p>
+          {mode === "weighted" ? (
+            <p style={{ margin: "var(--space-1) 0 0 0", fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)" }}>
+              Click a home to see the full score breakdown below.
+            </p>
+          ) : null}
 
           <div
             data-testid="geo-drilldown"
-            style={{ display: "flex", flexWrap: "wrap", gap: "var(--space-3)", marginTop: "var(--space-2)" }}
+            style={{ display: "flex", flexWrap: "nowrap", gap: "var(--space-3)", marginTop: "var(--space-2)" }}
           >
-            <label style={{ display: "flex", flexDirection: "column", gap: "2px", fontSize: "var(--type-label-font-size)" }}>
+            <label style={{ display: "flex", flexDirection: "column", gap: "2px", fontSize: "var(--type-label-font-size)", flex: "1 1 0", minWidth: 0 }}>
               City
               <select
                 data-testid="drilldown-city"
@@ -843,7 +847,7 @@ export function RankingBoard({
                 ))}
               </select>
             </label>
-            <label style={{ display: "flex", flexDirection: "column", gap: "2px", fontSize: "var(--type-label-font-size)" }}>
+            <label style={{ display: "flex", flexDirection: "column", gap: "2px", fontSize: "var(--type-label-font-size)", flex: "1 1 0", minWidth: 0 }}>
               ZIP
               <select
                 data-testid="drilldown-zip"
@@ -858,7 +862,7 @@ export function RankingBoard({
                 ))}
               </select>
             </label>
-            <label style={{ display: "flex", flexDirection: "column", gap: "2px", fontSize: "var(--type-label-font-size)" }}>
+            <label style={{ display: "flex", flexDirection: "column", gap: "2px", fontSize: "var(--type-label-font-size)", flex: "1 1 0", minWidth: 0 }}>
               Neighborhood
               <select
                 data-testid="drilldown-blockgroup"
@@ -874,54 +878,6 @@ export function RankingBoard({
               </select>
             </label>
           </div>
-          <p style={{ margin: "var(--space-1) 0 0 0", fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)" }}>
-            Dropdown counts include homes that already have backup, so they won&rsquo;t match the list total when
-            &ldquo;Hide homes that already have backup&rdquo; is on.
-          </p>
-
-          {topAreasLevel !== null && topAreasBuckets.length > 0 ? (
-            // Coordinator's revised spec: first paint keeps the ranked
-            // HOMES list front and center; this strip is a compact
-            // shortcut into it, not a replacement -- top ~5 areas by
-            // count of the county's top-10% homes, clickable to drill
-            // down exactly like the <select>s above. Predicted-mode-only
-            // averages (avg/best likelihood) would need a live per-request
-            // computation in weighted mode, so weighted mode's strip shows
-            // counts only.
-            <div style={{ marginTop: "var(--space-3)" }} data-testid="top-areas-strip">
-              <h3
-                style={{
-                  fontFamily: "var(--type-label-font-family)",
-                  fontSize: "var(--type-label-font-size)",
-                  fontWeight: "var(--type-label-font-weight)",
-                  color: "var(--theme-ink-muted)",
-                  margin: "0 0 var(--space-1) 0",
-                }}
-              >
-                Top areas by share of the county&rsquo;s top 10%
-              </h3>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--space-2)" }}>
-                {topAreasBuckets.map((b) => {
-                  const label =
-                    topAreasLevel === "blockGroup" ? blockGroupLabel(b.key) : b.key || (topAreasLevel === "city" ? "No city on file" : "No ZIP on file");
-                  const onPick = () =>
-                    topAreasLevel === "city" ? handleSelectCity(b.key) : topAreasLevel === "zip" ? handleSelectZip(b.key) : handleSelectGeoid(b.key);
-                  return (
-                    <button
-                      key={b.key || NULL_BUCKET_VALUE}
-                      type="button"
-                      className="chip"
-                      onClick={onPick}
-                      data-testid="top-area-chip"
-                      style={{ cursor: "pointer", border: "none" }}
-                    >
-                      {label} &mdash; {mode === "predicted" && countyTop10 > 0 ? `${((b.top10Count / countyTop10) * 100).toFixed(1)}% of top 10%` : `${b.homeCount.toLocaleString()} homes`}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          ) : null}
 
           {selectedCity !== null || selectedZip !== null || selectedGeoid !== null ? (
             <div
@@ -1035,7 +991,7 @@ export function RankingBoard({
             Close
           </button>
         </div>
-        <ScoreExplainer propId={explainPropId} weights={weights} />
+        <ScoreExplainer propId={explainPropId} weights={weights} countyName={countyName} />
       </Panel>
     ) : null}
     </div>

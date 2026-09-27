@@ -10,6 +10,12 @@ import {
   DataTableRow,
 } from "../../components/ui/DataTable";
 import { CopyShaButton } from "../../components/ui/CopyShaButton";
+import { PredictionProof } from "../../components/PredictionProof";
+import { QualityPanel } from "../../components/QualityPanel";
+import { getModelCard } from "../../lib/modelCard.server";
+import { getQualityPanelData } from "../../lib/qualityPanel.server";
+import { allTierMeta, REASON_PHRASES } from "../../lib/priorityTier";
+import { DEFAULT_COUNTY } from "../../lib/counties";
 
 // M0-W2: "the demo's proof that every number is real." Lists every
 // api.sources row (M0-S1) — every ops.source_manifest row joined to its
@@ -83,14 +89,140 @@ function truncateSha(sha256: string): string {
 }
 
 export default async function SourcesPage() {
-  const rows = await query<SourceRow>(
-    `select source_id, source, url, retrieved_at, sha256, bytes, rows, runner, latest_run_status
-     from api.sources
-     order by retrieved_at desc`
-  );
+  const [rows, modelCard, qualityData] = await Promise.all([
+    query<SourceRow>(
+      `select source_id, source, url, retrieved_at, sha256, bytes, rows, runner, latest_run_status
+       from api.sources
+       order by retrieved_at desc`
+    ),
+    getModelCard(),
+    getQualityPanelData(DEFAULT_COUNTY.fips),
+  ]);
 
   return (
-    <Panel>
+    <div style={{ display: "grid", gap: "var(--space-6)" }}>
+      <Panel as="details" id="how-leads-are-prioritized" open>
+        <summary
+          style={{
+            cursor: "pointer",
+            fontFamily: "var(--type-title-font-family)",
+            fontSize: "var(--type-title-font-size)",
+            fontWeight: "var(--type-title-font-weight)",
+          }}
+        >
+          How leads are prioritized
+        </summary>
+
+        <p style={{ margin: "var(--space-3) 0 var(--space-4) 0", maxWidth: "70ch", textWrap: "pretty" }}>
+          Every home is scored by a model trained on which Austin homes actually added battery or generator backup.
+          That score orders every lead list and area ranking on this site, but no rep or manager ever sees the raw
+          number -- only the plain tier it falls into and the plain-language reasons behind it.
+        </p>
+
+        <h2
+          style={{
+            fontFamily: "var(--type-heading-font-family)",
+            fontSize: "var(--type-heading-font-size)",
+            fontWeight: "var(--type-heading-font-weight)",
+            margin: "0 0 var(--space-2) 0",
+          }}
+        >
+          Priority tiers
+        </h2>
+        <p style={{ margin: "0 0 var(--space-2) 0", color: "var(--theme-ink-muted)", maxWidth: "70ch" }}>
+          Homes are split into ten deciles per county by the model&rsquo;s score (decile 1 = the county&rsquo;s
+          highest-likelihood tenth). Deciles map to tiers like this:
+        </p>
+        <DataTable style={{ marginBottom: "var(--space-4)" }}>
+          <DataTableHead>
+            <DataTableRow>
+              <DataTableHeaderCell>Tier</DataTableHeaderCell>
+              <DataTableHeaderCell>Decile</DataTableHeaderCell>
+              <DataTableHeaderCell>What it means</DataTableHeaderCell>
+            </DataTableRow>
+          </DataTableHead>
+          <DataTableBody>
+            {allTierMeta()
+              .filter((t) => t.key !== "unscored")
+              .map((t) => (
+                <DataTableRow key={t.key}>
+                  <DataTableCell style={{ fontWeight: 600 }}>{t.label}</DataTableCell>
+                  <DataTableCell>
+                    {t.key === "top" ? "1" : t.key === "high" ? "2-3" : t.key === "medium" ? "4-6" : "7-10"}
+                  </DataTableCell>
+                  <DataTableCell>{t.description}</DataTableCell>
+                </DataTableRow>
+              ))}
+          </DataTableBody>
+        </DataTable>
+
+        <h2
+          style={{
+            fontFamily: "var(--type-heading-font-family)",
+            fontSize: "var(--type-heading-font-size)",
+            fontWeight: "var(--type-heading-font-weight)",
+            margin: "0 0 var(--space-2) 0",
+          }}
+        >
+          What the reasons mean
+        </h2>
+        <p style={{ margin: "0 0 var(--space-2) 0", color: "var(--theme-ink-muted)", maxWidth: "70ch" }}>
+          Each home&rsquo;s reasons are the model&rsquo;s own top-3 contributions, relabeled in plain, rep-facing
+          words:
+        </p>
+        <ul style={{ margin: "0 0 var(--space-4) 0", paddingLeft: "1.2em", color: "var(--theme-ink-muted)", maxWidth: "70ch" }}>
+          {Object.entries(REASON_PHRASES).map(([modelLabel, phrase]) => (
+            <li key={modelLabel}>
+              <strong style={{ color: "var(--theme-ink)" }}>{phrase}</strong> — model term: {modelLabel}
+            </li>
+          ))}
+        </ul>
+
+        <h2
+          style={{
+            fontFamily: "var(--type-heading-font-family)",
+            fontSize: "var(--type-heading-font-size)",
+            fontWeight: "var(--type-heading-font-weight)",
+            margin: "0 0 var(--space-2) 0",
+          }}
+        >
+          The model&rsquo;s accuracy check
+        </h2>
+        <PredictionProof modelCard={modelCard} />
+
+        <p style={{ margin: "var(--space-4) 0 0 0", fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)", maxWidth: "70ch" }}>
+          The model is trained and evaluated on Austin (Travis County) permits only. Predictions for Harris and
+          Williamson County homes are transferred from that same model -- they are not locally validated against
+          Harris or Williamson installs.
+        </p>
+
+        {/* QualityPanel renders its own heading + surface; per DESIGN.md
+            "panels never nest," this <details> section stops being a
+            <Panel> surface visually here (details' own bg already reads
+            as one card) -- QualityPanel's own Panel is the actual
+            methodology card, same treatment the rest of /sources gives
+            each self-contained methods section. */}
+        <QualityPanel data={qualityData} countyName={DEFAULT_COUNTY.name} />
+
+        <h2
+          style={{
+            fontFamily: "var(--type-heading-font-family)",
+            fontSize: "var(--type-heading-font-size)",
+            fontWeight: "var(--type-heading-font-weight)",
+            margin: "var(--space-4) 0 var(--space-2) 0",
+          }}
+        >
+          What &ldquo;not available&rdquo; means
+        </h2>
+        <p style={{ margin: 0, color: "var(--theme-ink-muted)", maxWidth: "70ch" }}>
+          A home&rsquo;s missing signal is never treated as zero and never estimated. &ldquo;Not loaded&rdquo; means
+          the pipeline that would fill it hasn&rsquo;t run yet; &ldquo;not available&rdquo; means the publisher
+          itself doesn&rsquo;t report that figure for this home. Either way, that signal is left out of the home&rsquo;s
+          score rather than counted against it.
+        </p>
+      </Panel>
+
+      <Panel>
       <h1
         style={{
           fontFamily: "var(--type-title-font-family)",
@@ -177,6 +309,7 @@ export default async function SourcesPage() {
           </div>
         </>
       )}
-    </Panel>
+      </Panel>
+    </div>
   );
 }

@@ -39,6 +39,13 @@ const REASON_LABEL: Record<string, string> = {
   // from the polygon alone -- still ranked/scored, just not counted as
   // Base-servable until confirmed at the address.
   utility_not_confirmed: "Utility not confirmed yet",
+  // M-ccn (not in the DB yet -- added ahead of the pipeline landing these
+  // codes, per the redesign brief): PUCT CCN-mapping outcomes, styled the
+  // same as utility_not_confirmed (a ranked-but-unconfirmed home, not an
+  // exclusion) below.
+  multiply_certificated: "More than one utility is licensed here — not confirmed",
+  no_ccn_match: "No licensed utility found on the state map",
+  ccn_holder_unmapped: "Utility not on Base's list yet",
 };
 
 function labelFor(reason: string): string {
@@ -52,7 +59,12 @@ const NOT_LOADED_REASONS = new Set(["territories_not_loaded", "crosswalk_not_loa
 // without the address. Styled the same as "not yet resolved" (not
 // "excluded"), but never shown with the fail-open caveat below, since
 // that caveat is specifically about the *_not_loaded mechanism.
-const UNCONFIRMED_REASONS = new Set(["utility_not_confirmed"]);
+const UNCONFIRMED_REASONS = new Set([
+  "utility_not_confirmed",
+  "multiply_certificated",
+  "no_ccn_match",
+  "ccn_holder_unmapped",
+]);
 
 function segmentClass(reason: string): string {
   if (reason === "passed") return "gate-funnel__segment--passed";
