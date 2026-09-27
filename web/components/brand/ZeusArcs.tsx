@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { ZEUS_BADGE, arcPath, burst, type Arc } from "../../lib/zeusArcs";
+import { ZEUS_BADGE, arcPath, burst, type Arc, type MarkGeometry } from "../../lib/zeusArcs";
 
 // Live current off the Zeus mark's thunderbolt, drawn as SVG strokes in the
 // mark's own viewBox and laid over it.
@@ -19,13 +19,15 @@ export interface ZeusArcsProps {
   active?: boolean;
   /** stroke width multiplier: 1 for the top bar, ~2.5 for a hero */
   weight?: number;
+  /** which cut of the badge the arcs sit on (icon cut in the top bar) */
+  geometry?: MarkGeometry;
   /** increments to fire a strike on demand */
   strikeKey?: number;
 }
 
 const SESSION_KEY = "zeus-mark-struck";
 
-export function ZeusArcs({ mode, active = false, weight = 1, strikeKey = 0 }: ZeusArcsProps) {
+export function ZeusArcs({ mode, active = false, weight = 1, strikeKey = 0, geometry = ZEUS_BADGE }: ZeusArcsProps) {
   const gRef = useRef<SVGGElement | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const state = useRef({
@@ -91,7 +93,7 @@ export function ZeusArcs({ mode, active = false, weight = 1, strikeKey = 0 }: Ze
 
   function strike() {
     const s = state.current;
-    s.arcs.push(...burst(ZEUS_BADGE, "strike"));
+    s.arcs.push(...burst(geometry, "strike"));
     s.nextStrike = performance.now() + 3000 + Math.random() * 1500;
     svgRef.current?.parentElement?.classList.add("zeus-logo--striking");
     window.setTimeout(() => svgRef.current?.parentElement?.classList.remove("zeus-logo--striking"), 260);
@@ -108,7 +110,7 @@ export function ZeusArcs({ mode, active = false, weight = 1, strikeKey = 0 }: Ze
     const s = state.current;
     const crackling = mode === "loop" ? s.visible : s.active;
     if (crackling && now > s.nextFlicker) {
-      s.arcs.push(...burst(ZEUS_BADGE, "flicker"));
+      s.arcs.push(...burst(geometry, "flicker"));
       s.nextFlicker = now + 60 + Math.random() * 60;
     }
     if (mode === "loop" && s.visible && now > s.nextStrike) strike();
@@ -143,7 +145,7 @@ export function ZeusArcs({ mode, active = false, weight = 1, strikeKey = 0 }: Ze
     <svg
       ref={svgRef}
       className="zeus-arcs"
-      viewBox={`0 0 ${ZEUS_BADGE.w} ${ZEUS_BADGE.h}`}
+      viewBox={`0 0 ${geometry.w} ${geometry.h}`}
       aria-hidden="true"
       focusable="false"
     >

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useState } from "react";
 import { ZeusMark } from "./ZeusMark";
 import { ZeusArcs } from "./ZeusArcs";
+import { ZEUS_BADGE, ZEUS_BADGE_ICON } from "../../lib/zeusArcs";
 
 // The Zeus lockup: the transmission-badge mark plus ZEUS set in Cinzel.
 // The accessible name is the product name, "Base Power Zeus".
@@ -13,7 +14,8 @@ import { ZeusArcs } from "./ZeusArcs";
 //   size "lg": hero / intro sting (full-detail mark), continuous current.
 
 const SIZES = {
-  sm: { mark: 32, word: 19, gap: 8, weight: 1 },
+  // top bar: grows with the window (36 px at 1440 wide, ~42 at 2000, 56 at 3000+)
+  sm: { mark: "clamp(36px, 1.4vw + 14px, 56px)", word: "clamp(20px, 0.7vw + 10px, 30px)", gap: "clamp(8px, 0.4vw, 12px)", weight: 1.15 },
   md: { mark: 64, word: 34, gap: 12, weight: 1.4 },
   lg: { mark: 220, word: 96, gap: 28, weight: 1.8 },
 } as const;
@@ -32,8 +34,16 @@ export function ZeusLogo({ size = "sm", href, motion = size === "lg" ? "loop" : 
   const body = (
     <>
       <span className="zeus-logo__markwrap" style={{ height: s.mark }}>
-        <ZeusMark height={s.mark} />
-        {motion !== "none" ? <ZeusArcs mode={motion} active={active} weight={s.weight} strikeKey={strikeKey} /> : null}
+        <ZeusMark height={s.mark} tier={size === "lg" ? "full" : "icon"} />
+        {motion !== "none" ? (
+          <ZeusArcs
+            mode={motion}
+            active={active}
+            weight={s.weight}
+            strikeKey={strikeKey}
+            geometry={size === "lg" ? ZEUS_BADGE : ZEUS_BADGE_ICON}
+          />
+        ) : null}
       </span>
       <span className="zeus-logo__word" style={{ fontSize: s.word }}>
         ZEUS

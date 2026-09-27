@@ -177,6 +177,7 @@ Hex values are Base's own, extracted from the live site. Contrast was checked ag
 
 ### Brand mark
 - The Zeus mark is an engraved fist gripping a thunderbolt inside a sunburst roundel over transmission towers (`web/public/brand/zeus-badge-*`, `web/components/brand/`). The engraving is `brand-strong` on light and `dark-ink` on dark (`--theme-brand-mark-ink`).
+- Two cuts of the same badge: the full engraving for hero and intro sizes, and a bold small-size cut (`zeus-badge-*-icon.svg`, heavy lines, few rays) for the top bar and icons, so the fist stays legible at 32-64 px. The top-bar lockup scales with the window (`clamp`), 36 px tall at 1440 wide up to 56 px on very wide screens.
 - **Brand gold** #f7c33c (Base's `--color-brand-gold`, `--color-brand-gold` here) fills the mark's bolt and its animated current, and nothing else in the chrome. In data it keeps its grid-value signal meaning; the mark never sits inside a chart.
 
 ### Named Rules

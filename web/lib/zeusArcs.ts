@@ -34,6 +34,21 @@ export const ZEUS_BADGE: MarkGeometry = {
   boltLen: 1943.3,
 };
 
+/** The bold small-size cut of the badge (public/brand/zeus-badge-*-icon.svg):
+ * same composition drawn with heavy lines so the fist reads at 32-64 px. */
+export const ZEUS_BADGE_ICON: MarkGeometry = {
+  w: 1942,
+  h: 1952,
+  tipA: [203.0, 194.7],
+  tipB: [1765.9, 1449.2],
+  center: [1010.0, 867.0],
+  grip: [
+    [720.2, 643.1],
+    [1187.9, 1004.4],
+  ],
+  boltLen: 2063.4,
+};
+
 export interface Arc {
   pts: Pt[];
   /** stroke width multiplier */
