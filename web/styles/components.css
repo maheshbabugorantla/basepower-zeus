@@ -2470,6 +2470,24 @@ button:focus-visible,
   right: auto;
 }
 
+/* Both rail popovers (Filters, Adjust priorities) anchor to the controls
+ * row, not to their own button: a 380px panel hung off "Adjust priorities"
+ * ran past the rail's left edge, where the map covered it. From the row's
+ * left edge, capped at the row's width, every panel stays inside the rail. */
+.ranking-rail__controls {
+  position: relative;
+}
+
+.ranking-rail__controls .popover-anchor {
+  position: static;
+}
+
+.ranking-rail__controls .popover-panel {
+  left: 0;
+  right: auto;
+  max-width: 100%;
+}
+
 /* The one native select left in the Filters popover (Priority tier) matches
  * the type-ahead fields beside it. */
 .popover-panel select {

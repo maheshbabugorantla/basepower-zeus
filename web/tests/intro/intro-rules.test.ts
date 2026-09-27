@@ -87,7 +87,8 @@ describe("timeline", () => {
     expect(T.glideStart).toBeGreaterThanOrEqual(T.funnelOut);
     expect(T.provenanceClose).toBeLessThan(T.stingIn);
     expect(T.restore).toBeGreaterThan(T.stingIn); // the page resets behind the sting, never in view
-    expect(REEL_MS).toBeLessThanOrEqual(12000);
+    // paced for reading, but still well under half a minute
+    expect(REEL_MS).toBeLessThanOrEqual(21000);
   });
   it("seg clamps to 0..1", () => {
     expect(seg(-5, 0, 10)).toBe(0);

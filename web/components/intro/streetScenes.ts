@@ -228,7 +228,7 @@ export function drawStreetScenes(
       ctx.fillRect(0, 0, VW, VH);
     }
 
-    const ca = seg(t, 500, 900) * (1 - seg(t, 2150, 2400));
+    const ca = seg(t, 500, 900) * (1 - seg(t, T.streetOut - 150, T.streetOut + 100));
     caption(ctx, stormLines, stormSub, ca, (1 - easeOutExpo(seg(t, 500, 1000))) * 10, safe);
     if (t > T.streetOut) {
       ctx.fillStyle = `rgba(0,0,0,${seg(t, T.streetOut, T.streetOut + 150)})`;
@@ -274,7 +274,7 @@ export function drawStreetScenes(
     ctx.fillRect(0, 0, VW, VH);
     ctx.restore();
 
-    const ca = seg(t, T.porchCaption, T.porchCaption + 300) * (1 - seg(t, 3500, T.dissolveStart));
+    const ca = seg(t, T.porchCaption, T.porchCaption + 300) * (1 - seg(t, T.dissolveStart - 200, T.dissolveStart));
     if (ca > 0) {
       ctx.save();
       ctx.globalAlpha = ca;

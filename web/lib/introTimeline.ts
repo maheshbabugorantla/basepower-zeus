@@ -6,27 +6,30 @@
 // plus its own small overlays (the funnel counter, captions, the sting).
 
 export const T = {
+  // Paced for reading: each beat holds long enough to take in its words and
+  // figures (about 3 s per caption, 4.5 s for the funnel count). Motion keeps
+  // its speed; only the holds between moves grew.
   streetIn: 0,
   stormStart: 250,
   strike: 960,
   windowsOut: 1080,
-  streetOut: 2300,
-  porchIn: 2300,
-  porchCaption: 2700,
-  dissolveStart: 3700,
-  dissolveEnd: 4600,
-  funnelIn: 4300,
-  funnelOut: 6100,
-  waveStart: 4300,
-  waveEnd: 6000,
-  glideStart: 6100,
-  glideEnd: 7300,
-  provenanceOpen: 7500,
-  provenanceClose: 8600,
-  stingIn: 8800,
-  restore: 9000,
-  stingOut: 9700,
-  end: 10300,
+  streetOut: 4000,
+  porchIn: 4000,
+  porchCaption: 4400,
+  dissolveStart: 6400,
+  dissolveEnd: 7300,
+  funnelIn: 7000,
+  funnelOut: 11500,
+  waveStart: 7000,
+  waveEnd: 11400,
+  glideStart: 11500,
+  glideEnd: 12700,
+  provenanceOpen: 14700,
+  provenanceClose: 17700,
+  stingIn: 17900,
+  restore: 18100,
+  stingOut: 19700,
+  end: 20300,
 } as const;
 
 export const REEL_MS = T.end;

@@ -42,7 +42,7 @@ Full-quality recording: [`docs/media/zeus-demo.mp4`](docs/media/zeus-demo.mp4) (
 Two audiences use the same screen:
 
 - **A Base growth or territory analyst at a desk** deciding which neighborhoods and homes to approach next, and why. The home record, the signal breakdown and the Sources page reward a close look.
-- **A room watching a projector for five minutes.** The first visit plays a short intro reel (about 11 seconds) that ends on the live ranking, and the ranked list, the map and the case sentence read from across the room.
+- **A room watching a projector for five minutes.** The first visit plays a short intro reel (about 20 seconds) that ends on the live ranking, and the ranked list, the map and the case sentence read from across the room.
 
 | Page | What it answers |
 |---|---|
@@ -90,7 +90,7 @@ Useful URLs while developing:
 
 **On the live app** (no setup): open https://base-power-zeus.vercel.app/?intro and follow the same path as the demo video.
 
-1. The intro reel plays (about 11 seconds) and lands on **Ranking** for Travis County, with rank 1 expanded.
+1. The intro reel plays (about 20 seconds) and lands on **Ranking** for Travis County, with rank 1 expanded.
 2. Click a highlighted figure in rank 1's case sentence: its source opens (dataset, retrieval time, SHA-256, raw file).
 3. Switch to **Team priorities**, open **Adjust priorities**, and move a slider; the list re-ranks and the map re-shades.
 4. Open **Filters** and pick `78731` in ZIP; the camera glides to the ZIP and the list narrows.
