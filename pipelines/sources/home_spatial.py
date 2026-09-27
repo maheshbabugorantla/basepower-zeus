@@ -67,6 +67,7 @@ SOURCE = "home_spatial"
 BATCH_SIZE = 20_000
 HARRIS_FIPS = "48201"
 WILLIAMSON_FIPS = "48491"
+TRAVIS_FIPS = "48453"
 HARRIS_PIN_EIA_ID = "8901"
 
 Runner = Literal["cron", "cli"]
@@ -98,17 +99,67 @@ geo as (
     left join core.parcel_geoms pg on pg.prop_id = b.prop_id
 ),
 bg_match as (
+    -- Data-correctness fix (2026-09-26, cross-county block-group bug):
+    -- the live version of this lateral join matched g.pt against EVERY
+    -- county's block groups with no county scoping at all, so a parcel
+    -- near a county line could silently pick up a NEIGHBORING county's
+    -- GEOID via ST_Within (verified live: 42 Williamson/WCAD parcels
+    -- matched a Travis 48453-prefixed block group, 110 Harris/HCAD
+    -- parcels matched Fort Bend/Montgomery/Waller block groups, plus
+    -- unverified Travis/TCAD crossings into Bastrop/Hays/Comal). HCAD
+    -- and WCAD each appraise only their own county (pipelines/sources/
+    -- hcad_parcels.py, wcad_parcels.py -- no documented cross-county
+    -- roll for either), so any match outside g.county_fips for those
+    -- counties is a real bug, not a real home -- fixed here by scoping
+    -- the match to g.county_fips.
+    --
+    -- The ONE exception, kept exactly as-is: TCAD (Travis, 48453) is
+    -- separately verified and DOCUMENTED to appraise some parcels whose
+    -- real geometry sits inside Williamson (48491) -- see
+    -- pipelines/sources/wcad_parcels.py's module docstring ("The 137
+    -- TCAD-rolled parcels already sitting in Williamson... county
+    -- assignment is geometry-based, not the parcel's own county_fips
+    -- attribute", per 0102_m1_materialize.sql) and that module's own
+    -- overlap-dedup logic built specifically around this fact. Every
+    -- OTHER cross-county match this fix drops was never documented or
+    -- verified anywhere in this repo, so per the real-data rule
+    -- ("nothing invented") it is not assumed real -- those rows get a
+    -- null block_group_geoid instead (missing means empty, never a
+    -- force-assigned neighboring-county GEOID).
     select
         g.prop_id,
         bg.geoid as block_group_geoid,
-        bg.source_id as bg_source_id
+        bg.source_id as bg_source_id,
+        -- Follow-up fix (coordinator, same 2026-09-26 session): a home
+        -- whose point only matches a NEIGHBORING county's block group
+        -- (rejected by the scoping above) must still get an honest
+        -- reason, not just a bare null -- distinguished here from a
+        -- point that matches no block group at all in ANY county
+        -- (a real coverage gap, e.g. core.block_groups missing rows).
+        case
+            when bg.geoid is not null then null
+            when g.pt is null then 'no_parcel_point'
+            when any_bg.geoid is not null then 'no_block_group_in_county'
+            else 'point_outside_loaded_block_groups'
+        end as block_group_null_reason
     from geo g
     left join lateral (
         select bg.geoid, bg.source_id
         from core.block_groups bg
-        where g.pt is not null and extensions.ST_Within(g.pt, bg.geom)
+        where g.pt is not null
+          and extensions.ST_Within(g.pt, bg.geom)
+          and (
+              bg.county_fips = g.county_fips
+              or (g.county_fips = %(travis_fips)s and bg.county_fips = %(williamson_fips)s)
+          )
         limit 1
     ) bg on true
+    left join lateral (
+        select bg2.geoid
+        from core.block_groups bg2
+        where g.pt is not null and extensions.ST_Within(g.pt, bg2.geom)
+        limit 1
+    ) any_bg on true
 ),
 county_flood_loaded as (
     select distinct bg.county_fips
@@ -224,6 +275,7 @@ select
     r.pt,
     bm.block_group_geoid,
     bm.bg_source_id,
+    bm.block_group_null_reason,
     fm.in_sfha,
     fm.flood_source_id,
     fm.flood_null_reason,
@@ -252,7 +304,8 @@ select
         coalesce(r.crosswalk_source_id::text, '') || '|' ||
         coalesce(fm.flood_source_id::text, '') || '|' ||
         coalesce(r.resolved_territory_eia_id, '') || '|' ||
-        coalesce(r.territory_basis, '')
+        coalesce(r.territory_basis, '') || '|' ||
+        coalesce(bm.block_group_null_reason, '')
     ) as input_hash
 from resolved r
 left join bg_match bm on bm.prop_id = r.prop_id
@@ -263,6 +316,7 @@ order by r.prop_id
 
 _STAGE_COLUMNS = (
     "prop_id", "county_fips", "pt", "block_group_geoid", "bg_source_id",
+    "block_group_null_reason",
     "in_sfha", "flood_source_id", "flood_null_reason", "territory_candidates",
     "resolved_territory_eia_id", "territory_source_id", "territory_basis",
     "territory_null_reason", "territory_gate_reason", "crosswalk_source_id",
@@ -276,7 +330,7 @@ def _ensure_staging_table(conn: psycopg.Connection) -> None:
             """
             create temporary table if not exists home_spatial_stage (
                 prop_id text, county_fips text, pt extensions.geometry(point, 4326),
-                block_group_geoid text, bg_source_id uuid,
+                block_group_geoid text, bg_source_id uuid, block_group_null_reason text,
                 in_sfha boolean, flood_source_id uuid, flood_null_reason text,
                 territory_candidates text[], resolved_territory_eia_id text,
                 territory_source_id uuid, territory_basis text,
@@ -320,6 +374,7 @@ def _run_batch(conn: psycopg.Connection, *, county_fips: str, after_prop_id: str
                 "limit": limit,
                 "harris_fips": HARRIS_FIPS,
                 "williamson_fips": WILLIAMSON_FIPS,
+                "travis_fips": TRAVIS_FIPS,
                 "harris_pin_eia_id": HARRIS_PIN_EIA_ID,
             },
         )
@@ -339,6 +394,7 @@ def _run_batch(conn: psycopg.Connection, *, county_fips: str, after_prop_id: str
                 pt = excluded.pt,
                 block_group_geoid = excluded.block_group_geoid,
                 bg_source_id = excluded.bg_source_id,
+                block_group_null_reason = excluded.block_group_null_reason,
                 in_sfha = excluded.in_sfha,
                 flood_source_id = excluded.flood_source_id,
                 flood_null_reason = excluded.flood_null_reason,
