@@ -213,6 +213,36 @@ def test_block_group_never_crosses_into_an_unverified_county():
             )
 
 
+def test_block_group_null_reason_never_missing_when_geoid_is_null():
+    """Follow-up fix (coordinator, 2026-09-26): a home_spatial row with
+    no block_group_geoid must always carry a block_group_null_reason
+    (one of 'no_block_group_in_county', 'point_outside_loaded_block_groups',
+    'no_parcel_point') -- never an unexplained bare null -- so downstream
+    consumers (core.mv_home_block_group, mv_home_signals) can show a real
+    reason instead of silently dropping the home from ranking."""
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            if not _table_exists(cur, "core", "home_spatial"):
+                pytest.skip("core.home_spatial not migrated yet")
+            cur.execute(
+                "select 1 from information_schema.columns "
+                "where table_schema = 'core' and table_name = 'home_spatial' "
+                "and column_name = 'block_group_null_reason'"
+            )
+            if cur.fetchone() is None:
+                pytest.skip("core.home_spatial.block_group_null_reason not migrated yet (0306)")
+            cur.execute("select count(*) from core.home_spatial where block_group_geoid is null")
+            (n,) = cur.fetchone()
+            if n == 0:
+                pytest.skip("no home_spatial rows with a null block group yet")
+            cur.execute(
+                "select count(*) from core.home_spatial "
+                "where block_group_geoid is null and block_group_null_reason is null"
+            )
+            (bad,) = cur.fetchone()
+            assert bad == 0, f"{bad} home_spatial row(s) have a null block_group_geoid with no reason"
+
+
 def test_input_hash_never_null():
     """Every row must carry an input_hash (the incremental-skip key) —
     a null hash would make every future run recompute that row forever."""

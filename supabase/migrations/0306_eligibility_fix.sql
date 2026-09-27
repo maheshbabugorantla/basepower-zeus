@@ -51,15 +51,44 @@ set local max_parallel_workers_per_gather = 0;
 -- verified live (read-only) that 409 core.home_spatial rows currently
 -- carry an unverified cross-county block_group_geoid (110 Harris, 253
 -- Travis, 46 Williamson) -- none of which have any alternate same-county
--- block group also containing their stored point, so this filter simply
--- excludes them (null result downstream, never force-assigned) rather
--- than recomputing anything. The ONE documented, verified exception is
--- kept: TCAD (Travis, 48453) parcels whose real geometry sits inside
--- Williamson (48491) -- see pipelines/sources/wcad_parcels.py's module
--- docstring (the 137-TCAD-rolled-parcels-in-Williamson note, sourced
--- from 0102_m1_materialize.sql's original geometry-based county
--- assignment decision) and that module's own TCAD-in-Williamson overlap
--- dedup logic, which this filter must not contradict.
+-- block group also containing their stored point. The ONE documented,
+-- verified exception is kept: TCAD (Travis, 48453) parcels whose real
+-- geometry sits inside Williamson (48491) -- see
+-- pipelines/sources/wcad_parcels.py's module docstring (the
+-- 137-TCAD-rolled-parcels-in-Williamson note, sourced from
+-- 0102_m1_materialize.sql's original geometry-based county assignment
+-- decision) and that module's own TCAD-in-Williamson overlap dedup
+-- logic, which this filter must not contradict.
+--
+-- Follow-up (coordinator, same session): the first draft of this
+-- migration EXCLUDED the 409 rows from core.mv_home_block_group entirely
+-- (via `block_group_geoid is not null`), which silently dropped those
+-- homes out of core.mv_home_signals / ranking too (mv_home_signals'
+-- `base` CTE inner-joins core.mv_home_block_group). Fixed here: every
+-- eligible home now stays a row in core.mv_home_block_group regardless
+-- of whether a block group resolved -- block_group_geoid is null (never
+-- a force-assigned neighboring-county GEOID) with a
+-- block_group_null_reason explaining why, and the home keeps ranking on
+-- every OTHER signal. Verified this does not break any consumer:
+--   * mv_blockgroup_scores' bg_home_counts/bg_permit_counts group by
+--     block_group_geoid, producing one extra NULL-keyed aggregate row --
+--     that row can never equi-join to a real core.block_groups.geoid
+--     (never null) in bg_rates' `left join ... on hc.block_group_geoid =
+--     bg.geoid`, so it is silently and correctly excluded, same as
+--     before.
+--   * mv_top_homes joins home_bg to mv_blockgroup_scores ON
+--     block_group_geoid and filters `where bs.score is not null` -- a
+--     null-block-group home can't equi-join a score row either, so it's
+--     excluded from this legacy top-50-by-block-group-score leaderboard
+--     only (correct: it has no block-group score to rank by there); the
+--     real ranking path (core.mv_home_signals / api.homes_ranked_weighted,
+--     0304b2, not touched by this migration) reads core.mv_home_block_group
+--     by prop_id and keeps the home with block_group_geoid null.
+--   * core.mv_home_signals_v2's own `acs` CTE already left-joins
+--     core.acs_bg on block_group_geoid and already has an
+--     `a.geoid is null` branch producing 'block_group_not_in_acs' -- a
+--     real, non-invented reason -- so ACS-derived signals for these
+--     homes come out null with that existing reason, unchanged.
 --
 -- Same build-beside + rename-swap + rebind-dependents pattern as
 -- 0304b1_block_group_swap.sql (mv_home_block_group_pre_m3p6 was already
@@ -67,23 +96,52 @@ set local max_parallel_workers_per_gather = 0;
 -- one extra copy of mv_home_block_group only, dropped at the end.
 -- ---------------------------------------------------------------------------
 
+-- Additive, nullable, no rewrite of existing rows: carries the specific
+-- reason pipelines/sources/home_spatial.py's bg_match now computes
+-- ('no_block_group_in_county', 'point_outside_loaded_block_groups',
+-- 'no_parcel_point') once that loader is rerun. Existing rows read back
+-- null here until then -- mv_home_block_group_v2 below falls back to an
+-- honest generic reason for those, never inventing the specific one.
+alter table core.home_spatial add column if not exists block_group_null_reason text;
+
 create materialized view core.mv_home_block_group_v2 as
+with eligible as (
+    select
+        hs.prop_id, hs.county_fips, hs.block_group_geoid, hs.bg_source_id,
+        hs.block_group_null_reason, hs.parcel_source_id, hs.geom_source_id,
+        p.geo_id, p.county_fips as parcel_county_fips
+    from core.home_spatial hs
+    join core.parcels p on p.prop_id = hs.prop_id
+    where (p.imprv_state_cd like 'A1%' or p.land_state_cd like 'A1%')
+      and p.hs_exempt = 'T'
+),
+scoped as (
+    select
+        e.*,
+        (
+            e.block_group_geoid is not null
+            and (
+                left(e.block_group_geoid, 5) = e.parcel_county_fips
+                or (e.parcel_county_fips = '48453' and left(e.block_group_geoid, 5) = '48491')
+            )
+        ) as bg_in_scope
+    from eligible e
+)
 select
-    hs.prop_id,
-    p.geo_id,
-    hs.block_group_geoid,
-    hs.parcel_source_id,
-    hs.geom_source_id,
-    hs.bg_source_id
-from core.home_spatial hs
-join core.parcels p on p.prop_id = hs.prop_id
-where (p.imprv_state_cd like 'A1%' or p.land_state_cd like 'A1%')
-  and p.hs_exempt = 'T'
-  and hs.block_group_geoid is not null
-  and (
-      left(hs.block_group_geoid, 5) = p.county_fips
-      or (p.county_fips = '48453' and left(hs.block_group_geoid, 5) = '48491')
-  );
+    s.prop_id,
+    s.geo_id,
+    case when s.bg_in_scope then s.block_group_geoid else null end as block_group_geoid,
+    s.parcel_source_id,
+    s.geom_source_id,
+    case when s.bg_in_scope then s.bg_source_id else null end as bg_source_id,
+    case
+        when s.bg_in_scope then null
+        -- home_spatial not yet rerun with the fix: the stored GEOID is a
+        -- real cross-county match this view must not surface.
+        when s.block_group_geoid is not null then 'no_block_group_in_county'
+        else coalesce(s.block_group_null_reason, 'block_group_not_available')
+    end as block_group_null_reason
+from scoped s;
 
 create unique index mv_home_block_group_v2_prop_id_idx on core.mv_home_block_group_v2 (prop_id);
 create index mv_home_block_group_v2_bg_geoid_idx on core.mv_home_block_group_v2 (block_group_geoid);

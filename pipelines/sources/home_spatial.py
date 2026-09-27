@@ -129,7 +129,19 @@ bg_match as (
     select
         g.prop_id,
         bg.geoid as block_group_geoid,
-        bg.source_id as bg_source_id
+        bg.source_id as bg_source_id,
+        -- Follow-up fix (coordinator, same 2026-09-26 session): a home
+        -- whose point only matches a NEIGHBORING county's block group
+        -- (rejected by the scoping above) must still get an honest
+        -- reason, not just a bare null -- distinguished here from a
+        -- point that matches no block group at all in ANY county
+        -- (a real coverage gap, e.g. core.block_groups missing rows).
+        case
+            when bg.geoid is not null then null
+            when g.pt is null then 'no_parcel_point'
+            when any_bg.geoid is not null then 'no_block_group_in_county'
+            else 'point_outside_loaded_block_groups'
+        end as block_group_null_reason
     from geo g
     left join lateral (
         select bg.geoid, bg.source_id
@@ -142,6 +154,12 @@ bg_match as (
           )
         limit 1
     ) bg on true
+    left join lateral (
+        select bg2.geoid
+        from core.block_groups bg2
+        where g.pt is not null and extensions.ST_Within(g.pt, bg2.geom)
+        limit 1
+    ) any_bg on true
 ),
 county_flood_loaded as (
     select distinct bg.county_fips
@@ -257,6 +275,7 @@ select
     r.pt,
     bm.block_group_geoid,
     bm.bg_source_id,
+    bm.block_group_null_reason,
     fm.in_sfha,
     fm.flood_source_id,
     fm.flood_null_reason,
@@ -285,7 +304,8 @@ select
         coalesce(r.crosswalk_source_id::text, '') || '|' ||
         coalesce(fm.flood_source_id::text, '') || '|' ||
         coalesce(r.resolved_territory_eia_id, '') || '|' ||
-        coalesce(r.territory_basis, '')
+        coalesce(r.territory_basis, '') || '|' ||
+        coalesce(bm.block_group_null_reason, '')
     ) as input_hash
 from resolved r
 left join bg_match bm on bm.prop_id = r.prop_id
@@ -296,6 +316,7 @@ order by r.prop_id
 
 _STAGE_COLUMNS = (
     "prop_id", "county_fips", "pt", "block_group_geoid", "bg_source_id",
+    "block_group_null_reason",
     "in_sfha", "flood_source_id", "flood_null_reason", "territory_candidates",
     "resolved_territory_eia_id", "territory_source_id", "territory_basis",
     "territory_null_reason", "territory_gate_reason", "crosswalk_source_id",
@@ -309,7 +330,7 @@ def _ensure_staging_table(conn: psycopg.Connection) -> None:
             """
             create temporary table if not exists home_spatial_stage (
                 prop_id text, county_fips text, pt extensions.geometry(point, 4326),
-                block_group_geoid text, bg_source_id uuid,
+                block_group_geoid text, bg_source_id uuid, block_group_null_reason text,
                 in_sfha boolean, flood_source_id uuid, flood_null_reason text,
                 territory_candidates text[], resolved_territory_eia_id text,
                 territory_source_id uuid, territory_basis text,
@@ -373,6 +394,7 @@ def _run_batch(conn: psycopg.Connection, *, county_fips: str, after_prop_id: str
                 pt = excluded.pt,
                 block_group_geoid = excluded.block_group_geoid,
                 bg_source_id = excluded.bg_source_id,
+                block_group_null_reason = excluded.block_group_null_reason,
                 in_sfha = excluded.in_sfha,
                 flood_source_id = excluded.flood_source_id,
                 flood_null_reason = excluded.flood_null_reason,
