@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterAll, describe, expect, it } from "vitest";
 import { getPool, query } from "../../lib/db";
 import { PropensityBadge, type PropensityReason } from "../../components/PropensityBadge";
-import { tierForDecile, plainReason } from "../../lib/priorityTier";
+import { tierForDecile, plainReason, isEligibleReason } from "../../lib/priorityTier";
 
 // M4-W2 acceptance, revised for the redesign's non-negotiable product
 // rule: a rep or manager never sees p_install_12m, relative_to_county,
@@ -54,8 +54,11 @@ describe.skipIf(!process.env.POSTGRES_URL_READONLY)("PropensityBadge renders a r
     expect(html).not.toContain(String(pInstall12m));
 
     expect(html).toContain(tierForDecile(row.decile).label);
-    const rising = row.reasons.filter((r) => r.direction === "raises");
-    const shown = rising.length > 0 ? rising : row.reasons;
+    // Matches PropensityBadge's own filter exactly (rep-approved vocabulary
+    // only -- year built, installability, and already-has-backup permits
+    // never render as a reason chip, even when they're one of the model's
+    // real top-3 contributions for this home).
+    const shown = row.reasons.filter((r) => r.direction === "raises" && isEligibleReason(r.feature));
     for (const reason of shown.slice(0, 3)) {
       const phrase = plainReason(reason.feature);
       // renderToStaticMarkup HTML-escapes text nodes (an apostrophe becomes &#x27;).

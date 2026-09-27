@@ -16,10 +16,12 @@ import type { PredictedHomeRow } from "../api/top-homes/route";
 // colgroup, which let a long address wrap into the next column and let
 // long reason chips overlap the row below at 1440px. Rewritten as a CSS
 // grid "row" (role=table/row/cell, the same ARIA pattern PredictionProof.tsx
-// already uses for a precise, non-<table> layout) with a fixed 4-column
-// template, an ellipsis on the address, and priority+reasons pinned to
-// one non-wrapping line -- so >=5 rows are visible at 1440x900 without
-// scrolling, per the review's own acceptance bar.
+// already uses for a precise, non-<table> layout).
+//
+// Map-as-dominant-surface pivot: the list is now a narrow (~30%) side
+// column, not a wide table -- a 4-column row (address | priority |
+// utility) clipped mid-word at that width. Down to 2 columns: # and a
+// single stacked cell (address, meta, tier + utility, reasons).
 
 function formatAddressLine(row: PredictedHomeRow): string {
   const parts = [row.situsNum, row.situsStreet].filter(Boolean).join(" ");
@@ -34,7 +36,7 @@ function blockGroupShortLabel(geoid: string): string | null {
   return `Tract ${tract}`;
 }
 
-const ROW_GRID_TEMPLATE = "28px minmax(80px, 1fr) minmax(150px, 220px) minmax(90px, 110px)";
+const ROW_GRID_TEMPLATE = "20px minmax(0, 1fr)";
 
 export interface PredictedHomesTableProps {
   rows: PredictedHomeRow[];
@@ -73,9 +75,7 @@ export function PredictedHomesTable({
         style={{ gridTemplateColumns: ROW_GRID_TEMPLATE }}
       >
         <span role="columnheader">#</span>
-        <span role="columnheader">Home</span>
-        <span role="columnheader">Priority &amp; why</span>
-        <span role="columnheader">Utility</span>
+        <span role="columnheader">Home / priority / utility</span>
       </div>
       {rows.map((row, index) => {
         const addressLine = formatAddressLine(row);
@@ -106,7 +106,7 @@ export function PredictedHomesTable({
             onMouseEnter={() => onHoverRow?.(row)}
             onMouseLeave={() => onHoverRow?.(null)}
           >
-            <span role="cell" style={{ color: "var(--theme-ink-muted)" }}>
+            <span role="cell" style={{ color: "var(--theme-ink-muted)", paddingTop: "2px" }}>
               {rangeStart + index}
             </span>
             <span role="cell" className="predicted-homes-table__home-cell">
@@ -119,13 +119,16 @@ export function PredictedHomesTable({
                   Already has backup
                 </div>
               ) : null}
-            </span>
-            <span role="cell" className="predicted-homes-table__priority-cell">
-              {row.decile === null ? (
-                <MissingState variant="not-loaded" reason="Not scored yet" />
-              ) : (
-                <PriorityTierBadge decile={row.decile} compact />
-              )}
+              <div className="predicted-homes-table__priority-cell">
+                {row.decile === null ? (
+                  <MissingState variant="not-loaded" reason="Not scored yet" />
+                ) : (
+                  <PriorityTierBadge decile={row.decile} compact />
+                )}
+                <span data-testid="utility-status" data-status={utilityStatus.key} className="predicted-homes-table__utility">
+                  {utilityStatus.label}
+                </span>
+              </div>
               {shownReasons.length > 0 ? (
                 <span className="predicted-homes-table__reasons">
                   {shownReasons.map((reason, i) => (
@@ -133,9 +136,6 @@ export function PredictedHomesTable({
                   ))}
                 </span>
               ) : null}
-            </span>
-            <span role="cell" data-testid="utility-status" data-status={utilityStatus.key}>
-              {utilityStatus.label}
             </span>
           </div>
         );

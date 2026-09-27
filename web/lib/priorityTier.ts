@@ -128,30 +128,33 @@ export function decileRangeForTier(tier: PriorityTierKey | "all"): [number | nul
 export const REASON_PHRASES: Record<string, string> = {
   "home value": "High-value home",
   "over-65 exemption on file": "Homeowner 65+",
+  "share of neighbors 65+": "Older neighborhood",
   "share of neighbors with electric heat": "Electric heat",
   "medical-need rate (zip)": "Many neighbors rely on powered medical devices",
   "outage exposure": "Long outages on this utility",
+  "share of neighbors earning $100k+": "Higher-income neighborhood",
+  "share of neighbors aged 35-64": "Prime working-age neighborhood",
   "home's own solar permit": "Already has solar",
+  "home's own ev charger permit": "Already has an EV charger",
+  "home's own panel-upgrade permit": "Recently upgraded electrical panel",
   "neighbors who already added backup": "Neighbors recently added backup",
 };
 
 // Model feature labels that are real contributors but must NEVER become
-// a reason chip -- they're a bare threshold/fact, not a sentence a rep
-// can say, or they'd contradict the door-brief's own "already has
-// backup -- skip" rule (a home's own prior battery/generator permit is a
-// reason to DE-prioritize, not a reason to knock). Filtered out of the
-// model's top-3 before display; since web/ only ever receives that
-// stored top-3 (never a 4th contributor), a home whose top-3 are all
-// excluded shows fewer reason chips rather than a fabricated one --
-// "missing means empty," never invented.
+// a reason chip: year built and any bare eligibility-threshold label are
+// facts, not a sentence a rep can say (build year belongs on the row
+// meta line and the door brief's own "Before you knock" section
+// instead, via buildYearNote below); a home's own prior battery/
+// generator permit means "already has backup," which would contradict
+// the door-brief's own "already has backup -- skip" rule if it were also
+// shown as a reason TO knock. Everything else in FEATURE_LABELS gets a
+// phrase above. Filtered out of the model's top-3 before display; since
+// web/ only ever receives that stored top-3 (never a 4th contributor), a
+// home whose top-3 are all excluded shows fewer reason chips rather than
+// a fabricated one -- "missing means empty," never invented.
 const EXCLUDED_REASON_LABELS = new Set([
   "year built",
   "installability",
-  "share of neighbors 65+",
-  "share of neighbors earning $100k+",
-  "share of neighbors aged 35-64",
-  "home's own ev charger permit",
-  "home's own panel-upgrade permit",
   "home's own prior battery permit",
   "home's own prior generator permit",
 ]);

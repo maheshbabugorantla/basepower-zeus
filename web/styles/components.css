@@ -212,10 +212,23 @@
 .top-bar {
   display: flex;
   align-items: center;
-  gap: var(--space-4);
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
   padding: var(--space-3) var(--space-6);
   background-color: var(--theme-surface);
   border-bottom: 1px solid var(--theme-divider);
+}
+
+/* Layout-review fix: at phone widths the top bar's brand + nav + county
+ * switcher + export button never fit on one line -- they used to keep
+ * shrinking past their own min-content width, pushing the whole page
+ * wider than the viewport (a real horizontal-scroll bug, not just a
+ * tight fit). flex-wrap above lets it wrap onto a second line instead;
+ * this just drops the spacer's push so wrapped rows start left-aligned. */
+@media (max-width: 899px) {
+  .top-bar__spacer {
+    display: none;
+  }
 }
 
 .top-bar__brand {
@@ -509,24 +522,38 @@
   max-width: 100%;
 }
 
-.predicted-homes-table__home-cell,
-.predicted-homes-table__priority-cell {
+.predicted-homes-table__home-cell {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 4px;
   min-width: 0;
+}
+
+/* Map-as-dominant-surface pivot: the list is a narrow side column now --
+ * tier + utility sit on one row (wrapping to two only if the column gets
+ * very tight), reason chips wrap onto their own line(s) below instead of
+ * being clipped to a fixed-width column. */
+.predicted-homes-table__priority-cell {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.predicted-homes-table__utility {
+  font-size: var(--type-label-font-size);
+  color: var(--theme-ink-muted);
 }
 
 .predicted-homes-table__reasons {
   display: flex;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   gap: var(--space-1);
-  overflow: hidden;
 }
 
 .predicted-homes-table__reasons .chip {
-  white-space: nowrap;
-  flex: 0 1 auto;
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
 }

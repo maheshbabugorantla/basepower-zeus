@@ -318,22 +318,24 @@ export async function fetchPredictedHomes(params: {
     maxDecile = null,
   } = params;
 
-  // Coordinator perf fix: core.home_propensity carries its own county_fips
-  // (0303b backfill, indexed county_fips/p_install_12m/prop_id) and only
-  // ever holds gated homes (M4-P4 trains/scores the gated population
-  // only), so the primary predicate no longer needs core.mv_home_signals
-  // at all. mv_home_signals (s) is joined only when a predicate or a
-  // returned column actually needs it (block group / pre-2000 filter);
-  // core.parcels (pc) only when a city/ZIP filter or the page's own situs
-  // display columns need it. The count query never joins pc/s unless one
-  // of those filters is active, and never joins core.parcel_geoms at all
-  // (lon/lat are page-only).
-  const needsSignals = blockGroupGeoid !== null || hideOldHomes;
+  // Coordinator perf fix (0303b), corrected after a real drift was found:
+  // core.home_propensity carries its own county_fips, so the county
+  // predicate itself never needed core.mv_home_signals. But
+  // core.home_propensity is only rescored/rebuilt on its own schedule
+  // (M4-P4), not live with core.mv_home_signals' own gate_reason -- a
+  // live audit found 211 Travis home_propensity rows whose
+  // mv_home_signals.gate_reason had since gone non-null (excluded from
+  // ranking by a newer gate re-run) while home_propensity hadn't been
+  // rescored yet, so the predicted-mode count/list was overcounting by
+  // exactly that many. mv_home_signals (s) is therefore ALWAYS joined now
+  // and gate_reason is null is always part of the predicate -- the only
+  // remaining optional joins are core.parcels (pc), only when a city/ZIP
+  // filter or the page's own situs display columns need it, and core.
+  // parcel_geoms (lon/lat, page-only).
   const needsParcelsForFilter = situsCity !== null || situsZip !== null;
 
   function buildFrom(opts: { forPage: boolean }): string {
-    const parts = ["from core.home_propensity hp"];
-    if (needsSignals || opts.forPage) parts.push("join core.mv_home_signals s on s.prop_id = hp.prop_id");
+    const parts = ["from core.home_propensity hp", "join core.mv_home_signals s on s.prop_id = hp.prop_id"];
     if (needsParcelsForFilter || opts.forPage) parts.push("join core.parcels pc on pc.prop_id = hp.prop_id");
     if (opts.forPage) parts.push("left join core.parcel_geoms pg on pg.prop_id = hp.prop_id");
     parts.push("left join core.home_coverage hc on hc.prop_id = hp.prop_id");
@@ -352,6 +354,7 @@ export async function fetchPredictedHomes(params: {
     // inactive, without requiring the join that filter's real predicate needs.
     const clauses = [
       "hp.county_fips = $1",
+      "s.gate_reason is null",
       "($2::text is null or true)",
       "($3::text is null or true)",
       "($4::text is null or true)",
