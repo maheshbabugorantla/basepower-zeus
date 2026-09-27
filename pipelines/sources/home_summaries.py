@@ -420,13 +420,31 @@ def grounding_guard_passes(reply: str, facts_text: str) -> bool:
 # ---------------------------------------------------------------------------
 
 
+# T9 fix (data-fixes review): api.home_score_breakdown's own label for
+# 'flood' is "Outside flood zone (penalty only, never a top signal)" —
+# flood is a 0/1 penalty flag with no anchor, never meant to be named as
+# a home's strongest signal. build_template_sentence used to rank it
+# against every other available term by raw contribution, so a home
+# where flood happened to have the largest weighted contribution got a
+# summary naming flood as its "strongest scored signal", contradicting
+# the breakdown's own tie handling (a Travis /home/123653-style home
+# reported by outside review, 2026-09-26). Excluded from the top-N pool
+# here, matching the breakdown's own claim about this signal.
+_EXCLUDED_FROM_TOP_SIGNALS = frozenset({"flood"})
+
+
 def build_template_sentence(breakdown: list[BreakdownRow], ctx: HomeContext) -> str:
     """Built ONLY from the top 2 available contributions, reusing
     build_fact_line's exact phrasing for each (never a separately
     formatted number) — so the template is grounded in the facts text by
     construction, not by coincidence. `ctx` is required because
-    build_fact_line needs it for the outage signal's distributor name."""
-    available = [r for r in breakdown if r.available and r.contribution is not None]
+    build_fact_line needs it for the outage signal's distributor name.
+    Excludes penalty-only terms (_EXCLUDED_FROM_TOP_SIGNALS) that the
+    breakdown itself documents as never a top signal."""
+    available = [
+        r for r in breakdown
+        if r.available and r.contribution is not None and r.key not in _EXCLUDED_FROM_TOP_SIGNALS
+    ]
     top2 = sorted(available, key=lambda r: (-float(r.contribution), r.key))[:2]
     lines = [build_fact_line(r, ctx) for r in top2]
     lines = [ln for ln in lines if ln]

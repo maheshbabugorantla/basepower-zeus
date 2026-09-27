@@ -649,12 +649,33 @@ rows as (
         s.electric_heat_term::float8 as electric_heat_term, s.backup_intent_term::float8 as backup_intent_term,
         s.owner_65::int::float8 as owner65_term, s.home_permits_flag::int::float8 as permits_term,
         s.installability_term::float8 as installability_term, s.home_value_term::float8 as home_value_term,
-        least(1, ia.income_100k_share / nullif(anc_one.inc_anchor, 0))::float8 as income100k_term,
-        least(1, ia.age_35_64_share / nullif(anc_one.age_anchor, 0))::float8 as age3564_term,
+        -- T3 fix (data-fixes review): Postgres LEAST/GREATEST ignore NULL
+        -- arguments and return the min/max of the REMAINING non-null ones
+        -- -- `least(1, NULL)` is 1, not NULL. Without the `is null` guard
+        -- a block group with no core.acs_income_age_bg row (income_100k_
+        -- share NULL) got income100k_term/age3564_term = 1.0 (a strong
+        -- positive contribution) instead of null -- a term whose input is
+        -- null must be null with a reason (W348444/Williamson: acs_
+        -- income_age_bg has no row for its block group, raw_value was
+        -- correctly null but the term still contributed 0.2 to the score).
+        case when ia.income_100k_share is null then null
+             else least(1, ia.income_100k_share / nullif(anc_one.inc_anchor, 0)) end::float8 as income100k_term,
+        case when ia.age_35_64_share is null then null
+             else least(1, ia.age_35_64_share / nullif(anc_one.age_anchor, 0)) end::float8 as age3564_term,
         (case when s.territory_eia_id = '1015' then 'city_battery_permit'
               when s.territory_eia_id is not null then 'state_rules_only' else null end) as permit_path,
+        -- Same LEAST/GREATEST-ignores-NULL family as income100k/age3564
+        -- above: the outer `when ... stats.median_days is not null` guard
+        -- does not cover stats.share_never_finished going null on its
+        -- own (a separate column on the same core.permit_path_stats
+        -- row) -- if it ever did, `greatest(0, NULL)` would silently
+        -- return 0 instead of NULL, making permitrisk_term = 1.0 instead
+        -- of null. Currently dormant (share_never_finished is never null
+        -- in the live core.permit_path_stats row, checked read-only
+        -- 2026-09-27) but guarded explicitly so it can't regress silently.
         (case
-            when s.territory_eia_id = '1015' and stats.median_days is not null then
+            when s.territory_eia_id = '1015' and stats.median_days is not null
+                 and stats.share_never_finished is not null then
                 1 - least(1, greatest(0,
                     0.5 * least(1, stats.median_days::float8 / greatest(stats.p90_days, 1)::float8)
                     + 0.5 * stats.share_never_finished::float8))
