@@ -47,6 +47,7 @@ set local max_parallel_workers_per_gather = 0;
 -- succeeded once.
 -- ---------------------------------------------------------------------------
 
+drop view if exists api.loaded_counties;  -- reads mv_gate_counts; recreated below verbatim
 drop view if exists api.gate_counts;
 drop view if exists api.gate_counts_by_market;
 drop view if exists api.home_geo_rollup;
@@ -184,6 +185,14 @@ create view api.gate_counts as
 create view api.gate_counts_by_market as
     select market, reason, home_count, source_ids, county_fips from core.mv_gate_counts_by_market;
 
+-- Verbatim live definition (pg_get_viewdef, 2026-09-26): a county is "loaded"
+-- when it has homes that passed the gate or are only waiting on utility confirmation.
+create view api.loaded_counties as
+    select county_fips, sum(home_count) as homes_scored
+    from core.mv_gate_counts
+    where reason = any (array['passed'::text, 'utility_not_confirmed'::text])
+    group by county_fips;
+
 create view api.home_geo_rollup as
     select county_fips, situs_city, situs_zip, block_group_geoid, home_count, avg_p, max_p, top10_count
     from core.mv_home_geo_rollup;
@@ -197,7 +206,8 @@ grant select on
 to zeus_web_ro;
 
 grant select on
-    api.gate_counts, api.gate_counts_by_market, api.home_geo_rollup, api.county_territories
+    api.gate_counts, api.gate_counts_by_market, api.home_geo_rollup, api.county_territories,
+    api.loaded_counties
 to zeus_web_ro;
 
 -- ---------------------------------------------------------------------------
