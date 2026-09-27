@@ -181,6 +181,7 @@
   --theme-brand-accent-text: var(--color-brand-strong);
   --theme-brand-mark-ink: var(--color-brand-strong);
   --theme-brand-mark-bolt: var(--color-brand-gold);
+  --theme-selected-fill: var(--color-brand-subtle);
   --theme-score-1: var(--color-score-1);
   --theme-score-2: var(--color-score-2);
   --theme-score-3: var(--color-score-3);
@@ -199,6 +200,7 @@
     --theme-brand-accent-text: var(--color-dark-brand);
     --theme-brand-mark-ink: var(--color-dark-ink);
     --theme-brand-mark-bolt: var(--color-brand-gold);
+    --theme-selected-fill: var(--color-brand-strong);
     --theme-score-1: var(--color-dark-score-1);
     --theme-score-2: var(--color-dark-score-2);
     --theme-score-3: var(--color-dark-score-3);
@@ -217,6 +219,7 @@
   --theme-brand-accent-text: var(--color-dark-brand);
   --theme-brand-mark-ink: var(--color-dark-ink);
   --theme-brand-mark-bolt: var(--color-brand-gold);
+  --theme-selected-fill: var(--color-brand-strong);
   --theme-score-1: var(--color-dark-score-1);
   --theme-score-2: var(--color-dark-score-2);
   --theme-score-3: var(--color-dark-score-3);

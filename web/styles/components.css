@@ -271,7 +271,7 @@
 
 .primary-nav__link--active {
   color: var(--theme-brand-accent-text);
-  background-color: var(--color-brand-subtle);
+  background-color: var(--theme-selected-fill);
   font-weight: 600;
 }
 
@@ -314,7 +314,7 @@
 }
 
 .county-switcher__button--active {
-  background-color: var(--color-brand-subtle);
+  background-color: var(--theme-selected-fill);
   color: var(--theme-brand-accent-text);
   font-weight: 600;
 }
