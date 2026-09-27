@@ -45,7 +45,9 @@ export function IntroGate({ landing = "/ranking", navigate = true, force = false
       releaseIntroCover();
       return;
     }
-    writeIntroFlag();
+    // "Seen" is recorded when the reel ends or is skipped (finish below),
+    // not when it starts: a start that never reached the viewer (tab closed,
+    // server restarting, backgrounded) should still play next time.
     document.documentElement.dataset.zeusIntro = "playing";
     setPlaying(true);
     // Land on the ranking screen while the reel's opening scenes cover the
@@ -59,6 +61,7 @@ export function IntroGate({ landing = "/ranking", navigate = true, force = false
   }, []);
 
   function finish() {
+    writeIntroFlag();
     delete document.documentElement.dataset.zeusIntro;
     releaseIntroCover();
     setPlaying(false);
