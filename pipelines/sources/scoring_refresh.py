@@ -598,8 +598,19 @@ rows as (
         s.electric_heat_term::float8 as electric_heat_term, s.backup_intent_term::float8 as backup_intent_term,
         s.owner_65::int::float8 as owner65_term, s.home_permits_flag::int::float8 as permits_term,
         s.installability_term::float8 as installability_term, s.home_value_term::float8 as home_value_term,
-        least(1, ia.income_100k_share / nullif(anc_one.inc_anchor, 0))::float8 as income100k_term,
-        least(1, ia.age_35_64_share / nullif(anc_one.age_anchor, 0))::float8 as age3564_term,
+        -- T3 fix (data-fixes review): Postgres LEAST/GREATEST ignore NULL
+        -- arguments and return the min/max of the REMAINING non-null ones
+        -- -- `least(1, NULL)` is 1, not NULL. Without the `is null` guard
+        -- a block group with no core.acs_income_age_bg row (income_100k_
+        -- share NULL) got income100k_term/age3564_term = 1.0 (a strong
+        -- positive contribution) instead of null -- a term whose input is
+        -- null must be null with a reason (W348444/Williamson: acs_
+        -- income_age_bg has no row for its block group, raw_value was
+        -- correctly null but the term still contributed 0.2 to the score).
+        case when ia.income_100k_share is null then null
+             else least(1, ia.income_100k_share / nullif(anc_one.inc_anchor, 0)) end::float8 as income100k_term,
+        case when ia.age_35_64_share is null then null
+             else least(1, ia.age_35_64_share / nullif(anc_one.age_anchor, 0)) end::float8 as age3564_term,
         (case when s.territory_eia_id = '1015' then 'city_battery_permit'
               when s.territory_eia_id is not null then 'state_rules_only' else null end) as permit_path,
         (case
