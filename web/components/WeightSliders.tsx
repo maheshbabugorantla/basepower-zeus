@@ -1,11 +1,11 @@
 "use client";
 
-import { Panel } from "./ui/Panel";
 import type { SignalKey } from "../app/api/top-homes/route";
 import { REASON_META } from "./TopHomesTable";
 
-// M2-W1/M2-P8: DESIGN.md §5 "Weight sliders" — label, current weight as a
-// % of the total, and a reset-to-equal action; DESIGN.md §1 "Choices are
+// M2-W1/M2-P8: DESIGN.md §5 "Weight sliders" — label, its share of the
+// total (the raw 0-10 setting is shown only to screen readers: users read
+// "8 · 16%" as a range, 2026-09-27), and a reset-to-equal action; DESIGN.md §1 "Choices are
 // labeled as choices" — weights are the team's parameters, never data.
 // Each slider's dot reuses the same signal color as its Chip in
 // TopHomesTable's "Top signals" column, so a slider and the reasons it
@@ -54,17 +54,17 @@ export interface SliderGroup {
   keys: SignalKey[];
 }
 
-// PRODUCT.md's four signal families, in the DESIGN.md chip order
-// (outage / grid / installability / household) -- REASON_META (below,
-// imported from TopHomesTable.tsx) is the single source of truth for
-// which family each key belongs to; this array just walks that same map
-// grouped by family; a signal absent from REASON_META would be a bug
-// there, not something to special-case here.
+// Grouped by what each signal says about a home (2026-09-27 clarify pass):
+// the earlier grouping filed home value under "Grid value" (no grid-value
+// signal is loaded for these homes) and the two adoption signals under
+// "Installability". Headings deliberately don't repeat an item's own label.
+// Dot colors are untouched: a dot matches the signal's tag in the list
+// (REASON_META), not its group.
 export const SLIDER_GROUPS: SliderGroup[] = [
-  { heading: "Outage exposure", keys: ["outage"] },
-  { heading: "Grid value", keys: ["home_value"] },
-  { heading: "Installability", keys: ["backup_intent", "home_permits", "installability", "flood", "permit_risk"] },
-  { heading: "Household fit", keys: ["empower", "age65", "electric_heat", "owner_65", "income_100k", "age_35_64"] },
+  { heading: "Outages", keys: ["outage"] },
+  { heading: "Adoption", keys: ["backup_intent", "home_permits"] },
+  { heading: "Installation", keys: ["installability", "flood", "permit_risk"] },
+  { heading: "Household", keys: ["home_value", "income_100k", "age_35_64", "age65", "owner_65", "empower", "electric_heat"] },
 ];
 
 export const SIGNAL_ORDER: SignalKey[] = SLIDER_GROUPS.flatMap((g) => g.keys);
@@ -98,11 +98,10 @@ function formatShare(weight: number, total: number): string {
  * 11.5x/5.1x lift, 0.727/0.682 AUC) come straight from
  * checks/M2-P8-ranking-evidence.md's own results table. */
 export const DEFAULTS_EVIDENCE_SUMMARY =
-  "From a 2026-09-26 study of 135,083 real gate-passed Austin homes: home value and " +
-  "outage exposure showed the strongest link to later adopting a battery or generator " +
-  "(11.5x higher adoption rate, top vs. bottom fifth, AUC 0.727); neighbors already " +
-  "installing backup power was next strongest (5.1x, AUC 0.682). Full study: " +
-  "checks/M2-P8-ranking-evidence.md.";
+  "From a 2026-09-26 study of 135,083 real Austin homes: home value and outage exposure " +
+  "were most linked to a home later adding a battery or generator (11.5x the adoption " +
+  "rate, top fifth vs. bottom fifth); neighbors already installing backup came next (5.1x). " +
+  "Full study: checks/M2-P8-ranking-evidence.md.";
 
 export interface WeightSlidersProps {
   weights: Record<SignalKey, number>;
@@ -124,9 +123,11 @@ export function WeightSliders({ weights, onChange, onReset, defaultWeights = nul
     onChange(defaultWeights ?? equalWeights());
   }
 
+  // No Panel wrapper: this renders inside the "Adjust priorities" popover,
+  // which is already a surface (a panel inside it read as a card in a card).
   return (
-    <Panel>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: "var(--space-1)", gap: "var(--space-2)", flexWrap: "wrap" }}>
+    <div className="weight-sliders">
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: "var(--space-2)", gap: "var(--space-2)", flexWrap: "wrap" }}>
         <h2
           style={{
             fontFamily: "var(--type-heading-font-family)",
@@ -135,7 +136,7 @@ export function WeightSliders({ weights, onChange, onReset, defaultWeights = nul
             margin: 0,
           }}
         >
-          Weights
+          Team priorities
         </h2>
         <span style={{ display: "flex", gap: "var(--space-2)" }}>
           <button
@@ -145,35 +146,25 @@ export function WeightSliders({ weights, onChange, onReset, defaultWeights = nul
             title={DEFAULTS_EVIDENCE_SUMMARY}
             data-testid="weight-defaults-button"
           >
-            Evidence-based defaults
+            Use study defaults
           </button>
           <button type="button" className="btn btn--secondary" onClick={onReset} data-testid="weight-reset-button">
-            Reset to equal
+            Set all equal
           </button>
         </span>
       </div>
       <p style={{ margin: "0 0 var(--space-3) 0", fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)" }}>
-        Team choices, not data. 0 ignores a signal, 10 makes it count most; % is its share of the score. Dot colors match the signal tags in the list.{" "}
+        Team choices, not data. Drag right to count a signal more, all the way left to turn it off. Each percentage
+        is that signal&rsquo;s share of the team score.{" "}
         <span title={DEFAULTS_EVIDENCE_SUMMARY} style={{ borderBottom: "1px dotted var(--theme-ink-muted)", cursor: "help" }}>
-          How defaults were chosen
+          How the study defaults were chosen
         </span>
-        {" — from a study of real Austin installs."}
       </p>
 
       <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
         {SLIDER_GROUPS.map((group) => (
           <div key={group.heading}>
-            <div
-              style={{
-                fontSize: "var(--type-label-font-size)",
-                fontWeight: 600,
-                color: "var(--theme-ink-muted)",
-                marginBottom: "var(--space-2)",
-                textTransform: "none",
-              }}
-            >
-              {group.heading}
-            </div>
+            <div className="weight-group__heading">{group.heading}</div>
             <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-3)" }}>
               {group.keys.map((key) => {
                 const meta = REASON_META[key];
@@ -195,14 +186,12 @@ export function WeightSliders({ weights, onChange, onReset, defaultWeights = nul
                         />
                         <span style={{ fontSize: "var(--type-body-font-size)" }}>{SIGNAL_LABELS[key]}</span>
                       </label>
-                      <span style={{ fontSize: "var(--type-label-font-size)", whiteSpace: "nowrap", color: "var(--theme-ink-muted)" }}>
-                        <span style={{ fontFamily: "var(--type-data-font-family)", color: "var(--theme-ink)", fontWeight: 600 }}>{weight}</span>
-                        {" · "}
+                      <span className="weight-share" data-testid={`weight-share-${key}`}>
                         {weight === 0 ? (
-                          "off"
+                          <span className="weight-share__off">Off</span>
                         ) : (
                           <>
-                            <span style={{ fontFamily: "var(--type-data-font-family)" }}>{pct}%</span> of score
+                            <span className="weight-share__pct">{pct}%</span> of score
                           </>
                         )}
                       </span>
@@ -218,7 +207,7 @@ export function WeightSliders({ weights, onChange, onReset, defaultWeights = nul
                       className="weight-slider"
                       style={{ ["--fill" as string]: `${(weight / WEIGHT_MAX) * 100}%` }}
                       aria-label={`${SIGNAL_LABELS[key]} importance`}
-                      aria-valuetext={weight === 0 ? "off" : `${weight} of ${WEIGHT_MAX}, ${pct} percent of the score`}
+                      aria-valuetext={weight === 0 ? "Off" : `${weight} of ${WEIGHT_MAX}, ${pct} percent of the team score`}
                     />
                   </div>
                 );
@@ -231,6 +220,6 @@ export function WeightSliders({ weights, onChange, onReset, defaultWeights = nul
       <p style={{ margin: "var(--space-4) 0 0", fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)" }}>
         Learned weights (from Base&rsquo;s own sign-ups) are not available yet.
       </p>
-    </Panel>
+    </div>
   );
 }
