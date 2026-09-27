@@ -4,6 +4,7 @@ import { Suspense } from "react";
 import { usePathname, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { PrimaryNav } from "./PrimaryNav";
+import { ExportButton } from "./ExportButton";
 import { ThemeToggle } from "./ThemeToggle";
 import { FreshnessSummary, type SourceFreshnessRow } from "./FreshnessSummary";
 import type { CountyOption } from "../lib/counties";
@@ -115,6 +116,14 @@ export function TopBar({
 
       <FreshnessSummary rows={freshness} />
       <ThemeToggle />
+      {/* M5-W1: ExportButton calls useSearchParams() (it needs the
+          current url's params to build the export link), so it needs
+          the same Suspense boundary CountySwitcherInner already has --
+          without it, `next build` fails to statically bail out this
+          page. */}
+      <Suspense fallback={null}>
+        <ExportButton />
+      </Suspense>
     </header>
   );
 }
