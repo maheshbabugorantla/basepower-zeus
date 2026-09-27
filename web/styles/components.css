@@ -2231,3 +2231,96 @@ button:focus-visible,
 .case-meter__value {
   line-height: 1.35;
 }
+
+
+/* ---------------------------------------------------------------------- */
+/* Weight sliders: share label + group headings (2026-09-27 clarify pass)  */
+/* One number per slider: its share of the team score, tabular so the      */
+/* column doesn't jitter while dragging.                                   */
+/* ---------------------------------------------------------------------- */
+
+.weight-share {
+  font-size: var(--type-label-font-size);
+  white-space: nowrap;
+  color: var(--theme-ink-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.weight-share__pct {
+  display: inline-block;
+  min-width: 3.2ch;
+  text-align: right;
+  font-weight: 600;
+  color: var(--theme-ink);
+}
+
+.weight-share__off {
+  font-weight: 600;
+  color: var(--theme-ink-muted);
+}
+
+.weight-group__heading {
+  font-size: var(--type-label-font-size);
+  font-weight: 600;
+  color: var(--theme-ink);
+  margin-bottom: var(--space-2);
+  padding-bottom: var(--space-1);
+  border-bottom: 1px solid var(--theme-divider);
+}
+
+/* ---------------------------------------------------------------------- */
+/* Overview at real demo sizes: use the width of a wide window, and      */
+/* tighten rhythm on short windows (a laptop or projector ~770 px tall)  */
+/* so the four panels still fit one screen with no scrolling.            */
+/* ---------------------------------------------------------------------- */
+
+.overview-page {
+  max-width: 2200px;
+}
+
+@media (max-height: 860px) {
+  .overview-page,
+  .ov-grid {
+    gap: var(--space-2);
+  }
+
+  .ov-head__title {
+    font-size: 1.3rem;
+  }
+
+  .ov-panel {
+    padding: 10px 16px;
+    gap: 6px;
+  }
+
+  .ov-panel__sub,
+  .ov-panel__note {
+    line-height: 1.35;
+  }
+
+  .outage-bars {
+    gap: var(--space-2);
+  }
+
+  .outage-bars__county {
+    gap: 2px;
+  }
+
+  .outage-bars__row {
+    min-height: 19px;
+    font-size: 12.5px;
+  }
+
+  .storm-grid__row,
+  .readiness-grid__row {
+    padding: 3px 0;
+  }
+
+  .storm-grid .ov-fig {
+    font-size: 1rem;
+  }
+
+  .ov-fig--lg {
+    font-size: 1.45rem;
+  }
+}

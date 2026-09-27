@@ -52,18 +52,15 @@ describe("M2-P8 weight keys", () => {
     }
   });
 
-  it("SLIDER_GROUPS covers every SIGNAL_KEY exactly once, grouped under the redesign's 4 signal families", () => {
-    // Redesign (2026-09-27, critique P2 "13 flat sliders with no grouping"):
-    // regrouped from the original 3 plain headings into PRODUCT.md's own
-    // four signal families (outage exposure / grid value / installability /
-    // household fit) -- the same family REASON_META already assigns each
-    // signal for its chip/meter dot color.
-    expect(SLIDER_GROUPS.map((g) => g.heading)).toEqual([
-      "Outage exposure",
-      "Grid value",
-      "Installability",
-      "Household fit",
-    ]);
+  it("SLIDER_GROUPS covers every SIGNAL_KEY exactly once, grouped by what each signal says about a home", () => {
+    // 2026-09-27 clarify pass: home value is a household trait (no grid-value
+    // signal is loaded), and the two adoption signals are their own group.
+    expect(SLIDER_GROUPS.map((g) => g.heading)).toEqual(["Outages", "Adoption", "Installation", "Household"]);
+    const groupOf = (key: string) => SLIDER_GROUPS.find((g) => g.keys.includes(key as never))?.heading;
+    expect(groupOf("home_value")).toBe("Household");
+    expect(groupOf("backup_intent")).toBe("Adoption");
+    expect(groupOf("home_permits")).toBe("Adoption");
+    expect(groupOf("installability")).toBe("Installation");
     expect(new Set(SIGNAL_ORDER)).toEqual(new Set(EXPECTED_KEYS));
     const seen = new Set<string>();
     for (const group of SLIDER_GROUPS) {
