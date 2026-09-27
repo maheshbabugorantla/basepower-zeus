@@ -214,72 +214,53 @@ on conflict (ccn_company_name) do nothing;
 --     CLAUDE.md already states for datasets/counties.
 
 -- ===========================================================================
--- Re-resolution plan for core.home_spatial (48491, 48453 ONLY) -- NOT
--- APPLIED. This is the CTE pipelines/sources/home_spatial.py's `resolved`
--- block would need, replacing its current per-county special-casing for
--- county_fips = williamson_fips (which today just forces NULL). Every
--- other county's resolution (HIFLD territories_sub, Harris's pin) is
--- UNCHANGED.
+-- Re-resolution: IMPLEMENTED (this session, following the user's chat
+-- decisions) in pipelines/sources/home_spatial.py's territory section --
+-- NOT applied to the DB (that file is a draft too; no DB writes this
+-- session). Every other county's resolution (HIFLD territories_sub,
+-- Harris's pin) is UNCHANGED -- see that file's module docstring for the
+-- full behavior and its `resolution_mode` CTE for the exact logic.
 --
--- PICK RULE PROPOSED (flag for user before this ships):
---   For a home with N distinct CCN candidate holders (via
---   ST_Within(pt, core.electric_ccn.geom)):
---     * N = 0: keep NULL, territory_null_reason = 'no_ccn_match'
---       (validation found 0 such homes in Williamson/Travis, but the
---       case must still degrade honestly, not error).
---     * N = 1: resolve directly. territory_basis = 'puct_ccn'.
---       territory_gate_reason = 'territory_not_base_served' unless the
---       mapped eia_utility_number's core.utility_crosswalk.mapped='yes'.
---     * N > 1 (multiply-certificated, real ~5% of homes here): resolve
---       ONLY if every candidate's mapped Base-served status AGREES
---       (all 'yes' or all 'no'/null) -- pick any one such eia_id
---       (they're interchangeable for the gate) and set territory_basis =
---       'puct_ccn_unanimous'. If the candidates DISAGREE (e.g. Jarrell:
---       Oncor [Base-served] + Bartlett Electric Coop [not]), keep
---       resolved_territory_eia_id NULL, territory_null_reason =
---       'multiply_certificated' -- honest per CLAUDE.md's "missing means
---       empty" rule, never an arbitrary tiebreak among disagreeing
---       holders. This differs from the pre-existing tm ORDER BY
---       (cw.mapped='yes') DESC tiebreak (which silently prefers a
---       Base-served candidate even when others disagree) -- flag this
---       change explicitly to the user, since it will likely REDUCE the
---       count of homes in some overlap zones that pass the territory
---       gate today under the old (arbitrary) tiebreak, in exchange for
---       not overstating confidence on genuinely disputed boundaries.
+-- USER DECISIONS (confirmed via chat, this session):
+--   1. Pick rule = "agree-or-unconfirmed": resolve a multiply-
+--      certificated home ONLY when every one of its CCN holders shares
+--      the same Base-served status; otherwise territory stays NULL with
+--      reason 'multiply_certificated' -- ranked (still gated in), not
+--      counted as servable, same treatment as today's
+--      'utility_not_confirmed'. A single unmapped holder (status
+--      genuinely unknown, not "no") gets its OWN reason,
+--      'ccn_holder_unmapped', distinct from a real multi-holder
+--      disagreement.
+--   2. Apply to BOTH Travis (48453) and Williamson (48491). Harris stays
+--      pinned to CenterPoint ('most_likely_county_utility') as-is,
+--      untouched.
 --
--- Sketch (illustrative SQL, not executable as written -- it assumes
--- pipelines/sources/home_spatial.py's existing `g` CTE, county_fips
--- parameters, and staging-table shape; a real change belongs in that
--- ticket's `owns` path, not here):
+-- territory_basis is 'puct_ccn' for every CCN-resolved home (single
+-- holder or unanimous multi-holder alike) -- no separate
+-- 'puct_ccn_unanimous' value (simplified from this migration's earlier
+-- draft, per the user's literal instruction).
 --
---   ccn_candidates as (
---       select g.prop_id,
---              array_agg(distinct ecc.id) as ccn_ids,
---              array_agg(distinct cw.mapped) as mapped_values
---       from geo g
---       join core.electric_ccn ecc on g.pt is not null and extensions.ST_Within(g.pt, ecc.geom)
---       left join core.electric_ccn_crosswalk xw on xw.ccn_company_name = ecc.company_name
---       left join core.utility_crosswalk cw on cw.eia_utility_number = xw.eia_utility_number
---       where g.county_fips in ('48491', '48453')
---       group by g.prop_id
---   ),
---   ccn_resolved as (
---       select cc.prop_id,
---              case when cardinality(cc.mapped_values) = 1
---                   then (select xw.eia_utility_number from ... limit 1)
---                   else null end as resolved_territory_eia_id,
---              case when cardinality(cc.mapped_values) = 1 then 'puct_ccn'
---                   when cardinality(cc.mapped_values) > 1
---                        and cardinality(array_remove(cc.mapped_values, cc.mapped_values[1])) = 0
---                   then 'puct_ccn_unanimous'
---                   else null end as territory_basis,
---              case when cardinality(cc.mapped_values) = 0 then 'no_ccn_match'
---                   when cardinality(cc.mapped_values) > 1
---                        and cardinality(array_remove(cc.mapped_values, cc.mapped_values[1])) > 0
---                   then 'multiply_certificated'
---                   else null end as territory_null_reason
---       from ccn_candidates cc
---   )
+-- input_hash sensitivity (explicitly checked, not assumed): home_spatial.py
+-- REUSES the existing territory_source_id / crosswalk_source_id output
+-- columns to carry a CCN-resolved home's core.electric_ccn.source_id /
+-- core.electric_ccn_crosswalk.crosswalk_source_id (no new home_spatial
+-- column needed). Both columns already feed input_hash's md5() formula
+-- (unchanged from the pre-existing formula), so a puct_ccn.py reload that
+-- changes either source_id automatically changes affected homes'
+-- input_hash and they get recomputed on the next home_spatial run -- this
+-- was the coordinator's explicit ask ("make sure a CCN-driven change
+-- alters input_hash"), verified by tracing the formula, not asserted.
+-- Separately, this session ALSO added territory_null_reason into the
+-- input_hash formula (it wasn't there before) so that 'no_ccn_match' /
+-- 'ccn_holder_unmapped' / 'multiply_certificated' are each their own
+-- hash state -- a crosswalk fix that flips a holder from "unmapped" to
+-- "mapped" (same eia_id count-wise coincidentally) still gets picked up.
+-- NOTE: this formula change is global (every county's hash changes once,
+-- not just Williamson/Travis), so the FIRST post-deploy run of
+-- home_spatial for EVERY already-loaded county (Harris included) will
+-- write every row once, even though nothing about Harris's actual
+-- resolution changed -- a one-time cost of changing the hash formula
+-- itself, not a bug.
 --
 -- Apply steps (once the user confirms the pick rule above), estimated:
 --   0. This branch (worktree-agent-ad1861480a870dd31) must be merged
@@ -299,17 +280,26 @@ on conflict (ccn_company_name) do nothing;
 --      module's __main__ refusal-to-run guard is removed by whichever
 --      ticket picks this up; 3 files, 148 features total, well under a
 --      minute.
---   3. Land the home_spatial.py CTE change (separate ticket, `owns`
---      pipelines/sources/home_spatial.py) implementing the sketch above.
+--   3. DONE (this session): pipelines/sources/home_spatial.py's territory
+--      section implements the rule above (resolution_mode CTE). Nothing
+--      further to land here -- just review it (still uncommitted-to-DB,
+--      no DB writes were made building/testing it).
 --   4. Re-run `python3 -m pipelines.run home_spatial --county 48491`
 --      and `--county 48453` (per-county, resumable, per
---      0304_spatial_precompute.sql's design) -- 158,475 + 373,513 =
---      531,988 rows. checks/M3-P6.md's own measured guidance (not this
---      migration's guess) is "budget a few minutes per county" for a
---      full county pass with the subdivided tables already in place, so
---      plan on roughly 5-10 minutes total for both counties, not the
---      ~70s/1.2M-homes territory-only micro-benchmark alone (that
---      number excludes block-group/flood work and the per-row write).
+--      0304_spatial_precompute.sql's design). Because this session ALSO
+--      changed the input_hash formula (added territory_null_reason --
+--      see above), the FIRST post-deploy run should really be run for
+--      EVERY already-loaded county (48201, 48453, 48491), not just the
+--      two CCN counties, since every existing row's hash is now stale.
+--      Row counts: Harris ~836k (from M3-P6's own figures), Travis
+--      373,513 with a point, Williamson 158,475 -- roughly 1.2M rows
+--      being force-rewritten once. checks/M3-P6.md's own measured
+--      guidance (not this migration's guess) is "budget a few minutes
+--      per county" for a full pass with the subdivided tables already in
+--      place, so plan on roughly 10-15 minutes total for all three
+--      counties, not the ~70s/1.2M-homes territory-only micro-benchmark
+--      alone (that number excludes block-group/flood work and the
+--      per-row write).
 --   5. `python3 -m pipelines.run refresh_scores` (or whatever wraps
 --      core.refresh_all_scores()) to propagate into
 --      core.mv_home_signals -- see checks/M3-P6.md for that step's own
