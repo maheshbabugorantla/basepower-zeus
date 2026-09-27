@@ -830,9 +830,9 @@ export function RankingBoard({
 
           <div
             data-testid="geo-drilldown"
-            style={{ display: "flex", flexWrap: "wrap", gap: "var(--space-3)", marginTop: "var(--space-2)" }}
+            style={{ display: "flex", flexWrap: "nowrap", gap: "var(--space-3)", marginTop: "var(--space-2)" }}
           >
-            <label style={{ display: "flex", flexDirection: "column", gap: "2px", fontSize: "var(--type-label-font-size)" }}>
+            <label style={{ display: "flex", flexDirection: "column", gap: "2px", fontSize: "var(--type-label-font-size)", flex: "1 1 0", minWidth: 0 }}>
               City
               <select
                 data-testid="drilldown-city"
@@ -847,7 +847,7 @@ export function RankingBoard({
                 ))}
               </select>
             </label>
-            <label style={{ display: "flex", flexDirection: "column", gap: "2px", fontSize: "var(--type-label-font-size)" }}>
+            <label style={{ display: "flex", flexDirection: "column", gap: "2px", fontSize: "var(--type-label-font-size)", flex: "1 1 0", minWidth: 0 }}>
               ZIP
               <select
                 data-testid="drilldown-zip"
@@ -862,7 +862,7 @@ export function RankingBoard({
                 ))}
               </select>
             </label>
-            <label style={{ display: "flex", flexDirection: "column", gap: "2px", fontSize: "var(--type-label-font-size)" }}>
+            <label style={{ display: "flex", flexDirection: "column", gap: "2px", fontSize: "var(--type-label-font-size)", flex: "1 1 0", minWidth: 0 }}>
               Neighborhood
               <select
                 data-testid="drilldown-blockgroup"

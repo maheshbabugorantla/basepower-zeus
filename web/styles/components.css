@@ -378,15 +378,17 @@
 
 .ranking-board {
   display: grid;
-  /* Map-as-dominant-surface pivot: the map is ~70% of the map+list
-     workspace at desktop (rail is a narrow, secondary column outside
-     that split), min 480px so it never gets squeezed on a narrower
-     "desktop" width; the list is the remaining ~30%, its own scroll. */
-  grid-template-columns: minmax(190px, 220px) minmax(480px, 2.3fr) minmax(280px, 1fr);
+  /* Map-as-dominant-surface pivot, rebalanced once the rail lost
+     QualityPanel (now on /sources): map ~60-65% of the map+list
+     workspace at desktop, list ~35-40% with a hard 440px floor so a
+     row's address/tier/reasons never get squeezed again. Rail stays a
+     narrow, secondary column outside that split (Adjust priorities +
+     the two toggles only, now). */
+  grid-template-columns: minmax(190px, 220px) minmax(0, 1.5fr) minmax(440px, 1fr);
   gap: var(--space-6);
   align-items: stretch;
   height: calc(100vh - 160px);
-  min-height: 640px;
+  min-height: 680px;
 }
 
 .ranking-board__rail {
@@ -399,7 +401,19 @@
 
 .ranking-board__map-panel {
   height: 100%;
-  min-height: 560px;
+  min-height: 640px;
+}
+
+/* City/ZIP/Neighborhood filters: one row, always -- a native <select>
+ * otherwise sizes itself to its widest OPTION text ("All (163,859
+ * homes)"), which alone is wider than a 440px list column and forces
+ * the three filters to wrap onto separate lines. width:100% + min-width:0
+ * lets each one shrink to its flex share instead; the visible/selected
+ * text still truncates with an ellipsis rather than overflowing. */
+[data-testid="geo-drilldown"] select {
+  width: 100%;
+  min-width: 0;
+  text-overflow: ellipsis;
 }
 
 /* Three explicit breakpoints (layout review): desktop >=1280 (3-col,

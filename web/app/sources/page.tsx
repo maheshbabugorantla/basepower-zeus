@@ -11,8 +11,11 @@ import {
 } from "../../components/ui/DataTable";
 import { CopyShaButton } from "../../components/ui/CopyShaButton";
 import { PredictionProof } from "../../components/PredictionProof";
+import { QualityPanel } from "../../components/QualityPanel";
 import { getModelCard } from "../../lib/modelCard.server";
+import { getQualityPanelData } from "../../lib/qualityPanel.server";
 import { allTierMeta, REASON_PHRASES } from "../../lib/priorityTier";
+import { DEFAULT_COUNTY } from "../../lib/counties";
 
 // M0-W2: "the demo's proof that every number is real." Lists every
 // api.sources row (M0-S1) — every ops.source_manifest row joined to its
@@ -86,13 +89,14 @@ function truncateSha(sha256: string): string {
 }
 
 export default async function SourcesPage() {
-  const [rows, modelCard] = await Promise.all([
+  const [rows, modelCard, qualityData] = await Promise.all([
     query<SourceRow>(
       `select source_id, source, url, retrieved_at, sha256, bytes, rows, runner, latest_run_status
        from api.sources
        order by retrieved_at desc`
     ),
     getModelCard(),
+    getQualityPanelData(DEFAULT_COUNTY.fips),
   ]);
 
   return (
@@ -191,6 +195,14 @@ export default async function SourcesPage() {
           Williamson County homes are transferred from that same model -- they are not locally validated against
           Harris or Williamson installs.
         </p>
+
+        {/* QualityPanel renders its own heading + surface; per DESIGN.md
+            "panels never nest," this <details> section stops being a
+            <Panel> surface visually here (details' own bg already reads
+            as one card) -- QualityPanel's own Panel is the actual
+            methodology card, same treatment the rest of /sources gives
+            each self-contained methods section. */}
+        <QualityPanel data={qualityData} countyName={DEFAULT_COUNTY.name} />
 
         <h2
           style={{

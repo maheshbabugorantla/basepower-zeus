@@ -1,7 +1,6 @@
 import Link from "next/link";
 import { query } from "../../lib/db";
 import { RankingBoard } from "./RankingBoard";
-import { QualityPanel, type QualityPanelData, type ClassifierPrecisionRow } from "../../components/QualityPanel";
 import type { GateCountRow } from "../../components/GateCounts";
 import type { TopHomeRow } from "../../components/TopHomesTable";
 import { fetchRankedHomes, fetchPredictedHomes, SIGNAL_KEYS, type SignalKey, type PredictedHomeRow } from "../api/top-homes/route";
@@ -63,43 +62,6 @@ async function getDefaultWeights(): Promise<Record<SignalKey, number>> {
   }
 }
 
-interface JoinRateRow {
-  permits_with_tcad_id: string | number;
-  matched_to_parcels: string | number;
-  join_rate: string | number | null;
-  join_rate_null_reason: string | null;
-}
-
-interface ClassifierPrecisionRowDb {
-  label: string;
-  claude_labelled_count: string | number | null;
-  true_positive_count: string | number | null;
-  precision: string | number | null;
-  precision_null_reason: string | null;
-}
-
-interface ParcelGateCountsRow {
-  total_parcels: string | number;
-  single_family_count: string | number;
-  not_single_family_count: string | number;
-  homestead_count: string | number;
-  not_homestead_count: string | number;
-}
-
-function toNumberOrNull(value: string | number | null | undefined): number | null {
-  if (value === null || value === undefined) return null;
-  return Number(value);
-}
-
-interface ParcelGateCountsRow {
-  total_parcels: string | number;
-  single_family_count: string | number;
-}
-
-interface GateCountsRow {
-  reason: string;
-  home_count: string | number;
-}
 
 // M4-W2: predicted mode is the ranking default -- server-rendered so the
 // first paint already shows it, never a client round trip after
@@ -161,51 +123,6 @@ async function getGateCounts(countyFips: string): Promise<GateCountRow[]> {
     console.error("ranking: failed to load api.gate_counts", err);
     return [];
   }
-}
-
-async function getQualityPanelData(countyFips: string): Promise<QualityPanelData> {
-  const [joinRateRows, precisionRows, gateRows] = await Promise.all([
-    query<JoinRateRow>(
-      `select permits_with_tcad_id, matched_to_parcels, join_rate, join_rate_null_reason
-       from api.join_rate`
-    ),
-    query<ClassifierPrecisionRowDb>(
-      `select label, claude_labelled_count, true_positive_count, precision, precision_null_reason
-       from api.classifier_precision`
-    ),
-    query<ParcelGateCountsRow>(
-      `select total_parcels, single_family_count, not_single_family_count, homestead_count, not_homestead_count
-       from api.parcel_gate_counts where county_fips = $1`,
-      [countyFips]
-    ),
-  ]);
-
-  const joinRateRow = joinRateRows[0];
-  const precisionByLabel: ClassifierPrecisionRow[] = precisionRows.map((row) => ({
-    label: row.label,
-    claudeLabelledCount: toNumberOrNull(row.claude_labelled_count),
-    truePositiveCount: toNumberOrNull(row.true_positive_count),
-    precision: toNumberOrNull(row.precision),
-    precisionNullReason: row.precision_null_reason,
-  }));
-  const gateRow = gateRows[0];
-
-  return {
-    joinRate: joinRateRow ? toNumberOrNull(joinRateRow.join_rate) : null,
-    joinRateNullReason: joinRateRow?.join_rate_null_reason ?? "no_permits_loaded_yet",
-    permitsWithTcadId: joinRateRow ? Number(joinRateRow.permits_with_tcad_id) : 0,
-    matchedToParcels: joinRateRow ? Number(joinRateRow.matched_to_parcels) : 0,
-    precisionByLabel,
-    gateCounts: gateRow
-      ? {
-          totalParcels: Number(gateRow.total_parcels),
-          singleFamilyCount: Number(gateRow.single_family_count),
-          notSingleFamilyCount: Number(gateRow.not_single_family_count),
-          homesteadCount: Number(gateRow.homestead_count),
-          notHomesteadCount: Number(gateRow.not_homestead_count),
-        }
-      : null,
-  };
 }
 
 interface GeoRollupDbRow {
@@ -306,7 +223,7 @@ export default async function RankingPage({
   // home) is only fetched server-side when the URL actually asks for it
   // -- otherwise RankingBoard's own client effect fetches it the first
   // time a visitor switches to it, exactly as before this ticket.
-  const [predictedHomes, weightedHomes, qualityData, gateCounts, geoRollup] = await Promise.all([
+  const [predictedHomes, weightedHomes, gateCounts, geoRollup] = await Promise.all([
     getPredictedHomes(county.fips, { city: initialCity, zip: initialZip, blockGroupGeoid: initialBlockGroupGeoid, hideOldHomes: initialHideOldHomes, excludeBackup: initialHideExistingBackup, tier: initialTier }),
     initialMode === "weighted"
       ? fetchRankedHomes({
@@ -320,7 +237,6 @@ export default async function RankingPage({
           withTotal: true,
         })
       : Promise.resolve({ rows: [] as TopHomeRow[], total: 0 }),
-    getQualityPanelData(county.fips),
     getGateCounts(county.fips),
     getGeoRollup(county.fips),
   ]);
@@ -353,7 +269,12 @@ export default async function RankingPage({
   // api.gate_counts_by_market now all carry county_fips, so every count
   // panel below is scoped to the selected county -- no more "combined
   // across every loaded county" caveat.
-  const leftRail = <QualityPanel data={qualityData} countyName={county.name} />;
+  // Layout-review fix: "How far to trust this list" (QualityPanel) is
+  // methodology, not a lead-list concern -- moved to /sources under "How
+  // leads are prioritized" (it rendered BEFORE the map and list on
+  // phone, the worst possible position for a rep who opened this page
+  // to see homes).
+  const leftRail = null;
 
   return (
     <div style={{ display: "grid", gap: "var(--space-4)" }}>

@@ -175,6 +175,19 @@ export function plainReason(featureLabel: string): string {
   return featureLabel.charAt(0).toUpperCase() + featureLabel.slice(1);
 }
 
+/** Layout-review fix: "Long outages on this utility" reads as a
+ * confirmed fact about a utility we haven't actually confirmed serves
+ * this home -- contradictory next to an "Utility not confirmed" status
+ * on the same row. Every caller that shows a reason chip alongside a
+ * utility status should use this instead of the bare plainReason() for
+ * the "outage exposure" feature specifically. */
+export function reasonPhraseForContext(featureLabel: string, utilityStatus: UtilityStatusKey): string {
+  if (featureLabel.toLowerCase() === "outage exposure" && utilityStatus !== "served") {
+    return "Long outages in this area";
+  }
+  return plainReason(featureLabel);
+}
+
 /** Build-year fact for the door brief's "Before you knock" -- never a
  * reason chip (see EXCLUDED_REASON_LABELS above). Harris carries no
  * yr_built for any home (no public appraisal-roll field loaded for it)

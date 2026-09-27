@@ -5,7 +5,7 @@ import Link from "next/link";
 import { MissingState } from "../../components/ui/MissingState";
 import { PriorityTierBadge } from "../../components/ui/PriorityTierBadge";
 import { Chip } from "../../components/ui/Chip";
-import { utilityStatusForHome, plainReason, isEligibleReason } from "../../lib/priorityTier";
+import { utilityStatusForHome, reasonPhraseForContext, isEligibleReason } from "../../lib/priorityTier";
 import type { PredictedHomeRow } from "../api/top-homes/route";
 
 // M4-W2: the default ranking view -- one row per home, ordered by
@@ -27,13 +27,6 @@ function formatAddressLine(row: PredictedHomeRow): string {
   const parts = [row.situsNum, row.situsStreet].filter(Boolean).join(" ");
   const city = row.situsCity ?? "";
   return [parts, city].filter((s) => s && s.trim() !== "").join(", ");
-}
-
-function blockGroupShortLabel(geoid: string): string | null {
-  if (!/^\d{12}$/.test(geoid)) return null;
-  const tractRaw = geoid.slice(5, 11);
-  const tract = `${Number(tractRaw.slice(0, 4))}${tractRaw.slice(4) === "00" ? "" : `.${tractRaw.slice(4)}`}`;
-  return `Tract ${tract}`;
 }
 
 const ROW_GRID_TEMPLATE = "20px minmax(0, 1fr)";
@@ -86,10 +79,11 @@ export function PredictedHomesTable({
           territoryNullReason: row.territoryNullReason,
         });
         const hasBackup = row.coverageBucket === "base_customer" || row.coverageBucket === "other_backup";
-        const neighborhood = blockGroupShortLabel(row.blockGroupGeoid);
-        const metaLine = [row.situsZip, neighborhood, row.yrBuilt ? `built ${row.yrBuilt}` : null]
-          .filter(Boolean)
-          .join(" · ");
+        // Layout-review fix: no census-tract jargon ("Tract 1.02") --
+        // this app has no real named-neighborhood data source yet, so
+        // that slot is simply omitted rather than filled with a
+        // block-group id dressed up as one.
+        const metaLine = [row.situsZip, row.yrBuilt ? `built ${row.yrBuilt}` : null].filter(Boolean).join(" · ");
         const shownReasons = row.reasons
           .filter((r) => r.direction === "raises" && isEligibleReason(r.feature))
           .slice(0, 2);
@@ -132,7 +126,11 @@ export function PredictedHomesTable({
               {shownReasons.length > 0 ? (
                 <span className="predicted-homes-table__reasons">
                   {shownReasons.map((reason, i) => (
-                    <Chip key={`${reason.feature}-${i}`} signal="install" label={plainReason(reason.feature)} />
+                    <Chip
+                      key={`${reason.feature}-${i}`}
+                      signal="install"
+                      label={reasonPhraseForContext(reason.feature, utilityStatus.key)}
+                    />
                   ))}
                 </span>
               ) : null}
