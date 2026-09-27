@@ -1,4 +1,3 @@
-import { Figure } from "./ui/Figure";
 import { MissingState } from "./ui/MissingState";
 
 // M3-W1: compact "Storm record" panel, one row per county with scored
@@ -37,8 +36,6 @@ function formatChicago(epochSeconds: number): string {
     month: "short",
     day: "numeric",
     year: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
   }).format(new Date(epochSeconds * 1000));
 }
 
@@ -57,34 +54,37 @@ function StormRow({ county }: { county: StormRecordCounty }) {
       <div role="cell">
         {hasLongestEvent ? (
           <>
-            <Figure value={county.longestEventHours!.toFixed(1)} unit="hours" /> from{" "}
-            {formatChicago(county.longestEventStartEpoch!)}
+            <span className="ov-fig">{county.longestEventHours!.toFixed(1)}</span>
+            <span className="ov-unit"> h</span>
+            <span className="storm-grid__when"> from {formatChicago(county.longestEventStartEpoch!)}</span>
           </>
         ) : (
-          <MissingState variant="not-loaded" reason="Not loaded yet" />
+          <MissingState className="missing-state--inline" variant="not-loaded" reason="Not loaded yet" />
         )}
       </div>
       <div role="cell">
         {hasLongestEvent ? (
-          <Figure value={county.longestEventPeakCustomers!.toLocaleString()} unit="customers" />
+          <>
+            <span className="ov-fig">{county.longestEventPeakCustomers!.toLocaleString()}</span>
+          </>
         ) : (
-          <MissingState variant="not-loaded" reason="Not loaded yet" />
+          <MissingState className="missing-state--inline" variant="not-loaded" reason="Not loaded yet" />
         )}
       </div>
       <div role="cell">
         {hasBeryl ? (
           <>
-            <Figure value={county.berylPeakCustomers!.toLocaleString()} unit="customers" />
+            <span className="ov-fig">{county.berylPeakCustomers!.toLocaleString()}</span>
             {county.berylPeakShare !== null ? (
               <span className="storm-grid__muted">
                 {" "}
-                ({(county.berylPeakShare * 100).toFixed(0)}%
-                {county.berylPeakShare > 1 ? " -- exceeds the source file's own customer count" : ""})
+                ({(county.berylPeakShare * 100).toFixed(0)} %
+                {county.berylPeakShare > 1 ? ", above the source file's own customer count" : ""})
               </span>
             ) : null}
           </>
         ) : (
-          <MissingState variant="not-loaded" reason="Not loaded yet" />
+          <MissingState className="missing-state--inline" variant="not-loaded" reason="Not loaded yet" />
         )}
       </div>
     </div>
@@ -96,22 +96,19 @@ export function StormRecordPanel({ counties }: { counties: StormRecordCounty[] }
     return <p style={{ color: "var(--theme-ink-muted)", margin: 0 }}>Storm record not loaded yet.</p>;
   }
   return (
-    <div>
-      <p style={{ margin: "0 0 var(--space-2) 0", fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)" }}>
-        Longest major outage per county since 2024, and the Hurricane Beryl peak (July 2024). Major = at least 1% of
-        the county&rsquo;s customers out at once, a team threshold.
-      </p>
+    <>
+      <p className="ov-panel__sub">Counts are customers out. A major outage means 1 %+ of a county&rsquo;s customers out at once, a team threshold.</p>
       <div className="storm-grid" role="table" aria-label="Storm record by county">
         <div className="storm-grid__row storm-grid__row--head" role="row">
           <div role="columnheader">County</div>
-          <div role="columnheader">Longest major outage</div>
-          <div role="columnheader">Peak customers out</div>
-          <div role="columnheader">Beryl peak</div>
+          <div role="columnheader">Longest major outage since 2024</div>
+          <div role="columnheader">Customers out at its peak</div>
+          <div role="columnheader">Beryl peak (July 2024)</div>
         </div>
         {counties.map((c) => (
           <StormRow key={c.countyFips} county={c} />
         ))}
       </div>
-    </div>
+    </>
   );
 }
