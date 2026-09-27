@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { query } from "../../../lib/db";
 import { sanitizeWeights } from "../../api/top-homes/route";
+import { GLOBAL_SOURCE_BY_SIGNAL, pickSignalSources, type CaseSource, type SourceRow } from "../../../lib/caseSources";
 
 // M2-W5: the live, weights-following score breakdown behind
 // ScoreExplainer.tsx (web/components/ScoreExplainer.tsx). A read-only
@@ -90,6 +91,38 @@ async function getOutageBasis(propId: string): Promise<OutageBasisRow | null> {
   }
 }
 
+/** Each signal's api.sources row (see lib/caseSources.ts): the home's own
+ * source_ids and outage_source_ids from core.mv_home_signals, plus the
+ * latest row of each statewide dataset. Failure leaves figures without a
+ * popover; it never invents a source. */
+async function getSignalSources(propId: string): Promise<Record<string, CaseSource>> {
+  try {
+    const homeIds = await query<{ source_ids: string[] | null; outage_source_ids: string[] | null }>(
+      `select source_ids, outage_source_ids from core.mv_home_signals where prop_id = $1`,
+      [propId]
+    );
+    const ids = homeIds[0]?.source_ids ?? [];
+    const outageId = homeIds[0]?.outage_source_ids?.[0] ?? null;
+    const cols = `source_id, source, url, retrieved_at, sha256, runner, latest_run_id, latest_run_rows_in, latest_run_rows_loaded`;
+    const [homeRows, globalRows] = await Promise.all([
+      query<SourceRow>(`select ${cols} from api.sources where source_id = any($1::uuid[])`, [
+        outageId ? [...ids, outageId] : ids,
+      ]),
+      query<SourceRow>(
+        `select distinct on (source) ${cols} from api.sources
+         where source = any($1::text[]) order by source, retrieved_at desc`,
+        [Array.from(new Set(Object.values(GLOBAL_SOURCE_BY_SIGNAL)))]
+      ),
+    ]);
+    const byId = new Map(homeRows.map((r) => [r.source_id, r]));
+    const ordered = ids.map((id) => byId.get(id)).filter((r): r is SourceRow => !!r);
+    return pickSignalSources(ordered, outageId ? byId.get(outageId) ?? null : null, new Map(globalRows.map((r) => [r.source, r])));
+  } catch (err) {
+    console.error("ranking/breakdown: failed to load signal sources", err);
+    return {};
+  }
+}
+
 interface BreakdownRequestBody {
   propId?: unknown;
   weights?: unknown;
@@ -110,7 +143,7 @@ export async function POST(request: Request) {
 
   const weights = sanitizeWeights(body.weights);
 
-  const [rows, outageBasisRow] = await Promise.all([
+  const [rows, outageBasisRow, sources] = await Promise.all([
     query<BreakdownDbRow>(
       `select key, label, raw_value, raw_unit, percentile, weight, contribution, available, null_reason,
               term, anchor_value, anchor_basis
@@ -118,12 +151,14 @@ export async function POST(request: Request) {
       [propId, JSON.stringify(weights)]
     ),
     getOutageBasis(propId),
+    getSignalSources(propId),
   ]);
 
   return NextResponse.json(
     {
       propId,
       signals: rows.map(mapBreakdownRow),
+      sources,
       outageBasis: outageBasisRow?.outage_basis ?? null,
       outageDistributorName: outageBasisRow?.distributor_name ?? null,
     },

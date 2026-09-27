@@ -10,6 +10,7 @@ import { Panel } from "../../components/ui/Panel";
 import { MissingState } from "../../components/ui/MissingState";
 import type { SignalKey, PredictedHomeRow } from "../api/top-homes/route";
 import { PredictedHomesTable } from "./PredictedHomesTable";
+import { onIntroCue } from "../../lib/introBus";
 import { CAD_SHORT, homeMetaLine, streetLine } from "../../lib/homeRowFormat";
 import { bucketBy, filterRows, countyTotals, type GeoRollupRow } from "../../lib/geoRollup";
 import { decileRangeForTier, tierMeta, tierForDecile, PRIORITY_TIER_ORDER, type PriorityTierKey } from "../../lib/priorityTier";
@@ -246,6 +247,39 @@ export function RankingBoard({
   // M4-W2: predicted is the default ranking mode; "weighted" is the
   // team-adjustment alternative (unchanged M2-W1 behavior).
   const [mode, setMode] = useState<RankingMode>(initialMode);
+
+  // First-visit intro reel (components/intro): the rail's contents step
+  // aside while the reel plays over the map, then slide in on the glide cue.
+  // Inline styles only, all cleared on "restore", so the page ends exactly
+  // in its normal first-load state.
+  const railRef = useRef<HTMLElement | null>(null);
+  useEffect(
+    () =>
+      onIntroCue(({ cue }) => {
+        const kids = railRef.current ? (Array.from(railRef.current.children) as HTMLElement[]) : [];
+        if (cue === "live") {
+          for (const k of kids) {
+            k.style.transition = "none";
+            k.style.opacity = "0";
+            k.style.transform = "translateX(24px)";
+          }
+        } else if (cue === "glide") {
+          kids.forEach((k, i) => {
+            const ease = "cubic-bezier(0.16, 1, 0.3, 1)";
+            k.style.transition = `opacity 500ms ${ease} ${i * 90}ms, transform 800ms ${ease} ${i * 90}ms`;
+            k.style.opacity = "1";
+            k.style.transform = "none";
+          });
+        } else if (cue === "restore") {
+          for (const k of kids) {
+            k.style.transition = "";
+            k.style.opacity = "";
+            k.style.transform = "";
+          }
+        }
+      }),
+    []
+  );
   const [weights, setWeights] = useState<Record<SignalKey, number>>(initialWeights ?? defaultWeights ?? equalWeights());
   // M2-P8: "Hide homes built before 2000" — a team choice, not a Base
   // rule, default OFF. Filtered in the /api/top-homes route on yr_built
@@ -833,7 +867,7 @@ export function RankingBoard({
         </div>
       </Panel>
 
-      <aside className="ranking-board__rail">
+      <aside className="ranking-board__rail" ref={railRef}>
         <div className="ranking-rail__header">
           <h2 className="ranking-rail__question">{questionText}</h2>
           <div className="ranking-rail__status">{statusLine}</div>

@@ -33,6 +33,13 @@ export interface ProvenancePopoverProps {
    * signal name (`${homeId}-outage-provenance`).
    */
   id: string;
+  /**
+   * "icon" (default): the value renders as text with a small source button
+   * after it. "figure": the value itself is the button (dotted underline),
+   * for figures inside running prose such as the case sentence, where a
+   * glyph after every number would break the sentence.
+   */
+  trigger?: "icon" | "figure";
 }
 
 function truncateSha(sha256: string): string {
@@ -51,25 +58,40 @@ export function ProvenancePopover({
   rowsLoaded,
   rawFileHref,
   id,
+  trigger = "icon",
 }: ProvenancePopoverProps) {
   const triggerId = `${id}-trigger`;
   const popoverId = `${id}-popover`;
 
   return (
     <>
-      <span>{children}</span>
-      <button
-        type="button"
-        id={triggerId}
-        aria-label="Show source"
-        className="provenance-trigger"
-        popoverTarget={popoverId}
-      >
-        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-          <circle cx="8" cy="8" r="6.5" stroke="currentColor" strokeWidth="1.3" />
-          <path d="M8 7.2v3.6M8 5.2v.01" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
-        </svg>
-      </button>
+      {trigger === "figure" ? (
+        <button
+          type="button"
+          id={triggerId}
+          className="provenance-figure"
+          popoverTarget={popoverId}
+          aria-description="Show source"
+        >
+          {children}
+        </button>
+      ) : (
+        <>
+          <span>{children}</span>
+          <button
+            type="button"
+            id={triggerId}
+            aria-label="Show source"
+            className="provenance-trigger"
+            popoverTarget={popoverId}
+          >
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <circle cx="8" cy="8" r="6.5" stroke="currentColor" strokeWidth="1.3" />
+              <path d="M8 7.2v3.6M8 5.2v.01" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+            </svg>
+          </button>
+        </>
+      )}
       <span id={popoverId} popover="auto" className="provenance-popover">
         <span className="provenance-popover__row">
           <span className="provenance-popover__label">Dataset</span>

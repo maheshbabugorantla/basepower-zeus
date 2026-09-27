@@ -8,6 +8,8 @@ import { query } from "../lib/db";
 import { TopBar } from "../components/TopBar";
 import type { SourceFreshnessRow } from "../components/FreshnessSummary";
 import { getCountiesWithScoredHomes } from "../lib/counties.server";
+import { IntroGate } from "../components/intro/IntroGate";
+import { INTRO_BOOT_SCRIPT } from "../lib/introBootScript";
 
 // M0-W2: the real app shell. M1-W3 fix #3: DESIGN.md §1 "Zeus is light by
 // default, with a dark theme for long desk sessions" — pages were instead
@@ -63,6 +65,10 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
       <head>
         {/* eslint-disable-next-line react/no-danger */}
         <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
+        {/* First-visit intro reel: covers the page before first paint only
+            when the reel will play (lib/introBootScript.ts). */}
+        {/* eslint-disable-next-line react/no-danger */}
+        <script dangerouslySetInnerHTML={{ __html: INTRO_BOOT_SCRIPT }} />
       </head>
       <body>
         <a href="#main" className="skip-link">
@@ -78,6 +84,7 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
         >
           {children}
         </main>
+        <IntroGate />
       </body>
     </html>
   );

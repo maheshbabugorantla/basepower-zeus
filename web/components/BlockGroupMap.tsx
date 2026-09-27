@@ -5,6 +5,7 @@ import type { Map as MapLibreMap, ExpressionSpecification, MapLayerMouseEvent } 
 import { maplibregl } from "../lib/maplibre";
 import type { SignalKey } from "../app/api/top-homes/route";
 import { COUNTY_MAP_CENTER } from "../lib/counties";
+import { emitIntroStageReady, onIntroCue } from "../lib/introBus";
 import "maplibre-gl/dist/maplibre-gl.css";
 
 // DESIGN.md §2 score ramp (light theme; the map basemap is light Positron,
@@ -392,6 +393,10 @@ export function BlockGroupMap({
           "fill-color": scoreFillExpression(),
           "fill-opacity": [
             "case",
+            // first-visit intro reel: hidden until its wavefront reaches this
+            // block group (never set outside the reel; cleared on "restore")
+            ["==", ["feature-state", "introHidden"], true],
+            0,
             ["==", ["feature-state", "dimmed"], true],
             ["case", HAS_FEATURE_STATE_SCORE, 0.225, 0],
             ["case", HAS_FEATURE_STATE_SCORE, 0.75, 0],
@@ -651,6 +656,9 @@ export function BlockGroupMap({
       if (reducedMotion()) m.fitBounds(bounds, { ...opts, animate: false });
       else m.fitBounds(bounds, { ...opts, duration: 900, essential: true });
       fittedKeyRef.current = selectionKey; // one glide per selection -- no re-fit on later sourcedata ticks
+      // First-visit intro reel: the county frame is settled once this fit and
+      // its tiles are done; the reel waits for this before revealing the map.
+      if (!hasSelection) m.once("idle", () => emitIntroStageReady());
     }
 
     tryFit();
@@ -664,6 +672,104 @@ export function BlockGroupMap({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready, countyFips, JSON.stringify(fitToGeoids)]);
+
+  // ---------------------------------------------------------------------
+  // First-visit intro reel (components/intro). The reel plays over this map
+  // and raises cues on lib/introBus; this effect answers them and undoes
+  // every change on "restore" (saved camera, feature-state, wave layers), so
+  // the page ends in exactly its normal first-load state.
+  //   live  -> save the county camera, hide the priority fill
+  //   wave  -> a gold ring spreads from rank 1's pin; block groups inside it
+  //            fade back to their real shade
+  //   glide -> eased camera move to rank 1
+  //   restore -> jump back to the saved camera, clear everything
+  // ---------------------------------------------------------------------
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready) return;
+    const m: MapLibreMap = map;
+    const WAVE_SOURCE = "zeus-intro-wave";
+    const WAVE_GLOW = "zeus-intro-wave-glow";
+    const WAVE_LINE = "zeus-intro-wave-line";
+    let saved: { center: [number, number]; zoom: number; bearing: number; pitch: number } | null = null;
+    let centroids: Array<{ geoid: string; d: number }> = [];
+    let hidden = new Set<string>();
+    let origin: [number, number] | null = null;
+    let maxKm = 0;
+
+    const km = (a: [number, number], b: [number, number]) => {
+      const kx = 111.32 * Math.cos(((a[1] + b[1]) / 2) * (Math.PI / 180));
+      return Math.hypot((a[0] - b[0]) * kx, (a[1] - b[1]) * 110.57);
+    };
+    const ring = (c: [number, number], rKm: number) => {
+      const pts: [number, number][] = [];
+      const kx = 111.32 * Math.cos(c[1] * (Math.PI / 180));
+      for (let i = 0; i <= 96; i++) {
+        const a = (i / 96) * Math.PI * 2;
+        pts.push([c[0] + (Math.cos(a) * rKm) / kx, c[1] + (Math.sin(a) * rKm) / 110.57]);
+      }
+      return { type: "Feature" as const, properties: {}, geometry: { type: "LineString" as const, coordinates: pts } };
+    };
+    const clearWave = () => {
+      if (m.getLayer(WAVE_LINE)) m.removeLayer(WAVE_LINE);
+      if (m.getLayer(WAVE_GLOW)) m.removeLayer(WAVE_GLOW);
+      if (m.getSource(WAVE_SOURCE)) m.removeSource(WAVE_SOURCE);
+    };
+    const reveal = (geoid: string) => {
+      m.setFeatureState({ source: SOURCE_ID, id: geoid }, { introHidden: false });
+      hidden.delete(geoid);
+    };
+
+    return onIntroCue(({ cue, progress }) => {
+      if (cue === "live") {
+        const c = m.getCenter();
+        saved = { center: [c.lng, c.lat], zoom: m.getZoom(), bearing: m.getBearing(), pitch: m.getPitch() };
+        const pin = pinPropsRef.current.topPins.find((p) => p.rank === 1 && p.lon !== null && p.lat !== null);
+        origin = pin ? [pin.lon as number, pin.lat as number] : saved.center;
+        const boxes = new Map<string, [number, number, number, number]>();
+        try {
+          for (const f of m.querySourceFeatures(SOURCE_ID)) {
+            const geoid = f.properties?.geoid as string | undefined;
+            if (!geoid || !f.geometry || !("coordinates" in f.geometry)) continue;
+            const b = boxes.get(geoid) ?? [Infinity, Infinity, -Infinity, -Infinity];
+            extendBbox(b, f.geometry.coordinates);
+            boxes.set(geoid, b);
+          }
+        } catch {
+          // source not parsed: the fill simply stays as it is
+        }
+        centroids = Array.from(boxes, ([geoid, b]) => ({ geoid, d: km(origin as [number, number], [(b[0] + b[2]) / 2, (b[1] + b[3]) / 2]) }));
+        maxKm = centroids.reduce((mx, x) => Math.max(mx, x.d), 0) * 1.04;
+        hidden = new Set(centroids.map((x) => x.geoid));
+        for (const g of hidden) m.setFeatureState({ source: SOURCE_ID, id: g }, { introHidden: true });
+        clearWave();
+        m.addSource(WAVE_SOURCE, { type: "geojson", data: ring(origin, 0.01) });
+        m.addLayer({ id: WAVE_GLOW, type: "line", source: WAVE_SOURCE, paint: { "line-color": "#f7c33c", "line-width": 16, "line-blur": 10, "line-opacity": 0 } });
+        m.addLayer({ id: WAVE_LINE, type: "line", source: WAVE_SOURCE, paint: { "line-color": "#f7c33c", "line-width": 2.5, "line-opacity": 0 } });
+      } else if (cue === "wave" && origin && typeof progress === "number") {
+        const eased = progress >= 1 ? 1 : 1 - Math.pow(2, -8 * progress);
+        const r = Math.max(0.01, maxKm * eased);
+        for (const x of centroids) if (x.d <= r && hidden.has(x.geoid)) reveal(x.geoid);
+        const src = m.getSource(WAVE_SOURCE) as { setData?: (d: unknown) => void } | undefined;
+        src?.setData?.(ring(origin, r));
+        const fade = progress < 0.85 ? 1 : Math.max(0, (1 - progress) / 0.15);
+        if (m.getLayer(WAVE_LINE)) m.setPaintProperty(WAVE_LINE, "line-opacity", 0.95 * fade);
+        if (m.getLayer(WAVE_GLOW)) m.setPaintProperty(WAVE_GLOW, "line-opacity", 0.45 * fade);
+      } else if (cue === "glide" && saved && origin) {
+        for (const g of Array.from(hidden)) reveal(g);
+        clearWave();
+        m.easeTo({ center: origin, zoom: saved.zoom + 2.2, duration: 1200, easing: (t) => (t >= 1 ? 1 : 1 - Math.pow(2, -10 * t)), essential: true });
+      } else if (cue === "restore") {
+        clearWave();
+        for (const x of centroids) m.removeFeatureState({ source: SOURCE_ID, id: x.geoid }, "introHidden");
+        hidden.clear();
+        if (saved) m.jumpTo(saved);
+        saved = null;
+        origin = null;
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready]);
 
   // ---------------------------------------------------------------------
   // Dots — every gate-passed home in the selected block group, colored by

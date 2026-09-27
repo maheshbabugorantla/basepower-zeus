@@ -18,15 +18,21 @@ import { buildCaseSentenceParts, meterCaption, splitBoldMarkers, type CaseSignal
 import { REASON_META } from "./TopHomesTable";
 import { signalSource } from "../lib/homeRowFormat";
 import type { SignalKey } from "../app/api/top-homes/route";
+import { ProvenancePopover } from "./ui/ProvenancePopover";
+import type { CaseSource } from "../lib/caseSources";
+import { onIntroCue } from "../lib/introBus";
 
 const DEBOUNCE_MS = 200;
 
 interface BreakdownResponse {
   signals: CaseSignalInput[];
+  /** each signal's real api.sources row (app/ranking/breakdown/route.ts) */
+  sources?: Record<string, CaseSource>;
 }
 
 function useBreakdown(propId: string, weights: Record<SignalKey, number>) {
   const [signals, setSignals] = useState<CaseSignalInput[] | null>(null);
+  const [sources, setSources] = useState<Record<string, CaseSource>>({});
   const [error, setError] = useState<string | null>(null);
   const seq = useRef(0);
 
@@ -44,6 +50,7 @@ function useBreakdown(propId: string, weights: Record<SignalKey, number>) {
         const data: BreakdownResponse = await response.json();
         if (mySeq !== seq.current) return;
         setSignals(data.signals);
+        setSources(data.sources ?? {});
         setError(null);
       } catch (err) {
         if (mySeq !== seq.current) return;
@@ -53,21 +60,38 @@ function useBreakdown(propId: string, weights: Record<SignalKey, number>) {
     return () => clearTimeout(timer);
   }, [propId, weights]);
 
-  return { signals, error };
+  return { signals, sources, error };
 }
 
-function CaseSentenceText({ text }: { text: string }) {
+function CaseSentenceText({ text, source, popoverId }: { text: string; source?: CaseSource; popoverId: string }) {
   return (
     <>
-      {splitBoldMarkers(text).map((part, i) =>
-        part.bold ? (
-          <b key={i} className="case-sentence__figure">
-            {part.text}
-          </b>
+      {splitBoldMarkers(text).map((part, i) => {
+        if (!part.bold) return <span key={i}>{part.text}</span>;
+        const figure = <b className="case-sentence__figure">{part.text}</b>;
+        // The figure itself opens its source file (DESIGN.md "Provenance is
+        // the interface"); a figure with no source row stays plain text.
+        return source ? (
+          <ProvenancePopover
+            key={i}
+            id={`${popoverId}-${i}`}
+            trigger="figure"
+            dataset={source.dataset}
+            url={source.url}
+            retrievedAt={source.retrievedAt}
+            sha256={source.sha256}
+            runId={source.runId}
+            runner={source.runner}
+            rowsIn={source.rowsIn}
+            rowsLoaded={source.rowsLoaded}
+            rawFileHref={`/sources/raw/${source.sourceId}`}
+          >
+            {figure}
+          </ProvenancePopover>
         ) : (
-          <span key={i}>{part.text}</span>
-        )
-      )}{" "}
+          <span key={i}>{figure}</span>
+        );
+      })}{" "}
     </>
   );
 }
@@ -160,7 +184,40 @@ export function CaseForKnock({
   maxMeters = 3,
   includeMissingMeter = false,
 }: CaseForKnockProps) {
-  const { signals, error } = useBreakdown(propId, weights);
+  const { signals, sources: signalSources, error } = useBreakdown(propId, weights);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+
+  // First-visit intro reel (components/intro): the reel opens the source of
+  // rank 1's outage figure, then closes it. Only the first expanded row on
+  // the page answers, and "restore" always leaves every popover closed.
+  useEffect(
+    () =>
+      onIntroCue(({ cue }) => {
+        if (cue !== "provenance-open" && cue !== "provenance-close" && cue !== "restore") return;
+        const root = rootRef.current;
+        if (!root || document.querySelector(".home-row--expanded .case-for-knock") !== root) return;
+        if (cue === "provenance-open") {
+          const target =
+            root.querySelector<HTMLElement>('[data-signal="outage"] [popover]') ??
+            root.querySelector<HTMLElement>('[data-signal="backup_intent"] [popover]') ??
+            root.querySelector<HTMLElement>("[popover]");
+          try {
+            target?.showPopover();
+          } catch {
+            // already open
+          }
+        } else {
+          root.querySelectorAll<HTMLElement>("[popover]").forEach((el) => {
+            try {
+              el.hidePopover();
+            } catch {
+              // already closed
+            }
+          });
+        }
+      }),
+    []
+  );
 
   if (error) return <MissingState variant="not-loaded" reason={error} />;
   if (!signals) return <p style={{ margin: 0, color: "var(--theme-ink-muted)" }}>Loading the case for a knock…</p>;
@@ -181,7 +238,7 @@ export function CaseForKnock({
   }
 
   return (
-    <div className="case-for-knock">
+    <div className="case-for-knock" ref={rootRef}>
       {parts.length === 0 ? (
         <MissingState
           variant="not-loaded"
@@ -190,13 +247,16 @@ export function CaseForKnock({
       ) : (
         <p className={compact ? "case-for-knock__sentence case-for-knock__sentence--compact" : "case-for-knock__sentence"}>
           {parts.map((part) => (
-            <CaseSentenceText key={part.key} text={part.text} />
+            <span key={part.key} data-signal={part.key}>
+              <CaseSentenceText text={part.text} source={signalSources[part.key]} popoverId={`${propId}-${part.key}-case`} />
+            </span>
           ))}
         </p>
       )}
       {sources.length > 0 ? (
         <p className="case-for-knock__sources">
-          {sources.length} source{sources.length === 1 ? "" : "s"} · {sources.join(", ")} · each figure's file is under All 12 signals
+          {sources.length} source{sources.length === 1 ? "" : "s"} · {sources.join(", ")} ·{" "}
+          {parts.some((p) => signalSources[p.key]) ? "click any highlighted figure for its file" : "each figure's file is under All 12 signals"}
         </p>
       ) : null}
       <Meters signals={signals as CaseSignalInput[]} max={maxMeters} includeMissing={includeMissingMeter} />

@@ -673,6 +673,29 @@
   text-underline-offset: 3px;
 }
 
+/* A case-sentence figure that opens its source (ProvenancePopover
+ * trigger="figure"): the highlighted figure itself is the button. */
+.provenance-figure {
+  display: inline;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  border-radius: 2px;
+}
+
+.provenance-figure:hover .case-sentence__figure {
+  text-decoration-style: solid;
+}
+
+.provenance-figure:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
 .case-for-knock__sources {
   margin: 0;
   font-size: 11.5px;

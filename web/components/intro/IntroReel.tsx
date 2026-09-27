@@ -126,6 +126,8 @@ export default function IntroReel({ onDone }: IntroReelProps) {
         for (const cue of cuesBetween(prev, t)) emitIntroCue(cue);
         if (t >= T.waveStart && t <= T.waveEnd + 50) emitIntroCue("wave", seg(t, T.waveStart, T.waveEnd));
         render(t);
+        // read-only clock for verification scripts (no effect on the page)
+        (window as unknown as { __zeusIntroT?: number }).__zeusIntroT = t;
       }
       if (t >= REEL_MS) {
         finish("finished");
@@ -141,7 +143,10 @@ export default function IntroReel({ onDone }: IntroReelProps) {
       const k = Math.max(W / VW, H / VH);
       if (time < T.dissolveEnd && art) {
         ctx.setTransform(k, 0, 0, k, (W - VW * k) / 2, (H - VH * k) / 2);
-        drawStreetScenes(ctx, art, time, lines, sub, wall);
+        // keep captions clear of the viewport edge whatever the cover-fit crops
+        const cropX = (VW * k - W) / 2 / k;
+        const cropY = (VH * k - H) / 2 / k;
+        drawStreetScenes(ctx, art, time, lines, sub, wall, { left: cropX + 56, bottom: cropY + 24 });
         ctx.setTransform(1, 0, 0, 1, 0, 0);
         if (!painted) {
           painted = true;
@@ -197,6 +202,9 @@ export default function IntroReel({ onDone }: IntroReelProps) {
         cap.style.opacity = String(a);
       }
 
+      // skip leaves with the sting, so the reel's last frames are the page alone
+      if (skipRef.current) skipRef.current.style.opacity = String(1 - seg(time, T.stingOut, T.end - 300));
+
       // the sting
       const sting = stingRef.current;
       if (sting) {
@@ -204,7 +212,9 @@ export default function IntroReel({ onDone }: IntroReelProps) {
           stingOnRef.current = true;
           setStingOn(true);
         }
-        const a = easeOutExpo(seg(time, T.stingIn, T.stingIn + 300)) * (1 - seg(time, T.stingOut, T.end));
+        // fully clear 300 ms before the overlay is removed, so the reel's last
+        // frames are the page itself
+        const a = easeOutExpo(seg(time, T.stingIn, T.stingIn + 300)) * (1 - seg(time, T.stingOut, T.end - 300));
         sting.style.opacity = String(a);
       }
     }

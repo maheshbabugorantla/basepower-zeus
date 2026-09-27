@@ -15,7 +15,7 @@ import { ZeusArcs } from "./ZeusArcs";
 const SIZES = {
   sm: { mark: 32, word: 19, gap: 8, weight: 1 },
   md: { mark: 64, word: 34, gap: 12, weight: 1.4 },
-  lg: { mark: 220, word: 96, gap: 28, weight: 2.6 },
+  lg: { mark: 220, word: 96, gap: 28, weight: 1.8 },
 } as const;
 
 export interface ZeusLogoProps {

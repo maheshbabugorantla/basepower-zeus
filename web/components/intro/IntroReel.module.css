@@ -28,8 +28,10 @@
 /* ---- funnel counter (from reel B), over the live map ---- */
 
 .funnel {
+  /* the rail's contents step aside while the reel plays, so the card takes
+   * the rail's place on the right, clear of the map legend */
   position: absolute;
-  left: clamp(16px, 4vw, 64px);
+  right: clamp(16px, 2.5vw, 48px);
   top: 50%;
   width: min(380px, calc(100vw - 32px));
   transform: translateY(-50%);
@@ -139,7 +141,7 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: var(--space-6);
+  gap: var(--space-12);
   background: #121110;
   opacity: 0;
   pointer-events: none;

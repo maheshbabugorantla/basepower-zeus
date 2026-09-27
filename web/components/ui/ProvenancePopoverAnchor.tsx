@@ -30,13 +30,36 @@ export function ProvenancePopoverAnchor({
 
       const rect = triggerEl.getBoundingClientRect();
       const margin = 8;
+      // provisional spot (the popover's own size is unknown until it shows);
+      // it is never wider than 320 px (components.css), so clamp to that
+      const maxWidth = 320;
       popoverEl.style.position = "fixed";
       popoverEl.style.top = `${rect.bottom + margin}px`;
-      popoverEl.style.left = `${Math.max(margin, rect.left)}px`;
+      popoverEl.style.left = `${Math.max(margin, Math.min(rect.left, window.innerWidth - maxWidth - margin))}px`;
+    }
+
+    // Once open, measure the real box: keep it inside the viewport, and flip
+    // it above its trigger when there is no room below (a figure near the
+    // bottom or right edge otherwise renders a clipped or squeezed popover).
+    function onToggle(event: Event) {
+      const newState = (event as unknown as { newState?: string }).newState;
+      if (newState !== "open" || !triggerEl || !popoverEl) return;
+      const margin = 8;
+      const t = triggerEl.getBoundingClientRect();
+      const p = popoverEl.getBoundingClientRect();
+      const left = Math.max(margin, Math.min(t.left, window.innerWidth - p.width - margin));
+      const below = t.bottom + margin;
+      const top = below + p.height > window.innerHeight - margin ? Math.max(margin, t.top - margin - p.height) : below;
+      popoverEl.style.left = `${left}px`;
+      popoverEl.style.top = `${top}px`;
     }
 
     popoverEl.addEventListener("beforetoggle", onBeforeToggle);
-    return () => popoverEl.removeEventListener("beforetoggle", onBeforeToggle);
+    popoverEl.addEventListener("toggle", onToggle);
+    return () => {
+      popoverEl.removeEventListener("beforetoggle", onBeforeToggle);
+      popoverEl.removeEventListener("toggle", onToggle);
+    };
   }, [triggerId, popoverId]);
 
   return null;

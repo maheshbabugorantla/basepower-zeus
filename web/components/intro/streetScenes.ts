@@ -130,7 +130,7 @@ function drawWindows(ctx: CanvasRenderingContext2D, art: SceneArt, sc: number, o
   });
 }
 
-function caption(ctx: CanvasRenderingContext2D, lines: string[], sub: string | null, a: number, rise: number) {
+function caption(ctx: CanvasRenderingContext2D, lines: string[], sub: string | null, a: number, rise: number, safe: { left: number; bottom: number }) {
   if (a <= 0 || lines.length === 0) return;
   ctx.save();
   const g = ctx.createLinearGradient(0, VH - 230, 0, VH);
@@ -141,8 +141,8 @@ function caption(ctx: CanvasRenderingContext2D, lines: string[], sub: string | n
   ctx.fillRect(0, VH - 230, VW, 230);
   ctx.fillStyle = "#f0eeeb";
   ctx.textBaseline = "alphabetic";
-  let x = 88;
-  const y = VH - 96 + rise;
+  let x = Math.max(88, safe.left);
+  const y = VH - 96 - safe.bottom + rise;
   lines.forEach((s, i) => {
     ctx.font = `${i === 0 ? 600 : 500} 30px Geist, ui-sans-serif, system-ui, sans-serif`;
     ctx.fillText(s, x, y);
@@ -151,7 +151,7 @@ function caption(ctx: CanvasRenderingContext2D, lines: string[], sub: string | n
   if (sub) {
     ctx.font = "400 17px Geist, ui-sans-serif, system-ui, sans-serif";
     ctx.fillStyle = "#c9c4b6";
-    ctx.fillText(sub, 88, y + 36);
+    ctx.fillText(sub, Math.max(88, safe.left), y + 36);
   }
   ctx.restore();
 }
@@ -167,7 +167,9 @@ export function drawStreetScenes(
   stormLines: string[],
   stormSub: string | null,
   /** wall-clock ms: keeps the battery light breathing while the reel holds on the porch */
-  wall: number
+  wall: number,
+  /** caption inset in design units, clear of whatever the cover-fit crops */
+  safe: { left: number; bottom: number } = { left: 88, bottom: 0 }
 ): void {
   ctx.fillStyle = "#121110";
   ctx.fillRect(0, 0, VW, VH);
@@ -224,7 +226,7 @@ export function drawStreetScenes(
     }
 
     const ca = seg(t, 500, 900) * (1 - seg(t, 2150, 2400));
-    caption(ctx, stormLines, stormSub, ca, (1 - easeOutExpo(seg(t, 500, 1000))) * 10);
+    caption(ctx, stormLines, stormSub, ca, (1 - easeOutExpo(seg(t, 500, 1000))) * 10, safe);
     if (t > T.streetOut) {
       ctx.fillStyle = `rgba(0,0,0,${seg(t, T.streetOut, T.streetOut + 150)})`;
       ctx.fillRect(0, 0, VW, VH);
@@ -275,7 +277,7 @@ export function drawStreetScenes(
       ctx.globalAlpha = ca;
       ctx.fillStyle = "#f0eeeb";
       ctx.font = "500 34px Geist, ui-sans-serif, system-ui, sans-serif";
-      ctx.fillText("One home had a battery.", 88, VH - 90 + (1 - easeOutExpo(seg(t, T.porchCaption, T.porchCaption + 500))) * 10);
+      ctx.fillText("One home had a battery.", Math.max(88, safe.left), VH - 90 - safe.bottom + (1 - easeOutExpo(seg(t, T.porchCaption, T.porchCaption + 500))) * 10);
       ctx.restore();
     }
   }
@@ -291,7 +293,8 @@ export function canvasBlur(t: number): number {
   return 12 * easeInOutCubic(seg(t, T.dissolveStart, T.dissolveEnd));
 }
 
-/** scale of the porch as the camera lifts: 1 -> 0.82 */
+/** the camera pushes through the porch as it dissolves: 1 -> 1.08 (never
+ * shrinks, so no hard canvas edge ever shows over the page) */
 export function canvasLift(t: number): number {
-  return 1 - 0.18 * easeInOutCubic(seg(t, T.dissolveStart, T.dissolveEnd));
+  return 1 + 0.08 * easeInOutCubic(seg(t, T.dissolveStart, T.dissolveEnd));
 }
