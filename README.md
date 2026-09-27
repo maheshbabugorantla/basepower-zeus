@@ -1,6 +1,6 @@
 # Base Power Zeus
 
-> Built during the **Base Power Deep Tech Hackathon** (Austin, TX, September 2026) by [Mahesh Babu Gorantla](https://github.com/maheshbabugorantla).
+> Built during the **Base Power Deep Tech Hackathon** (Austin, TX, September 2026) by [Mahesh Babu Gorantla](https://github.com/maheshbabugorantla), [Sreedhar Reddy Arolla](https://github.com/sreedhararolla), [Pranay Dheeru](https://github.com/pranaydheeru) & [Pranav Narahari](https://github.com/pnav1023).
 
 ![Zeus: an engraved fist gripping a gold thunderbolt inside a sunburst roundel over transmission towers, beside the ZEUS wordmark](docs/media/zeus-hero.png)
 
