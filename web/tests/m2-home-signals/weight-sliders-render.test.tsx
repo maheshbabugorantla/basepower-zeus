@@ -10,16 +10,26 @@ import { WeightSliders, equalWeights, SIGNAL_LABELS } from "../../components/Wei
 // four signal families (outage exposure / grid value / installability /
 // household fit) — the same family each signal's chip/meter already uses.
 
-describe("WeightSliders (M2-P8, redesign grouping)", () => {
+describe("WeightSliders (M2-P8, 2026-09-27 labels and grouping)", () => {
   const html = renderToStaticMarkup(
     <WeightSliders weights={equalWeights()} onChange={() => {}} onReset={() => {}} defaultWeights={null} />
   );
 
-  it("renders the 4 signal-family headings", () => {
-    expect(html).toContain("Outage exposure");
-    expect(html).toContain("Grid value");
-    expect(html).toContain("Installability");
-    expect(html).toContain("Household fit");
+  it("renders the 4 group headings", () => {
+    for (const heading of ["Outages", "Adoption", "Installation", "Household"]) {
+      expect(html).toContain(heading);
+    }
+    expect(html).not.toContain("Grid value");
+  });
+
+  it("shows one number per slider: its share of the score, never the raw 0-10 setting", () => {
+    // equal weights: 13 sliders at 5 each -> 5/65 = 7.7% each
+    expect(html.match(/7\.7%<\/span> of score/g)?.length).toBe(13);
+    // the old "5 · 7.7%" pattern read as a range
+    expect(html).not.toMatch(/>\s*5\s*<\/span>\s*·/);
+    expect(html).not.toContain(" · ");
+    // the 0-10 setting is still announced to screen readers
+    expect(html).toContain('aria-valuetext="5 of 10, 7.7 percent of the team score"');
   });
 
   it("renders a slider for all 13 signals with their plain-language labels", () => {
@@ -31,10 +41,18 @@ describe("WeightSliders (M2-P8, redesign grouping)", () => {
     expect(html.match(/type="range"/g)?.length).toBe(13);
   });
 
+  it("says Off (not 0 or 0%) for a signal the team turned off", () => {
+    const off = renderToStaticMarkup(
+      <WeightSliders weights={{ ...equalWeights(), outage: 0 }} onChange={() => {}} onReset={() => {}} defaultWeights={null} />
+    );
+    expect(off).toContain('data-testid="weight-share-outage"><span class="weight-share__off">Off</span>');
+    expect(off).toContain('aria-valuetext="Off"');
+  });
+
   it("renders both the evidence-based-defaults and reset-to-equal actions", () => {
-    expect(html).toContain("Evidence-based defaults");
-    expect(html).toContain("Reset to equal");
-    expect(html).toContain("How defaults were chosen");
+    expect(html).toContain("Use study defaults");
+    expect(html).toContain("Set all equal");
+    expect(html).toContain("How the study defaults were chosen");
   });
 
   it("never shows a schema/table name on screen", () => {

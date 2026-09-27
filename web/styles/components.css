@@ -2208,3 +2208,39 @@ button:focus-visible,
 .case-meter__value {
   line-height: 1.35;
 }
+
+
+/* ---------------------------------------------------------------------- */
+/* Weight sliders: share label + group headings (2026-09-27 clarify pass)  */
+/* One number per slider: its share of the team score, tabular so the      */
+/* column doesn't jitter while dragging.                                   */
+/* ---------------------------------------------------------------------- */
+
+.weight-share {
+  font-size: var(--type-label-font-size);
+  white-space: nowrap;
+  color: var(--theme-ink-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.weight-share__pct {
+  display: inline-block;
+  min-width: 3.2ch;
+  text-align: right;
+  font-weight: 600;
+  color: var(--theme-ink);
+}
+
+.weight-share__off {
+  font-weight: 600;
+  color: var(--theme-ink-muted);
+}
+
+.weight-group__heading {
+  font-size: var(--type-label-font-size);
+  font-weight: 600;
+  color: var(--theme-ink);
+  margin-bottom: var(--space-2);
+  padding-bottom: var(--space-1);
+  border-bottom: 1px solid var(--theme-divider);
+}
