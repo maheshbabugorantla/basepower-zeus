@@ -133,16 +133,19 @@ function drawWindows(ctx: CanvasRenderingContext2D, art: SceneArt, sc: number, o
 function caption(ctx: CanvasRenderingContext2D, lines: string[], sub: string | null, a: number, rise: number, safe: { left: number; bottom: number }) {
   if (a <= 0 || lines.length === 0) return;
   ctx.save();
-  const g = ctx.createLinearGradient(0, VH - 230, 0, VH);
-  g.addColorStop(0, "rgba(10,10,11,0)");
-  g.addColorStop(1, "rgba(10,10,11,.74)");
-  ctx.globalAlpha = a;
-  ctx.fillStyle = g;
-  ctx.fillRect(0, VH - 230, VW, 230);
-  ctx.fillStyle = "#f0eeeb";
-  ctx.textBaseline = "alphabetic";
   let x = Math.max(88, safe.left);
   const y = VH - 96 - safe.bottom + rise;
+  // the dark band follows the caption, wherever the cover-fit puts it
+  const top = y - 150;
+  const g = ctx.createLinearGradient(0, top, 0, y + 90);
+  g.addColorStop(0, "rgba(10,10,11,0)");
+  g.addColorStop(0.55, "rgba(10,10,11,.66)");
+  g.addColorStop(1, "rgba(10,10,11,.82)");
+  ctx.globalAlpha = a;
+  ctx.fillStyle = g;
+  ctx.fillRect(0, top, VW, VH - top + 10);
+  ctx.fillStyle = "#f0eeeb";
+  ctx.textBaseline = "alphabetic";
   lines.forEach((s, i) => {
     ctx.font = `${i === 0 ? 600 : 500} 30px Geist, ui-sans-serif, system-ui, sans-serif`;
     ctx.fillText(s, x, y);
@@ -275,6 +278,12 @@ export function drawStreetScenes(
     if (ca > 0) {
       ctx.save();
       ctx.globalAlpha = ca;
+      const py = VH - 90 - safe.bottom;
+      const pg = ctx.createLinearGradient(0, py - 130, 0, py + 70);
+      pg.addColorStop(0, "rgba(0,0,0,0)");
+      pg.addColorStop(1, "rgba(0,0,0,.6)");
+      ctx.fillStyle = pg;
+      ctx.fillRect(0, py - 130, VW, VH - py + 140);
       ctx.fillStyle = "#f0eeeb";
       ctx.font = "500 34px Geist, ui-sans-serif, system-ui, sans-serif";
       ctx.fillText("One home had a battery.", Math.max(88, safe.left), VH - 90 - safe.bottom + (1 - easeOutExpo(seg(t, T.porchCaption, T.porchCaption + 500))) * 10);
