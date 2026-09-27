@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { Fragment, useEffect, useRef } from "react";
 
 import Link from "next/link";
 import {
@@ -13,6 +13,8 @@ import {
 } from "./ui/DataTable";
 import { MissingState } from "./ui/MissingState";
 import { Chip, type SignalName } from "./ui/Chip";
+import { CaseForKnock } from "./CaseForKnock";
+import type { SignalKey } from "../app/api/top-homes/route";
 
 // M2-W1: ranked-homes table from api.homes_ranked_weighted (score v1,
 // re-ranked live by WeightSliders — see app/ranking/RankingBoard.tsx).
@@ -131,6 +133,13 @@ export interface TopHomesTableProps {
   scrollToPropId?: string | null;
   /** propId -> rank delta (oldRank - newRank; positive = moved up). Cleared 2s after a re-rank. */
   rankDeltas?: Map<string, number>;
+  /** Redesign (Mock A): the one row expanded in place with the real case
+   * for a knock + 3 meters, at the team's own live slider weights --
+   * replaces the score explainer that used to append below the board. */
+  expandedPropId?: string | null;
+  onToggleExpand?: (propId: string) => void;
+  weights?: Record<SignalKey, number>;
+  onLocateOnMap?: (row: TopHomeRow) => void;
 }
 
 export function TopHomesTable({
@@ -140,6 +149,10 @@ export function TopHomesTable({
   onHoverRow,
   scrollToPropId,
   rankDeltas,
+  expandedPropId = null,
+  onToggleExpand,
+  weights,
+  onLocateOnMap,
 }: TopHomesTableProps) {
   // DataTableRow (web/components/ui/DataTable.tsx, not owned by this
   // ticket) is a plain function component with no `ref` in its prop
@@ -154,6 +167,13 @@ export function TopHomesTable({
     // when the element is already fully within the scroll container.
     el?.scrollIntoView({ block: "nearest" });
   }, [scrollToPropId]);
+
+  useEffect(() => {
+    if (!expandedPropId) return;
+    const el = containerRef.current?.querySelector<HTMLElement>(`[data-prop-id="${expandedPropId}"]`);
+    el?.scrollIntoView({ block: "nearest" });
+    el?.focus?.();
+  }, [expandedPropId]);
 
   if (rows.length === 0) {
     return (
@@ -187,15 +207,22 @@ export function TopHomesTable({
           const title = [addressLine, row.situsZip].filter(Boolean).join(" ") || row.propId;
           const delta = rankDeltas?.get(row.propId);
           const isHovered = hoveredPropId === row.propId;
+          const isExpanded = expandedPropId === row.propId;
           return (
+            <Fragment key={row.propId}>
             <DataTableRow
-              key={row.propId}
               className="data-table__row--hoverable"
+              tabIndex={-1}
               data-hovered={isHovered || undefined}
               data-testid="top-homes-row"
               data-prop-id={row.propId}
               onMouseEnter={() => onHoverRow?.(row)}
               onMouseLeave={() => onHoverRow?.(null)}
+              onClick={(e) => {
+                if ((e.target as HTMLElement).closest("a")) return;
+                onToggleExpand?.(row.propId);
+              }}
+              style={{ cursor: onToggleExpand ? "pointer" : undefined }}
             >
               <DataTableCell>
                 <span style={{ display: "inline-flex", alignItems: "center", gap: "var(--space-1)" }}>
@@ -246,6 +273,28 @@ export function TopHomesTable({
                 )}
               </DataTableCell>
             </DataTableRow>
+            {isExpanded ? (
+              <DataTableRow key={`${row.propId}-expand`} data-testid="top-homes-row-expand">
+                <DataTableCell colSpan={4} onClick={(e) => e.stopPropagation()}>
+                  <div className="row-expand">
+                    <CaseForKnock
+                      propId={row.propId}
+                      weights={weights ?? ({} as Record<SignalKey, number>)}
+                      sourceNames={["Austin permits", "Travis CAD", "ACS 2024", "EIA-861"]}
+                      compact
+                    />
+                    <div className="row-expand__actions">
+                      <Link href={`/home/${row.propId}`}>Open full record →</Link>
+                      <button type="button" className="row-expand__link" onClick={() => onLocateOnMap?.(row)}>
+                        Locate on map
+                      </button>
+                      <Link href={`/home/${row.propId}?tab=signals`}>All 12 signals</Link>
+                    </div>
+                  </div>
+                </DataTableCell>
+              </DataTableRow>
+            ) : null}
+            </Fragment>
           );
         })}
       </DataTableBody>

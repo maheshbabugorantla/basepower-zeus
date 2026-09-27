@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { Suspense } from "react";
 import Link from "next/link";
 import { query } from "../../../lib/db";
 import { Panel } from "../../../components/ui/Panel";
@@ -9,10 +10,12 @@ import { ParcelMap } from "../../../components/ParcelMap";
 import { SolarPanel } from "../../../components/SolarPanel";
 import { ScoreExplainer } from "../../../components/ScoreExplainer";
 import { PropensityBadge, type PropensityReason } from "../../../components/PropensityBadge";
-import { utilityStatusForHome, buildYearNote } from "../../../lib/priorityTier";
+import { utilityStatusForHome, buildYearNote, tierForDecile, type PriorityTierKey } from "../../../lib/priorityTier";
 import { PermitPath, type PermitPathKind, type PermitPathStatsRow, type PermitRulesCitation } from "../../../components/PermitPath";
 import { GridValue } from "../../../components/GridValue";
 import { COUNTY_CANDIDATES, CAD_NAME } from "../../../lib/counties";
+import { HomeTabs, JumpToTab } from "../../../components/HomeTabs";
+import { CaseForKnock } from "../../../components/CaseForKnock";
 
 // M3-W1: which appraisal district this home's parcel roll comes from,
 // per county (Travis CAD / Harris CAD (HCAD) / Williamson CAD (WCAD)) --
@@ -633,6 +636,60 @@ async function classifierHasRun(): Promise<boolean> {
   }
 }
 
+/** Redesign (Mock B): the Signals tab's real row count -- one row per
+ * signal api.home_score_breakdown actually returns for this home (never
+ * a hand-typed "12"), at equal weights (the tab shows the unweighted
+ * breakdown, same as the existing ScoreExplainer default below). */
+async function getSignalsCount(propId: string): Promise<number> {
+  try {
+    const rows = await query<{ n: string | number }>(
+      `select count(*) as n from api.home_score_breakdown($1, $2::jsonb)`,
+      [propId, JSON.stringify(EQUAL_WEIGHTS)]
+    );
+    return rows[0] ? Number(rows[0].n) : 0;
+  } catch (err) {
+    console.error("home-detail: failed to count api.home_score_breakdown rows", err);
+    return 0;
+  }
+}
+
+/** Redesign: the priority card's "In the top tenth of N ranked <county>
+ * homes" -- N is the real gate-passed/ranked count for this home's own
+ * county (api.gate_counts, reason='passed'), never a hardcoded figure. */
+async function getRankedHomeCount(countyFips: string): Promise<number | null> {
+  try {
+    const rows = await query<{ n: string | number | null }>(
+      `select home_count as n from api.gate_counts where county_fips = $1 and reason = 'passed'`,
+      [countyFips]
+    );
+    return rows[0]?.n === null || rows[0]?.n === undefined ? null : Number(rows[0].n);
+  } catch (err) {
+    console.error("home-detail: failed to load api.gate_counts for the priority card", err);
+    return null;
+  }
+}
+
+/** Priority card sentence -- varies by tier (a real product bug fixed
+ * here: "top tenth" is only correct for decile 1/tier "top"). */
+function priorityCardSentence(tierKey: PriorityTierKey, rankedCount: number | null, countyName: string): string {
+  if (rankedCount === null) {
+    return "Ranked homes count not available right now.";
+  }
+  const rankedPhrase = `${rankedCount.toLocaleString()} ranked ${countyName} homes`;
+  switch (tierKey) {
+    case "top":
+      return `In the top tenth of ${rankedPhrase}, by likelihood of adding backup in the next 12 months.`;
+    case "high":
+      return `In the next fifth of ${rankedPhrase}, by likelihood of adding backup in the next 12 months.`;
+    case "medium":
+      return `In the middle third of ${rankedPhrase}, by likelihood of adding backup in the next 12 months.`;
+    case "low":
+      return `In the lowest four-tenths of ${rankedPhrase}, by likelihood of adding backup in the next 12 months.`;
+    default:
+      return `Not yet scored among ${rankedPhrase}.`;
+  }
+}
+
 function ProvenanceFor({
   sourceRow,
   id,
@@ -777,7 +834,7 @@ export default async function HomeDetailPage({
   const incomeAge = homeSignals?.block_group_geoid ? await getIncomeAge(homeSignals.block_group_geoid) : null;
   const permitSourceIds = home.permits.map((p) => p.source_id).filter((s): s is string => !!s);
 
-  const [sourcesById, scoreContext, homePropensity, parcelGeojson, rulesHaveRun, texasOutagePercentile, permitPathStatsRow, permitRuleRow, coverageBucket] = await Promise.all([
+  const [sourcesById, scoreContext, homePropensity, parcelGeojson, rulesHaveRun, texasOutagePercentile, permitPathStatsRow, permitRuleRow, coverageBucket, signalsCount, rankedHomeCount] = await Promise.all([
     getSourcesByIds(
       Array.from(
         new Set([
@@ -802,6 +859,8 @@ export default async function HomeDetailPage({
     permitPath === "city_battery_permit" ? getPermitPathStats() : Promise.resolve(null),
     getPermitRuleCitation(permitPath),
     getHomeCoverageBucket(home.prop_id),
+    getSignalsCount(home.prop_id),
+    getRankedHomeCount(home.county_fips ?? ""),
   ]);
 
   const permitPathStats: PermitPathStatsRow | null = permitPathStatsRow
@@ -839,8 +898,383 @@ export default async function HomeDetailPage({
   const stateCode = home.imprv_state_cd ?? home.land_state_cd;
   const parcelSourceId = home.source_ids?.[0];
 
+  // ---------------------------------------------------------------------
+  // Redesign (Mock B): tab-shell computed values. Every fact below comes
+  // from data already fetched above for the (unchanged) Signals/Permits/
+  // Parcel & solar/Sources sections -- nothing new is invented for the
+  // Summary tab.
+  // ---------------------------------------------------------------------
+  const H2 = {
+    fontFamily: "var(--type-heading-font-family)",
+    fontSize: "var(--type-heading-font-size)",
+    fontWeight: "var(--type-heading-font-weight)",
+    marginTop: 0,
+  } as const;
+
+  const hasOwnBackup = coverageBucket === "base_customer" || coverageBucket === "other_backup";
+  const utilityStatus = utilityStatusForHome({
+    gateReason: homeSignals?.gate_reason ?? null,
+    territoryNullReason: homeSignals?.territory_null_reason ?? null,
+  });
+  const priorityTier = tierForDecile(homePropensity?.decile ?? null);
+  // Real dataset names behind the signals CaseForKnock's sentence
+  // templates actually use (backup_intent/installability/home_permits ->
+  // Austin permits; home_value/parcel facts -> the county CAD; income_100k/
+  // age_35_64 -> ACS; outage -> EIA-861) -- a fixed list of the datasets
+  // this app's data model ties to those signals, not a per-home dynamic
+  // lookup (a known simplification, not an invented source).
+  const caseSourceNames = ["Austin permits", `${countyName} CAD`, "ACS 2024", "EIA-861"];
+
+  const recentPermits = [...home.permits]
+    .sort((a, b) => (b.issue_date ?? "").localeCompare(a.issue_date ?? ""))
+    .slice(0, 3);
+
+  const signalsTabContent =
+    homeSignals && homeSignals.gate_reason === null ? (
+      <Panel>
+        <h2 style={H2}>How the score is built</h2>
+        <ScoreExplainer propId={home.prop_id} weights={EQUAL_WEIGHTS} />
+      </Panel>
+    ) : (
+      <Panel>
+        <h2 style={H2}>How the score is built</h2>
+        <MissingState
+          variant="not-loaded"
+          reason="This home isn't scored, so there is no signal breakdown to show"
+        />
+      </Panel>
+    );
+
+  const permitsTabContent = (
+    <Panel>
+      <h2 style={H2}>Permits on this parcel</h2>
+      {home.permits.length === 0 ? (
+        homeSignals?.backup_intent_null_reason === "no_permit_coverage" ? (
+          <MissingState variant="not-available" reason="no_permit_coverage" />
+        ) : (
+          <p style={{ margin: 0, color: "var(--theme-ink-muted)" }}>No City of Austin permits on file for this home.</p>
+        )
+      ) : (
+        <DataTable>
+          <DataTableHead>
+            <DataTableRow>
+              <DataTableHeaderCell>Permit</DataTableHeaderCell>
+              <DataTableHeaderCell>Issued</DataTableHeaderCell>
+              <DataTableHeaderCell>Class</DataTableHeaderCell>
+              <DataTableHeaderCell>Description</DataTableHeaderCell>
+              <DataTableHeaderCell>Status</DataTableHeaderCell>
+              <DataTableHeaderCell>Label</DataTableHeaderCell>
+            </DataTableRow>
+          </DataTableHead>
+          <DataTableBody>
+            {home.permits.map((permit) => (
+              <DataTableRow key={permit.permit_number}>
+                <DataTableCell>
+                  <ProvenanceFor sourceRow={sourcesById.get(permit.source_id ?? "")} id={`permit-${permit.permit_number}`}>
+                    <span style={{ fontFamily: "var(--type-data-font-family)" }}>{permit.permit_number}</span>
+                  </ProvenanceFor>
+                </DataTableCell>
+                <DataTableCell>{permit.issue_date ?? <NotRecorded />}</DataTableCell>
+                <DataTableCell>{permit.permit_class ?? permit.work_class ?? <NotRecorded />}</DataTableCell>
+                <DataTableCell>{permit.description ?? <NotRecorded />}</DataTableCell>
+                <DataTableCell>{permit.status_current ?? <NotRecorded />}</DataTableCell>
+                <DataTableCell>
+                  <PermitLabel label={permit.label} labeller={permit.labeller} classifierHasRun={rulesHaveRun} />
+                </DataTableCell>
+              </DataTableRow>
+            ))}
+          </DataTableBody>
+        </DataTable>
+      )}
+    </Panel>
+  );
+
+  const parcelSolarTabContent = (
+    <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-6)" }}>
+      <Panel>
+        <h2 style={H2}>Parcel</h2>
+        {parcelGeojson ? (
+          <ParcelMap geojson={parcelGeojson} />
+        ) : (
+          <MissingState variant="not-loaded" reason="No lot outline on file for this parcel" />
+        )}
+        <dl style={{ display: "grid", gridTemplateColumns: "max-content 1fr", gap: "var(--space-2) var(--space-4)", marginTop: "var(--space-3)" }}>
+          <dt style={{ color: "var(--theme-ink-muted)" }}>Property type</dt>
+          <dd style={{ margin: 0 }}>
+            {stateCode === null ? (
+              <MissingState variant="not-loaded" reason="No property type on this parcel record" />
+            ) : (
+              <ProvenanceFor sourceRow={sourcesById.get(parcelSourceId ?? "")} id={`${home.prop_id}-state-cd`}>
+                <span>
+                  {stateCode === "A1" ? "Single-family home" : stateCode}{" "}
+                  <span style={{ fontFamily: "var(--type-data-font-family)", color: "var(--theme-ink-muted)" }}>({stateCode})</span>
+                </span>
+              </ProvenanceFor>
+            )}
+          </dd>
+
+          <dt style={{ color: "var(--theme-ink-muted)" }}>Homestead</dt>
+          <dd style={{ margin: 0 }}>{home.is_homestead ? "Yes" : "No"}</dd>
+
+          <dt style={{ color: "var(--theme-ink-muted)" }}>Market value</dt>
+          <dd style={{ margin: 0 }}>
+            {home.market_value === null ? (
+              <MissingState variant="not-loaded" reason="Market value not recorded for this parcel" />
+            ) : (
+              <ProvenanceFor sourceRow={sourcesById.get(parcelSourceId ?? "")} id={`${home.prop_id}-market-value`}>
+                <span style={{ fontFamily: "var(--type-data-font-family)" }}>${Number(home.market_value).toLocaleString()}</span>
+              </ProvenanceFor>
+            )}
+          </dd>
+        </dl>
+      </Panel>
+
+      <SolarPanel propId={home.prop_id} />
+    </div>
+  );
+
+  const sourcesTabContent = (
+    <Panel>
+      <h2 style={H2}>Sources behind this record</h2>
+      {sourcesById.size === 0 ? (
+        <MissingState variant="not-loaded" reason="No source manifest rows loaded for this home yet" />
+      ) : (
+        <DataTable>
+          <DataTableHead>
+            <DataTableRow>
+              <DataTableHeaderCell>Dataset</DataTableHeaderCell>
+              <DataTableHeaderCell>Retrieved</DataTableHeaderCell>
+              <DataTableHeaderCell>SHA-256</DataTableHeaderCell>
+              <DataTableHeaderCell>Raw file</DataTableHeaderCell>
+            </DataTableRow>
+          </DataTableHead>
+          <DataTableBody>
+            {Array.from(sourcesById.values()).map((src) => (
+              <DataTableRow key={src.source_id}>
+                <DataTableCell>
+                  {src.url ? (
+                    <a href={src.url} target="_blank" rel="noreferrer">
+                      {src.source}
+                    </a>
+                  ) : (
+                    src.source
+                  )}
+                </DataTableCell>
+                <DataTableCell style={{ fontFamily: "var(--type-data-font-family)" }}>
+                  {src.retrieved_at instanceof Date ? src.retrieved_at.toISOString().slice(0, 10) : String(src.retrieved_at).slice(0, 10)}
+                </DataTableCell>
+                <DataTableCell style={{ fontFamily: "var(--type-data-font-family)" }}>{src.sha256.slice(0, 12)}…</DataTableCell>
+                <DataTableCell>
+                  <a href={`/sources/raw/${src.source_id}`}>View raw file</a>
+                </DataTableCell>
+              </DataTableRow>
+            ))}
+          </DataTableBody>
+        </DataTable>
+      )}
+    </Panel>
+  );
+
+  const summaryTabContent = (
+    <div className="home-summary">
+      <div>
+        <h2 style={{ ...H2, fontSize: "20px" }}>The case for a knock.</h2>
+        {homeSignals && homeSignals.gate_reason === null ? (
+          <CaseForKnock
+            propId={home.prop_id}
+            weights={EQUAL_WEIGHTS}
+            sourceNames={caseSourceNames}
+            maxMeters={6}
+            includeMissingMeter
+          />
+        ) : (
+          <MissingState
+            variant="not-loaded"
+            reason={
+              homeSignals === null
+                ? `Not scored: only owner-occupied single-family homes with a mapped lot inside ${countyName} County are ranked`
+                : (GATE_REASON_LABEL[homeSignals.gate_reason ?? ""] ?? "Excluded from ranking")
+            }
+          />
+        )}
+
+        <div className="home-summary__facts">
+          <div>
+            {home.market_value === null ? (
+              <MissingState variant="not-loaded" reason="Market value not recorded for this parcel" />
+            ) : (
+              <ProvenanceFor sourceRow={sourcesById.get(parcelSourceId ?? "")} id={`${home.prop_id}-summary-market-value`}>
+                <span style={{ fontFamily: "var(--type-data-font-family)" }}>${Number(home.market_value).toLocaleString()}</span>
+              </ProvenanceFor>
+            )}
+            <small>Appraisal, {CAD_NAME[home.county_fips ?? ""] ?? `${countyName} CAD`}</small>
+          </div>
+          <div>
+            {homeSignals?.yr_built == null ? (
+              <MissingState variant="not-loaded" reason={homeSignals?.yr_built_null_reason ?? "Build year not available"} />
+            ) : (
+              <span style={{ fontFamily: "var(--type-data-font-family)" }}>{homeSignals.yr_built}</span>
+            )}
+            <small>Built</small>
+          </div>
+          <div>
+            {hasOwnBackup ? (
+              <span>
+                Yes{homeSignals?.battery_permit_date ? ` (${String(homeSignals.battery_permit_date).slice(0, 10)})` : ""}
+              </span>
+            ) : (
+              <span>None on file</span>
+            )}
+            <small>Existing backup permit</small>
+          </div>
+          <div>
+            {homeSignals?.flood_flag === null || homeSignals?.flood_flag === undefined ? (
+              <MissingState variant="not-loaded" reason={homeSignals?.flood_null_reason ?? "Flood zones not loaded"} />
+            ) : (
+              <span>{homeSignals.flood_flag ? "Inside FEMA high-risk" : "Outside FEMA high-risk"}</span>
+            )}
+            <small>Flood zone</small>
+          </div>
+          <div>
+            {permitPath === "city_battery_permit" && permitPathStats?.medianDays != null ? (
+              <span style={{ fontFamily: "var(--type-data-font-family)" }}>City of Austin · ~{Math.round(permitPathStats.medianDays)} days</span>
+            ) : permitPath === "state_rules_only" ? (
+              <span>State rules only</span>
+            ) : (
+              <MissingState variant="not-loaded" reason="Permit path not resolvable yet" />
+            )}
+            <small>Permit path, typical</small>
+          </div>
+          <div>
+            <GridValue
+              idSuffix={`${home.prop_id}-summary`}
+              baseCapture={gridValue.baseCapture}
+              baseCaptureNullReason={gridValue.baseCaptureNullReason}
+              loadZone={gridValue.loadZone}
+              avgDailySpreadUsdMwh={gridValue.avgDailySpreadUsdMwh}
+              scarcityDays={gridValue.scarcityDays}
+              scarcityThresholdUsdMwh={gridValue.scarcityThresholdUsdMwh}
+              windowStart={gridValue.windowStart}
+              windowEnd={gridValue.windowEnd}
+              gridValueNullReason={gridValue.gridValueNullReason}
+              source={
+                gridValue.source
+                  ? {
+                      dataset: gridValue.source.source,
+                      url: gridValue.source.url,
+                      retrievedAt:
+                        gridValue.source.retrieved_at instanceof Date
+                          ? gridValue.source.retrieved_at.toISOString()
+                          : String(gridValue.source.retrieved_at),
+                      sha256: gridValue.source.sha256,
+                      runId: gridValue.source.latest_run_id ?? "none",
+                      runner: gridValue.source.runner,
+                      rowsIn: gridValue.source.latest_run_rows_in,
+                      rowsLoaded: gridValue.source.latest_run_rows_loaded,
+                      rawFileHref: `/sources/raw/${gridValue.source.source_id}`,
+                    }
+                  : null
+              }
+            />
+            <small>Grid value to Base</small>
+          </div>
+        </div>
+
+        <div style={{ marginTop: "var(--space-2)" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+            <span style={{ fontWeight: 600, fontSize: "var(--type-body-font-size)" }}>Permits on this parcel</span>
+            <JumpToTab tab="permits">All {home.permits.length} permits →</JumpToTab>
+          </div>
+          {recentPermits.length === 0 ? (
+            <p style={{ margin: "var(--space-2) 0 0 0", color: "var(--theme-ink-muted)", fontSize: "var(--type-label-font-size)" }}>
+              No permits on file for this home.
+            </p>
+          ) : (
+            <div style={{ marginTop: "var(--space-2)" }}>
+              {recentPermits.map((permit) => (
+                <div key={permit.permit_number} className="permit-preview-row">
+                  <div style={{ fontFamily: "var(--type-data-font-family)" }}>{permit.permit_number}</div>
+                  <div>{permit.issue_date ?? "—"}</div>
+                  <div>{permit.description ?? "—"}</div>
+                  <div style={{ color: "var(--theme-ink-muted)" }}>{permit.label ?? "no label"}</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-3)" }}>
+        <div className="priority-card">
+          <div className="priority-card__kicker">Priority</div>
+          <div className="priority-card__big">{priorityTier.label}</div>
+          <div className="priority-card__sub">{priorityCardSentence(priorityTier.key, rankedHomeCount, countyName)}</div>
+          <Link href="/sources#how-leads-are-prioritized" className="priority-card__link">
+            How the ranking works →
+          </Link>
+        </div>
+
+        <div className="knock-checklist">
+          <h3>Before you knock</h3>
+          <div className="knock-checklist__item">
+            <span className={"knock-checklist__icon" + (utilityStatus.key === "served" ? " knock-checklist__icon--ok" : "")}>
+              {utilityStatus.key === "served" ? "✓" : "1"}
+            </span>
+            <div>
+              {utilityStatus.label}
+              <small>{utilityStatus.action}</small>
+            </div>
+          </div>
+          <div className="knock-checklist__item">
+            <span className={"knock-checklist__icon" + (!hasOwnBackup ? " knock-checklist__icon--ok" : "")}>
+              {!hasOwnBackup ? "✓" : "!"}
+            </span>
+            <div>
+              {hasOwnBackup ? "Already has backup" : "No backup on file"}
+              <small>
+                {hasOwnBackup
+                  ? "Say so and move on."
+                  : "No battery or generator permit at this address — worth a knock."}
+              </small>
+            </div>
+          </div>
+          <div className="knock-checklist__item">
+            <span className="knock-checklist__icon">3</span>
+            <div>
+              Plan the permit
+              <small>
+                {permitPath === "city_battery_permit" && permitPathStats?.medianDays != null
+                  ? `City of Austin battery permit: typically ~${Math.round(permitPathStats.medianDays)} days${
+                      permitPathStats.p90Days != null ? `, slowest 10% take ${Math.round(permitPathStats.p90Days)}+ days` : ""
+                    }${
+                      permitPathStats.shareNeverFinished != null
+                        ? `, ${(permitPathStats.shareNeverFinished * 100).toFixed(1)}% never finish`
+                        : ""
+                    }.`
+                  : permitPath === "state_rules_only"
+                    ? "State rules only — no city permit path on file."
+                    : "Permit path not resolvable yet."}
+              </small>
+            </div>
+          </div>
+          <div className="knock-checklist__item">
+            <span className="knock-checklist__icon">4</span>
+            <div>
+              Confirm the address on site
+              <small>
+                {utilityStatus.key === "served"
+                  ? "Parcel matched to a Base-served utility; service address not yet verified."
+                  : "Utility service not yet confirmed at this address."}
+              </small>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
   return (
-    <div style={{ display: "grid", gap: "var(--space-6)" }}>
+    <div style={{ display: "grid", gap: "var(--space-2)" }}>
       <nav aria-label="Breadcrumb" className="breadcrumb">
         {/* T4 fix: a home's OWN county (home.county_fips), not whatever
             county happened to be selected on the page that linked here --
@@ -853,7 +1287,7 @@ export default async function HomeDetailPage({
         <span>{address || home.prop_id}</span>
       </nav>
 
-      <Panel>
+      <Panel style={{ padding: "var(--space-2) var(--space-4)" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "var(--space-6)" }}>
           <div>
             <h1
@@ -883,689 +1317,24 @@ export default async function HomeDetailPage({
           </div>
         </div>
 
-        <div style={{ display: "flex", gap: "var(--space-2)", flexWrap: "wrap", marginTop: "var(--space-4)" }}>
+        <div style={{ display: "flex", gap: "var(--space-2)", flexWrap: "wrap", marginTop: "var(--space-2)" }}>
           {home.is_single_family ? <span className="chip">Single-family home</span> : null}
           {home.is_homestead ? <span className="chip">Owner-occupied (homestead)</span> : null}
         </div>
       </Panel>
 
-      <Panel>
-        <h2
-          style={{
-            fontFamily: "var(--type-heading-font-family)",
-            fontSize: "var(--type-heading-font-size)",
-            fontWeight: "var(--type-heading-font-weight)",
-            marginTop: 0,
-          }}
-        >
-          Priority
-        </h2>
-        {homePropensity === null ? (
-          <MissingState
-            variant="not-loaded"
-            reason={`Not scored: only owner-occupied single-family homes with a mapped lot inside ${countyName} County are scored`}
-          />
-        ) : (
-          <PropensityBadge
-            pInstall12m={Number(homePropensity.p_install_12m)}
-            relativeToCounty={homePropensity.relative_to_county === null ? null : Number(homePropensity.relative_to_county)}
-            decile={homePropensity.decile}
-            countyName={countyName}
-            extrapolatedFrom={homePropensity.extrapolated_from}
-            reasons={homePropensity.reasons}
-            showReasons
-          />
-        )}
-      </Panel>
-
-      {/* "Before you knock" -- the door-brief checklist a rep reads
-          standing on the porch: already has backup (de-prioritize/skip
-          if so), utility service status (distinct from priority, T2),
-          flood zone, permit path. Every fact here is one already fetched
-          for a panel further down this page -- this panel just surfaces
-          the ones that change what a rep says or does before knocking. */}
-      <Panel>
-        <h2
-          style={{
-            fontFamily: "var(--type-heading-font-family)",
-            fontSize: "var(--type-heading-font-size)",
-            fontWeight: "var(--type-heading-font-weight)",
-            marginTop: 0,
-          }}
-        >
-          Before you knock
-        </h2>
-        <dl style={{ display: "grid", gap: "var(--space-3)", margin: 0 }}>
-          <div>
-            <dt style={{ color: "var(--theme-ink-muted)", fontSize: "var(--type-label-font-size)" }}>
-              Already has backup?
-            </dt>
-            <dd style={{ margin: "var(--space-1) 0 0 0" }}>
-              {coverageBucket === "base_customer" || coverageBucket === "other_backup" ? (
-                <strong>
-                  Yes{coverageBucket === "base_customer" ? " -- already a Base customer" : " -- another installer’s backup on file"}. Say so and move on.
-                </strong>
-              ) : (
-                "No backup on file -- worth a knock."
-              )}
-            </dd>
-          </div>
-          <div>
-            <dt style={{ color: "var(--theme-ink-muted)", fontSize: "var(--type-label-font-size)" }}>
-              Utility service
-            </dt>
-            <dd style={{ margin: "var(--space-1) 0 0 0" }}>
-              {(() => {
-                const status = utilityStatusForHome({
-                  gateReason: homeSignals?.gate_reason ?? null,
-                  territoryNullReason: homeSignals?.territory_null_reason ?? null,
-                });
-                return (
-                  <>
-                    {status.label}
-                    <div style={{ fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)" }}>
-                      {status.action}
-                    </div>
-                  </>
-                );
-              })()}
-            </dd>
-          </div>
-          <div>
-            <dt style={{ color: "var(--theme-ink-muted)", fontSize: "var(--type-label-font-size)" }}>Flood zone</dt>
-            <dd style={{ margin: "var(--space-1) 0 0 0" }}>
-              {homeSignals?.flood_flag === null || homeSignals?.flood_flag === undefined ? (
-                <MissingState variant="not-loaded" reason={homeSignals?.flood_null_reason ?? "Flood zones not loaded"} />
-              ) : homeSignals.flood_flag ? (
-                "Inside a FEMA high-risk flood zone -- ask about it."
-              ) : (
-                "Outside FEMA high-risk flood zones."
-              )}
-            </dd>
-          </div>
-          <div>
-            <dt style={{ color: "var(--theme-ink-muted)", fontSize: "var(--type-label-font-size)" }}>Permit path</dt>
-            <dd style={{ margin: "var(--space-1) 0 0 0" }}>
-              {permitPath === "city_battery_permit"
-                ? "City of Austin battery permit path applies."
-                : permitPath === "state_rules_only"
-                  ? "State rules only -- no city permit path on file."
-                  : "Not resolvable yet."}
-            </dd>
-          </div>
-          <div>
-            <dt style={{ color: "var(--theme-ink-muted)", fontSize: "var(--type-label-font-size)" }}>Build year</dt>
-            <dd style={{ margin: "var(--space-1) 0 0 0" }}>
-              {homeSignals?.yr_built == null ? (
-                <MissingState
-                  variant="not-loaded"
-                  reason={homeSignals?.yr_built_null_reason ?? "Build year not available"}
-                />
-              ) : (
-                buildYearNote(homeSignals.yr_built)
-              )}
-            </dd>
-          </div>
-        </dl>
-      </Panel>
-
-      <Panel>
-        <h2
-          style={{
-            fontFamily: "var(--type-heading-font-family)",
-            fontSize: "var(--type-heading-font-size)",
-            fontWeight: "var(--type-heading-font-weight)",
-            marginTop: 0,
-          }}
-        >
-          Why this home
-        </h2>
-
-        {homeSignals === null ? (
-          <MissingState
-            variant="not-loaded"
-            reason={`Not scored: only owner-occupied single-family homes with a mapped lot inside ${countyName} County are ranked`}
-          />
-        ) : homeSignals.gate_reason ? (
-          <div
-            style={{
-              backgroundColor: "var(--color-excluded-fill)",
-              color: "var(--theme-ink)",
-              borderRadius: "var(--rounded-sm)",
-              padding: "var(--space-3)",
-              marginBottom: "var(--space-4)",
-            }}
-          >
-            <strong>Excluded from ranking:</strong>{" "}
-            {GATE_REASON_LABEL[homeSignals.gate_reason] ?? homeSignals.gate_reason}
-          </div>
-        ) : KNOWN_UTILITY_NULL_REASONS.has(homeSignals.territory_null_reason ?? "") ? (
-          // M-utility-gate copy fix: Williamson's every HIFLD territory
-          // polygon overlaps, so which utility actually serves this home
-          // can't be resolved from the polygon alone -- 'utility_not_
-          // confirmed'. M-ccn adds the PUCT CCN-mapping outcomes
-          // ('multiply_certificated'/'no_ccn_match'/'ccn_holder_unmapped'),
-          // now live in the DB. The raw code is passed straight through --
-          // MissingState's own REASON_TEXT map (components/ui/MissingState.tsx)
-          // is the one place every null_reason code becomes plain text, per
-          // CLAUDE.md's "Added after M2-W3" rule -- never a second
-          // hardcoded copy of it here.
-          <div style={{ marginBottom: "var(--space-4)" }}>
-            <MissingState variant="not-loaded" reason={homeSignals.territory_null_reason as string} />
-          </div>
-        ) : homeSignals.territory_null_reason ? (
-          <div style={{ marginBottom: "var(--space-4)" }}>
-            <MissingState
-              variant="not-loaded"
-              reason={`Whether Base serves this home's utility isn't resolvable yet (${homeSignals.territory_null_reason}) — it passes by default until it is`}
-            />
-          </div>
-        ) : homeSignals.territory_basis === "most_likely_county_utility" && homeSignals.distributor_name ? (
-          // Harris: territory is pinned to the one Base-served utility
-          // that actually covers the county (every HIFLD polygon
-          // overlaps there too), so this is a strong inference, not a
-          // confirmed per-parcel match -- said plainly rather than shown
-          // with the same confidence as Travis's polygon match.
-          <div style={{ marginBottom: "var(--space-4)", fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)" }}>
-            Most likely utility: {homeSignals.distributor_name} — confirm at the address.
-          </div>
-        ) : null}
-
-        {homeSignals ? (
-          <dl style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)", gap: "var(--space-4) var(--space-6)", margin: 0 }}>
-            <div>
-              <dt style={{ color: "var(--theme-ink-muted)", fontSize: "var(--type-label-font-size)" }}>Outage exposure</dt>
-              <dd style={{ margin: "var(--space-1) 0 0 0" }}>
-                {homeSignals.outage_minutes === null ? (
-                  distributorSaidiRealNullReason ? (
-                    // A real EIA-861 distributor is matched (e.g. Oncor
-                    // 44372) but EIA itself reports no figure for it, and
-                    // this county has no EAGLE-I proxy either yet —
-                    // "not available", not "not loaded": the pipeline has
-                    // run and this is EIA's own stated reason (e.g.
-                    // "not_reported"), never a made-up one.
-                    <MissingState variant="not-available" reason={distributorSaidiRealNullReason} />
-                  ) : (
-                    <MissingState
-                      variant="not-loaded"
-                      reason={homeSignals.outage_null_reason ?? "No outage figure for this home yet"}
-                    />
-                  )
-                ) : (
-                  <>
-                    <ProvenanceFor
-                      sourceRow={findSourceByName(
-                        sourcesById,
-                        homeSignals.outage_source_ids ?? homeSignals.source_ids,
-                        homeSignals.outage_basis === "county_eaglei_proxy"
-                          ? ["eaglei", "eagle-i", "outage"]
-                          : ["eia861", "eia-861", "reliability"]
-                      )}
-                      id={`${home.prop_id}-outage`}
-                    >
-                      <span>
-                        {homeSignals.outage_basis === "county_eaglei_proxy" ? (
-                          <>
-                            {countyName} County averaged{" "}
-                            <span style={{ fontFamily: "var(--type-data-font-family)", fontWeight: 600 }}>
-                              {Number(homeSignals.outage_minutes).toLocaleString(undefined, { maximumFractionDigits: 2 })}
-                            </span>{" "}
-                            minutes without power per customer in {homeSignals.outage_year} (EAGLE-I county proxy, used
-                            because {homeSignals.distributor_name ?? "this home's utility"} doesn&rsquo;t report to EIA)
-                          </>
-                        ) : (
-                          <>
-                            {homeSignals.distributor_name ?? "This distributor"}'s customers averaged{" "}
-                            <span style={{ fontFamily: "var(--type-data-font-family)", fontWeight: 600 }}>
-                              {Number(homeSignals.outage_minutes).toLocaleString(undefined, { maximumFractionDigits: 2 })}
-                            </span>{" "}
-                            minutes without power in {homeSignals.outage_year} (SAIDI, incl. major events)
-                          </>
-                        )}
-                      </span>
-                    </ProvenanceFor>
-                    {homeSignals.distributor_saidi_early_release ? (
-                      <div style={{ fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)" }}>
-                        Early release, not fully edited (EIA-861)
-                      </div>
-                    ) : null}
-                    {texasOutagePercentile !== null ? (
-                      <div style={{ fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)" }}>
-                        Fewer outage minutes than{" "}
-                        <span style={{ fontFamily: "var(--type-data-font-family)" }}>{texasOutagePercentile}%</span> of
-                        Texas utilities reporting to EIA-861 in {homeSignals.outage_year}
-                      </div>
-                    ) : null}
-                  </>
-                )}
-              </dd>
-            </div>
-
-            <div>
-              <dt style={{ color: "var(--theme-ink-muted)", fontSize: "var(--type-label-font-size)" }}>Electricity market</dt>
-              <dd style={{ margin: "var(--space-1) 0 0 0" }}>
-                {homeSignals.territory_eia_id === null ? (
-                  <MissingState
-                    variant="not-loaded"
-                    reason="No utility territory match for this home yet — the electricity market can't be shown without one"
-                  />
-                ) : retailMarket === null ? (
-                  <MissingState
-                    variant="not-available"
-                    reason="This home's utility isn't in Base's cited retail-market list yet"
-                  />
-                ) : (
-                  (() => {
-                    const marketManifest = sourcesById.get(retailMarket.source_id);
-                    // Reuses the existing ProvenancePopover as-is (DESIGN.md:
-                    // reuse tokens/base components, never invent new ones) —
-                    // its "Dataset" row is repurposed to carry Base's own
-                    // verbatim quote as the link text, hrefed to Base's
-                    // source page (retailMarket.source_url), while
-                    // retrieved/SHA-256/run/raw-file still describe the
-                    // loaded data/manual/retail_market.csv snapshot.
-                    if (!marketManifest) return <span>{retailMarket.plain_language}</span>;
-                    return (
-                      <ProvenancePopover
-                        id={`${home.prop_id}-retail-market`}
-                        dataset={`"${retailMarket.quote}"`}
-                        url={retailMarket.source_url}
-                        retrievedAt={
-                          marketManifest.retrieved_at instanceof Date
-                            ? marketManifest.retrieved_at.toISOString()
-                            : String(marketManifest.retrieved_at)
-                        }
-                        sha256={marketManifest.sha256}
-                        runId={marketManifest.latest_run_id ?? "none"}
-                        runner={marketManifest.runner}
-                        rowsIn={marketManifest.latest_run_rows_in ?? null}
-                        rowsLoaded={marketManifest.latest_run_rows_loaded ?? null}
-                        rawFileHref={`/sources/raw/${marketManifest.source_id}`}
-                      >
-                        <span>{retailMarket.plain_language}</span>
-                      </ProvenancePopover>
-                    );
-                  })()
-                )}
-              </dd>
-            </div>
-
-            <div>
-              <dt style={{ color: "var(--theme-ink-muted)", fontSize: "var(--type-label-font-size)" }}>Grid value to Base</dt>
-              <dd style={{ margin: "var(--space-1) 0 0 0" }}>
-                <GridValue
-                  idSuffix={home.prop_id}
-                  baseCapture={gridValue.baseCapture}
-                  baseCaptureNullReason={gridValue.baseCaptureNullReason}
-                  loadZone={gridValue.loadZone}
-                  avgDailySpreadUsdMwh={gridValue.avgDailySpreadUsdMwh}
-                  scarcityDays={gridValue.scarcityDays}
-                  scarcityThresholdUsdMwh={gridValue.scarcityThresholdUsdMwh}
-                  windowStart={gridValue.windowStart}
-                  windowEnd={gridValue.windowEnd}
-                  gridValueNullReason={gridValue.gridValueNullReason}
-                  source={
-                    gridValue.source
-                      ? {
-                          dataset: gridValue.source.source,
-                          url: gridValue.source.url,
-                          retrievedAt:
-                            gridValue.source.retrieved_at instanceof Date
-                              ? gridValue.source.retrieved_at.toISOString()
-                              : String(gridValue.source.retrieved_at),
-                          sha256: gridValue.source.sha256,
-                          runId: gridValue.source.latest_run_id ?? "none",
-                          runner: gridValue.source.runner,
-                          rowsIn: gridValue.source.latest_run_rows_in,
-                          rowsLoaded: gridValue.source.latest_run_rows_loaded,
-                          rawFileHref: `/sources/raw/${gridValue.source.source_id}`,
-                        }
-                      : null
-                  }
-                />
-              </dd>
-            </div>
-
-            <div>
-              <dt style={{ color: "var(--theme-ink-muted)", fontSize: "var(--type-label-font-size)" }}>Flood zone</dt>
-              <dd style={{ margin: "var(--space-1) 0 0 0" }}>
-                {homeSignals.flood_flag === null ? (
-                  <MissingState variant="not-loaded" reason={homeSignals.flood_null_reason ?? "Flood zones not loaded"} />
-                ) : (
-                  <ProvenanceFor
-                    sourceRow={findSourceByName(sourcesById, homeSignals.source_ids, ["nfhl", "flood"])}
-                    id={`${home.prop_id}-flood`}
-                  >
-                    <span>{homeSignals.flood_flag ? "Inside a FEMA high-risk flood zone" : "Outside FEMA high-risk flood zones"}</span>
-                  </ProvenanceFor>
-                )}
-              </dd>
-            </div>
-
-            <div>
-              <dt style={{ color: "var(--theme-ink-muted)", fontSize: "var(--type-label-font-size)" }}>Medical need (emPOWER)</dt>
-              <dd style={{ margin: "var(--space-1) 0 0 0" }}>
-                {homeSignals.empower_rate === null ? (
-                  <MissingState
-                    variant={homeSignals.empower_null_reason === "suppressed_1_to_10" ? "not-available" : "not-loaded"}
-                    reason={homeSignals.empower_null_reason ?? "No emPOWER figure"}
-                  />
-                ) : (
-                  <ProvenanceFor
-                    sourceRow={findSourceByName(sourcesById, homeSignals.source_ids, ["empower"])}
-                    id={`${home.prop_id}-empower`}
-                  >
-                    <span>
-                      <span style={{ fontFamily: "var(--type-data-font-family)", fontWeight: 600 }}>
-                        {(Number(homeSignals.empower_rate) * 1000).toFixed(1)}
-                      </span>{" "}
-                      power-dependent Medicare devices per 1,000 Medicare beneficiaries in this ZIP
-                    </span>
-                  </ProvenanceFor>
-                )}
-              </dd>
-            </div>
-
-            <div>
-              <dt style={{ color: "var(--theme-ink-muted)", fontSize: "var(--type-label-font-size)" }}>Age 65+ (ACS)</dt>
-              <dd style={{ margin: "var(--space-1) 0 0 0" }}>
-                {homeSignals.acs_pct_65_plus === null ? (
-                  <MissingState variant="not-loaded" reason={homeSignals.acs_65_null_reason ?? "No ACS figure"} />
-                ) : (
-                  <ProvenanceFor
-                    sourceRow={findSourceByName(sourcesById, homeSignals.source_ids, ["acs", "census"])}
-                    id={`${home.prop_id}-age65`}
-                  >
-                    <span>
-                      <span style={{ fontFamily: "var(--type-data-font-family)", fontWeight: 600 }}>
-                        {(Number(homeSignals.acs_pct_65_plus) * 100).toFixed(1)}%
-                      </span>{" "}
-                      of this block group's population is 65+ (ACS 2024, same for all homes in block group)
-                    </span>
-                  </ProvenanceFor>
-                )}
-              </dd>
-            </div>
-
-            <div>
-              <dt style={{ color: "var(--theme-ink-muted)", fontSize: "var(--type-label-font-size)" }}>Electric heat (ACS)</dt>
-              <dd style={{ margin: "var(--space-1) 0 0 0" }}>
-                {homeSignals.acs_pct_electric_heat === null ? (
-                  <MissingState variant="not-loaded" reason={homeSignals.acs_heat_null_reason ?? "No ACS figure"} />
-                ) : (
-                  <ProvenanceFor
-                    sourceRow={findSourceByName(sourcesById, homeSignals.source_ids, ["acs", "census"])}
-                    id={`${home.prop_id}-heat`}
-                  >
-                    <span>
-                      <span style={{ fontFamily: "var(--type-data-font-family)", fontWeight: 600 }}>
-                        {(Number(homeSignals.acs_pct_electric_heat) * 100).toFixed(1)}%
-                      </span>{" "}
-                      of housing units in this block group heat with electricity (ACS 2024, same for all homes in block group)
-                    </span>
-                  </ProvenanceFor>
-                )}
-              </dd>
-            </div>
-
-            <div>
-              <dt style={{ color: "var(--theme-ink-muted)", fontSize: "var(--type-label-font-size)" }}>Permit path</dt>
-              <dd style={{ margin: "var(--space-1) 0 0 0" }}>
-                <PermitPath
-                  propId={home.prop_id}
-                  permitPath={permitPath}
-                  stats={permitPathStats}
-                  ruleCitation={permitRuleCitation}
-                />
-              </dd>
-            </div>
-
-            <div>
-              <dt style={{ color: "var(--theme-ink-muted)", fontSize: "var(--type-label-font-size)" }}>Household income $100k+ (ACS, neighborhood figure)</dt>
-              <dd style={{ margin: "var(--space-1) 0 0 0" }}>
-                {incomeAge === null || incomeAge.income_100k_share === null ? (
-                  <MissingState
-                    variant="not-loaded"
-                    reason={incomeAge?.income_100k_share_null_reason ?? "No ACS income figure"}
-                  />
-                ) : (
-                  <ProvenanceFor sourceRow={sourcesById.get(incomeAge.source_id)} id={`${home.prop_id}-income100k`}>
-                    <span>
-                      <span style={{ fontFamily: "var(--type-data-font-family)", fontWeight: 600 }}>
-                        {(Number(incomeAge.income_100k_share) * 100).toFixed(1)}%
-                      </span>{" "}
-                      of this block group&rsquo;s households earn $100k+ (ACS 2024 5-year, same for every home in the block group)
-                    </span>
-                  </ProvenanceFor>
-                )}
-              </dd>
-            </div>
-
-            <div>
-              <dt style={{ color: "var(--theme-ink-muted)", fontSize: "var(--type-label-font-size)" }}>Prime working age 35-64 (ACS, neighborhood figure)</dt>
-              <dd style={{ margin: "var(--space-1) 0 0 0" }}>
-                {incomeAge === null || incomeAge.age_35_64_share === null ? (
-                  <MissingState
-                    variant="not-loaded"
-                    reason={incomeAge?.age_35_64_share_null_reason ?? "No ACS age figure"}
-                  />
-                ) : (
-                  <ProvenanceFor sourceRow={sourcesById.get(incomeAge.source_id)} id={`${home.prop_id}-age3564`}>
-                    <span>
-                      <span style={{ fontFamily: "var(--type-data-font-family)", fontWeight: 600 }}>
-                        {(Number(incomeAge.age_35_64_share) * 100).toFixed(1)}%
-                      </span>{" "}
-                      of this block group&rsquo;s population is aged 35-64 (ACS 2024 5-year, same for every home in the block group)
-                    </span>
-                  </ProvenanceFor>
-                )}
-              </dd>
-            </div>
-
-            <div>
-              <dt style={{ color: "var(--theme-ink-muted)", fontSize: "var(--type-label-font-size)" }}>Backup intent</dt>
-              <dd style={{ margin: "var(--space-1) 0 0 0" }}>
-                {homeSignals.backup_intent_rate === null ? (
-                  <MissingState
-                    variant="not-loaded"
-                    reason={homeSignals.backup_intent_null_reason ?? "Rate not computed for this block group"}
-                  />
-                ) : (
-                  <span>
-                    <span style={{ fontFamily: "var(--type-data-font-family)", fontWeight: 600 }}>
-                      {Number(homeSignals.backup_intent_rate).toFixed(2)}
-                    </span>{" "}
-                    battery or generator permits per 1,000 owner-occupied homes in this neighborhood (36 months, same for all homes in block group)
-                  </span>
-                )}
-              </dd>
-            </div>
-
-            <div>
-              <dt style={{ color: "var(--theme-ink-muted)", fontSize: "var(--type-label-font-size)" }}>Homeowner 65+</dt>
-              <dd style={{ margin: "var(--space-1) 0 0 0" }}>
-                {homeSignals.owner_65 === null ? (
-                  <MissingState variant="not-loaded" reason={homeSignals.owner_65_null_reason ?? "Not loaded"} />
-                ) : (
-                  <span>{homeSignals.owner_65 ? "Yes — has the TCAD over-65 homestead exemption" : "No"}</span>
-                )}
-              </dd>
-            </div>
-
-            <div>
-              <dt style={{ color: "var(--theme-ink-muted)", fontSize: "var(--type-label-font-size)" }}>This home&rsquo;s own permits</dt>
-              <dd style={{ margin: "var(--space-1) 0 0 0" }}>
-                {homeSignals.permit_null_reason ? (
-                  <MissingState variant="not-available" reason={homeSignals.permit_null_reason} />
-                ) : homeSignals.home_battery ? (
-                  <span>
-                    Already has a home battery
-                    {homeSignals.battery_permit_date ? ` (permit ${String(homeSignals.battery_permit_date).slice(0, 10)})` : ""}
-                  </span>
-                ) : (
-                  (() => {
-                    const facts = [
-                      homeSignals.home_solar ? "solar" : null,
-                      homeSignals.home_ev ? "an EV charger" : null,
-                      homeSignals.home_generator ? "a generator" : null,
-                      homeSignals.home_panel_upgrade ? "a panel upgrade" : null,
-                    ].filter((s): s is string => s !== null);
-                    return facts.length > 0 ? (
-                      <span>Own permit on file for {facts.join(", ")}</span>
-                    ) : (
-                      <span style={{ color: "var(--theme-ink-muted)" }}>No solar, EV, generator, or panel permit on file for this home</span>
-                    );
-                  })()
-                )}
-              </dd>
-            </div>
-
-            <div>
-              <dt style={{ color: "var(--theme-ink-muted)", fontSize: "var(--type-label-font-size)" }}>Built</dt>
-              <dd style={{ margin: "var(--space-1) 0 0 0" }}>
-                {homeSignals.yr_built === null ? (
-                  <MissingState variant="not-loaded" reason={homeSignals.yr_built_null_reason ?? "Year built not loaded"} />
-                ) : (
-                  <>
-                    <span>Built {homeSignals.yr_built}</span>
-                    {homeSignals.yr_built < 2000 && !homeSignals.home_panel_upgrade ? (
-                      <div style={{ fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)", marginTop: "var(--space-1)" }}>
-                        Older home:{" "}
-                        <a href={BASE_PANEL_ARTICLE_URL} target="_blank" rel="noreferrer">
-                          Base needs a 150–200A main breaker in Austin
-                        </a>
-                        ; check the panel.
-                      </div>
-                    ) : null}
-                  </>
-                )}
-              </dd>
-            </div>
-          </dl>
-        ) : null}
-      </Panel>
-
-      {homeSignals && homeSignals.gate_reason === null ? (
-        <Panel>
-          <h2
-            style={{
-              fontFamily: "var(--type-heading-font-family)",
-              fontSize: "var(--type-heading-font-size)",
-              fontWeight: "var(--type-heading-font-weight)",
-              marginTop: 0,
-            }}
-          >
-            How the score is built
-          </h2>
-          <ScoreExplainer propId={home.prop_id} weights={EQUAL_WEIGHTS} />
-        </Panel>
-      ) : null}
-
-      <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 320px", gap: "var(--space-6)", alignItems: "start" }}>
-        <Panel>
-          <h2
-            style={{
-              fontFamily: "var(--type-heading-font-family)",
-              fontSize: "var(--type-heading-font-size)",
-              fontWeight: "var(--type-heading-font-weight)",
-              marginTop: 0,
-            }}
-          >
-            Permits on this parcel
-          </h2>
-          {home.permits.length === 0 ? (
-            homeSignals?.backup_intent_null_reason === "no_permit_coverage" ? (
-              <MissingState variant="not-available" reason="no_permit_coverage" />
-            ) : (
-              <p style={{ margin: 0, color: "var(--theme-ink-muted)" }}>No City of Austin permits on file for this home.</p>
-            )
-          ) : (
-            <DataTable>
-              <DataTableHead>
-                <DataTableRow>
-                  <DataTableHeaderCell>Permit</DataTableHeaderCell>
-                  <DataTableHeaderCell>Issued</DataTableHeaderCell>
-                  <DataTableHeaderCell>Class</DataTableHeaderCell>
-                  <DataTableHeaderCell>Description</DataTableHeaderCell>
-                  <DataTableHeaderCell>Status</DataTableHeaderCell>
-                  <DataTableHeaderCell>Label</DataTableHeaderCell>
-                </DataTableRow>
-              </DataTableHead>
-              <DataTableBody>
-                {home.permits.map((permit) => (
-                  <DataTableRow key={permit.permit_number}>
-                    <DataTableCell>
-                      <ProvenanceFor
-                        sourceRow={sourcesById.get(permit.source_id ?? "")}
-                        id={`permit-${permit.permit_number}`}
-                      >
-                        <span style={{ fontFamily: "var(--type-data-font-family)" }}>{permit.permit_number}</span>
-                      </ProvenanceFor>
-                    </DataTableCell>
-                    <DataTableCell>{permit.issue_date ?? <NotRecorded />}</DataTableCell>
-                    <DataTableCell>{permit.permit_class ?? permit.work_class ?? <NotRecorded />}</DataTableCell>
-                    <DataTableCell>{permit.description ?? <NotRecorded />}</DataTableCell>
-                    <DataTableCell>{permit.status_current ?? <NotRecorded />}</DataTableCell>
-                    <DataTableCell>
-                      <PermitLabel label={permit.label} labeller={permit.labeller} classifierHasRun={rulesHaveRun} />
-                    </DataTableCell>
-                  </DataTableRow>
-                ))}
-              </DataTableBody>
-            </DataTable>
-          )}
-        </Panel>
-
-        <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-6)" }}>
-          <Panel>
-            <h2
-              style={{
-                fontFamily: "var(--type-heading-font-family)",
-                fontSize: "var(--type-heading-font-size)",
-                fontWeight: "var(--type-heading-font-weight)",
-                marginTop: 0,
-              }}
-            >
-              Parcel
-            </h2>
-            {parcelGeojson ? (
-              <ParcelMap geojson={parcelGeojson} />
-            ) : (
-              <MissingState variant="not-loaded" reason="No lot outline on file for this parcel" />
-            )}
-            <dl style={{ display: "grid", gridTemplateColumns: "max-content 1fr", gap: "var(--space-2) var(--space-4)", marginTop: "var(--space-3)" }}>
-              <dt style={{ color: "var(--theme-ink-muted)" }}>Property type</dt>
-              <dd style={{ margin: 0 }}>
-                {stateCode === null ? (
-                  <MissingState variant="not-loaded" reason="No property type on this parcel record" />
-                ) : (
-                  <ProvenanceFor sourceRow={sourcesById.get(parcelSourceId ?? "")} id={`${home.prop_id}-state-cd`}>
-                    <span>{stateCode === "A1" ? "Single-family home" : stateCode} <span style={{ fontFamily: "var(--type-data-font-family)", color: "var(--theme-ink-muted)" }}>({stateCode})</span></span>
-                  </ProvenanceFor>
-                )}
-              </dd>
-
-              <dt style={{ color: "var(--theme-ink-muted)" }}>Homestead</dt>
-              <dd style={{ margin: 0 }}>{home.is_homestead ? "Yes" : "No"}</dd>
-
-              <dt style={{ color: "var(--theme-ink-muted)" }}>Market value</dt>
-              <dd style={{ margin: 0 }}>
-                {home.market_value === null ? (
-                  <MissingState variant="not-loaded" reason="Market value not recorded for this parcel" />
-                ) : (
-                  <ProvenanceFor sourceRow={sourcesById.get(parcelSourceId ?? "")} id={`${home.prop_id}-market-value`}>
-                    <span style={{ fontFamily: "var(--type-data-font-family)" }}>
-                      ${Number(home.market_value).toLocaleString()}
-                    </span>
-                  </ProvenanceFor>
-                )}
-              </dd>
-            </dl>
-          </Panel>
-
-          <SolarPanel propId={home.prop_id} />
-        </div>
-      </div>
+      <Suspense fallback={null}>
+        <HomeTabs
+          signalsCount={signalsCount}
+          permitsCount={home.permits.length}
+          sourcesCount={sourcesById.size}
+          summary={summaryTabContent}
+          signals={signalsTabContent}
+          permits={permitsTabContent}
+          parcelSolar={parcelSolarTabContent}
+          sources={sourcesTabContent}
+        />
+      </Suspense>
     </div>
   );
 }

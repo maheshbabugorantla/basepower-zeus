@@ -1,18 +1,17 @@
 "use client";
 
-import type { MouseEvent as ReactMouseEvent, ReactNode } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { BlockGroupMap, type MapDot } from "../../components/BlockGroupMap";
 import { TopHomesTable, TopHomesPagination, type TopHomeRow } from "../../components/TopHomesTable";
 import { WeightSliders, equalWeights } from "../../components/WeightSliders";
-import { ScoreExplainer } from "../../components/ScoreExplainer";
 import { Panel } from "../../components/ui/Panel";
 import { MissingState } from "../../components/ui/MissingState";
 import type { SignalKey, PredictedHomeRow } from "../api/top-homes/route";
 import { PredictedHomesTable } from "./PredictedHomesTable";
 import { bucketBy, filterRows, countyTotals, type GeoRollupRow } from "../../lib/geoRollup";
-import { decileRangeForTier, tierMeta, PRIORITY_TIER_ORDER, type PriorityTierKey } from "../../lib/priorityTier";
+import { decileRangeForTier, tierMeta, tierForDecile, PRIORITY_TIER_ORDER, type PriorityTierKey } from "../../lib/priorityTier";
 
 // M4-W2: predicted (api.home_propensity.p_install_12m) is the ranking
 // DEFAULT; "Team-weighted score" is the alternative, unchanged (M2-W1's)
@@ -192,7 +191,8 @@ function blockGroupLabel(geoid: string): string {
 export function RankingBoard({
   rows: initialRows,
   initialTotal,
-  leftRail,
+  questionText,
+  statusLine,
   defaultWeights = null,
   predictedRows: initialPredictedRows,
   predictedTotal: initialPredictedTotal,
@@ -211,8 +211,10 @@ export function RankingBoard({
   rows: TopHomeRow[];
   /** Real gate-passed county home count (api.homes_ranked_weighted_count), server-rendered. */
   initialTotal: number;
-  /** Server-rendered gate funnel + Quality panel (left column, above the sliders). */
-  leftRail: ReactNode;
+  /** Redesign (Mock A): "Which <County> homes should Base knock next?" -- built server-side from the real county name. */
+  questionText: ReactNode;
+  /** Redesign: one real status line built server-side from api.gate_counts (replaces the old left-rail gate funnel). */
+  statusLine: ReactNode;
   /** api.default_weights, read server-side (M2-P8); null falls back to equal=5. */
   defaultWeights?: Record<SignalKey, number> | null;
   /** M4-W2: server-rendered predicted-mode page 1 (the ranking default) and its exact filtered count. */
@@ -296,22 +298,40 @@ export function RankingBoard({
   const [hoveredGeoid, setHoveredGeoid] = useState<string | null>(null);
   const [scrollToPropId, setScrollToPropId] = useState<string | null>(null);
 
-  // M2-W5: which home's score breakdown is expanded below the table.
-  // Toggled by clicking a row anywhere except its address link (which
-  // still navigates to the home page as before) — TopHomesTable.tsx
-  // itself is owned by a different ticket, so this reads its existing
-  // data-prop-id row attribute via delegation instead of adding a new
-  // prop there.
-  const [explainPropId, setExplainPropId] = useState<string | null>(null);
-
-  function handleTableClick(event: ReactMouseEvent<HTMLDivElement>) {
-    const target = event.target as HTMLElement;
-    if (target.closest("a")) return; // let the address link navigate normally
-    const rowEl = target.closest<HTMLElement>("[data-prop-id]");
-    const propId = rowEl?.getAttribute("data-prop-id");
-    if (!propId) return;
-    setExplainPropId((current) => (current === propId ? null : propId));
+  // Redesign (Mock A): the one row expanded IN PLACE with the case for a
+  // knock -- replaces the "Why this home" panel that used to append below
+  // the whole board (critique P0: "home detail is a separate route/panel,
+  // not in-place"). Both PredictedHomesTable and TopHomesTable own their
+  // own expand toggle now; this is just the shared piece of state.
+  const [expandedPropId, setExpandedPropId] = useState<string | null>(null);
+  function toggleExpand(propId: string) {
+    setExpandedPropId((current) => (current === propId ? null : propId));
   }
+
+  // "Locate on map" -- flies the map to one home's real parcel centroid.
+  const [focusHome, setFocusHome] = useState<{ lon: number | null; lat: number | null } | null>(null);
+  function handleLocateOnMap(row: { propId: string; lon: number | null; lat: number | null }) {
+    setHoveredPropId(row.propId);
+    setFocusHome({ lon: row.lon, lat: row.lat });
+  }
+
+  // Redesign: Filters + Adjust priorities are popovers off the rail
+  // header (DESIGN.md "no modal where an inline popover/disclosure would
+  // do") instead of always-open panels in a left rail column.
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [adjustOpen, setAdjustOpen] = useState(false);
+
+  // Search: filters the CURRENTLY LOADED page's real rows by address/ZIP
+  // (never a fabricated match) -- a query that exactly matches a known
+  // city or ZIP in this county's geo rollup also drives the same
+  // city/ZIP drilldown the selects below use, so typing "78731" narrows
+  // the whole board, not just the visible page.
+  const [searchQuery, setSearchQuery] = useState("");
+
+  // Keyboard: Up/Down moves the highlighted row (scoped to the rail
+  // list, not window), Enter expands it.
+  const [highlightedIndex, setHighlightedIndex] = useState<number | null>(null);
+  const listRef = useRef<HTMLDivElement | null>(null);
 
   const prevRankRef = useRef<Map<string, number>>(buildRankMap(initialRows));
   const isFirstRun = useRef(true);
@@ -506,6 +526,35 @@ export function RankingBoard({
   function handleModeChange(nextMode: RankingMode) {
     setMode(nextMode);
     setHoveredPropId(null);
+    setExpandedPropId(null);
+    setHighlightedIndex(null);
+  }
+
+  // Keyboard: Up/Down moves the highlighted row, Enter expands it --
+  // scoped to this list container (onKeyDown on the list div), never a
+  // window-level listener that would steal arrow keys from the sliders,
+  // the search input, or the city/ZIP/neighborhood selects.
+  function handleListKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
+    const currentRows = mode === "predicted" ? displayedPredictedRows : displayedRows;
+    if (currentRows.length === 0) return;
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      setHighlightedIndex((prev) => {
+        const base = prev ?? -1;
+        const next = event.key === "ArrowDown" ? Math.min(currentRows.length - 1, base + 1) : Math.max(0, base - 1);
+        const row = currentRows[next];
+        if (row) {
+          setHoveredPropId(row.propId);
+          setScrollToPropId(row.propId);
+        }
+        return next;
+      });
+    } else if (event.key === "Enter") {
+      if (highlightedIndex !== null && currentRows[highlightedIndex]) {
+        event.preventDefault();
+        toggleExpand(currentRows[highlightedIndex].propId);
+      }
+    }
   }
 
   async function goToPage(nextIndex: number, cursor: Cursor) {
@@ -660,127 +709,91 @@ export function RankingBoard({
   const rangeStart = pageIndex * DEFAULT_PAGE_SIZE + 1;
   const predictedRangeStart = predictedPageIndex * DEFAULT_PAGE_SIZE + 1;
 
-  return (
-    <div style={{ display: "grid", gap: "var(--space-6)" }}>
-    <div className="ranking-board">
-      <div className="ranking-board__rail">
-        {leftRail}
-        {/* Ranking is ordered by the model's likelihood by default (T-review
-            item: "not on the default path"). Manager-only choices --
-            switching to a team-weighted score, and the sliders that drive
-            it -- live behind this disclosure so a rep opening this page
-            never has to look at them. Closed by default. */}
-        <Panel as="details" data-testid="adjust-priorities-disclosure">
-          <summary
-            style={{
-              cursor: "pointer",
-              fontFamily: "var(--type-heading-font-family)",
-              fontSize: "var(--type-heading-font-size)",
-              fontWeight: "var(--type-heading-font-weight)",
-            }}
-          >
-            Adjust priorities (team choice)
-          </summary>
-          <p style={{ margin: "var(--space-2) 0 var(--space-3) 0", fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)" }}>
-            The list below is ordered by the model&rsquo;s likelihood of adding backup by default. Switch to a
-            team-weighted score only if your team wants to rank by its own signal mix instead.
-          </p>
-          <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-2)", marginBottom: "var(--space-4)" }}>
-            <label style={{ display: "flex", alignItems: "flex-start", gap: "var(--space-2)" }}>
-              <input
-                type="radio"
-                name="ranking-mode"
-                checked={mode === "predicted"}
-                onChange={() => handleModeChange("predicted")}
-                data-testid="ranking-mode-predicted"
-              />
-              <span>
-                <strong>Most likely to add backup</strong> (default)
-                <div style={{ fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)" }}>
-                  A model trained on real installs — see &ldquo;How leads are prioritized&rdquo; for the accuracy check.
-                </div>
-              </span>
-            </label>
-            <label style={{ display: "flex", alignItems: "flex-start", gap: "var(--space-2)" }}>
-              <input
-                type="radio"
-                name="ranking-mode"
-                checked={mode === "weighted"}
-                onChange={() => handleModeChange("weighted")}
-                data-testid="ranking-mode-weighted"
-              />
-              <span>
-                <strong>Team-weighted score</strong>
-                <div style={{ fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)" }}>
-                  Rank by the signal weights below instead of the model.
-                </div>
-              </span>
-            </label>
-          </div>
-          {/* M4-W2: WeightSliders' own "Weights" heading is owned by a
-              different ticket (M2-W1) and isn't editable here, so the
-              "Team adjustment (optional)" label wraps it as an outer
-              heading instead of replacing the inner one -- reported as a
-              deviation. Moving any slider switches to Team-weighted mode,
-              since a slider has no effect while predicted mode is active. */}
-          <WeightSliders
-            weights={weights}
-            onChange={(next) => {
-              setWeights(next);
-              setMode("weighted");
-            }}
-            onReset={() => setWeights(equalWeights())}
-            defaultWeights={defaultWeights}
-          />
-        </Panel>
-        <p style={{ margin: 0, fontSize: "var(--type-label-font-size)" }}>
-          <Link href="/sources#how-leads-are-prioritized">How leads are prioritized &amp; the model&rsquo;s accuracy check →</Link>
-        </p>
-        <Panel>
-          <label style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", fontSize: "var(--type-body-font-size)" }}>
-            <input
-              type="checkbox"
-              checked={hideOldHomes}
-              onChange={(e) => setHideOldHomes(e.target.checked)}
-              data-testid="hide-old-homes-toggle"
-            />
-            Hide homes built before 2000
-          </label>
-          <p style={{ margin: "var(--space-1) 0 0 0", fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)" }}>
-            A team choice, not a Base rule.
-          </p>
-        </Panel>
-        <Panel>
-          <label style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", fontSize: "var(--type-body-font-size)" }}>
-            <input
-              type="checkbox"
-              checked={hideExistingBackup}
-              onChange={(e) => setHideExistingBackup(e.target.checked)}
-              data-testid="hide-existing-backup-toggle"
-            />
-            Hide homes that already have backup
-          </label>
-          <p style={{ margin: "var(--space-1) 0 0 0", fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)" }}>
-            On by default: excludes homes already known to have a battery, generator, or other installer&rsquo;s backup permit on file.
-          </p>
-        </Panel>
-      </div>
+  // Search: filters the currently loaded page's real rows by address/ZIP
+  // (client-side, on data already fetched -- never a fabricated match).
+  // A query landing exactly on a city or ZIP this county's geo rollup
+  // already knows about also drives the real city/ZIP drilldown, so
+  // typing "78731" narrows the whole board (a new fetch), not just the
+  // visible page.
+  const searchNormalized = searchQuery.trim().toLowerCase();
+  function matchesSearch(situsNum: string | null, situsStreet: string | null, situsCity: string | null, situsZip: string | null): boolean {
+    if (!searchNormalized) return true;
+    const haystack = [situsNum, situsStreet, situsCity, situsZip].filter(Boolean).join(" ").toLowerCase();
+    return haystack.includes(searchNormalized);
+  }
+  const displayedPredictedRows = predictedRows.filter((r) => matchesSearch(r.situsNum, r.situsStreet, r.situsCity, r.situsZip));
+  const displayedRows = rows.filter((r) => matchesSearch(r.situsNum, r.situsStreet, r.situsCity, r.situsZip));
 
-      <Panel className="ranking-board__map-panel" style={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
-        {/* Layout-review pivot: the map is the dominant surface now (its
-            own legend, top-left on the map itself, states what the
-            shading means in one line) -- this heading is just a plain
-            section label, not a second explanation. */}
-        <h2
-          style={{
-            fontFamily: "var(--type-heading-font-family)",
-            fontSize: "var(--type-heading-font-size)",
-            fontWeight: "var(--type-heading-font-weight)",
-            margin: "0 0 var(--space-2) 0",
-          }}
-        >
-          {mode === "predicted" ? "Priority by area" : "Team-weighted score (a separate view)"}
-        </h2>
+  const isFirstSearchRun = useRef(true);
+  useEffect(() => {
+    if (isFirstSearchRun.current) {
+      isFirstSearchRun.current = false;
+      return;
+    }
+    const debounceTimer = setTimeout(() => {
+      const q = searchQuery.trim();
+      if (!q) return;
+      const zipMatch = geoRollup.find((r) => r.situsZip === q);
+      if (zipMatch) {
+        handleSelectZip(q);
+        return;
+      }
+      const cityMatch = cityBuckets.find((b) => b.key.toLowerCase() === q.toLowerCase());
+      if (cityMatch) handleSelectCity(cityMatch.key);
+    }, 400);
+    return () => clearTimeout(debounceTimer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchQuery]);
+
+  // Filters count -- the two toggles are always "set" one way or the
+  // other (mock: "Filters 2" with both toggles showing as chips), plus
+  // one more per active drilldown/tier selection.
+  const activeFilterCount =
+    2 + (selectedCity !== null ? 1 : 0) + (selectedZip !== null ? 1 : 0) + (selectedGeoid !== null ? 1 : 0) + (tierFilter !== "all" ? 1 : 0);
+
+  // Top-ranked pins (Mock A): only meaningful on the list's first page --
+  // "top 10" stops meaning anything once you've paged past it.
+  const activeRangeStart = mode === "predicted" ? predictedRangeStart : rangeStart;
+  const topPins =
+    activeRangeStart === 1
+      ? (mode === "predicted" ? displayedPredictedRows : displayedRows)
+          .slice(0, 10)
+          .map((r, i) => ({ propId: r.propId, rank: i + 1, lon: r.lon, lat: r.lat }))
+      : [];
+
+  // Selected-home card (map, bottom-left): whichever row is hovered or
+  // expanded, else the top-ranked home on the current page.
+  // Declared as one homogeneous Array<A | B> (not inferred from the
+  // ternary, which TS would instead type as Array<A> | Array<B> --
+  // fine for .find, but every method whose param type differs between A
+  // and B, like .indexOf below, would then need an argument assignable
+  // to BOTH at once).
+  const activeRowsForCard: Array<PredictedHomeRow | TopHomeRow> = mode === "predicted" ? displayedPredictedRows : displayedRows;
+  const cardRow =
+    activeRowsForCard.find((r) => r.propId === expandedPropId) ??
+    activeRowsForCard.find((r) => r.propId === hoveredPropId) ??
+    (activeRangeStart === 1 ? activeRowsForCard[0] : undefined);
+  const selectedHomeCard = cardRow
+    ? {
+        propId: cardRow.propId,
+        rank: activeRangeStart === 1 ? activeRowsForCard.indexOf(cardRow) + 1 : null,
+        address: [cardRow.situsNum, cardRow.situsStreet].filter(Boolean).join(" ") || cardRow.propId,
+        metaLine: [cardRow.situsCity, cardRow.situsZip].filter(Boolean).join(" ") || "",
+        tierLabel:
+          mode === "predicted" && "decile" in cardRow
+            ? tierMeta(tierForDecile((cardRow as PredictedHomeRow).decile).key).label
+            : "Team priority score",
+        tierSublabel:
+          mode === "predicted" && "decile" in cardRow
+            ? tierMeta(tierForDecile((cardRow as PredictedHomeRow).decile).key).description
+            : "",
+      }
+    : null;
+
+
+  return (
+    <div className="ranking-board">
+      <Panel className="ranking-board__map-panel" style={{ display: "flex", flexDirection: "column", minHeight: 0, padding: 0, overflow: "hidden" }}>
         <div style={{ flex: "1 1 auto", minHeight: 0 }}>
           <BlockGroupMap
             key={countyFips}
@@ -796,204 +809,296 @@ export function RankingBoard({
             onDotHover={handleDotHover}
             fitToGeoids={fitToGeoids}
             priorityByGeoid={mode === "predicted" ? priorityByGeoid : null}
-            shadeLabel={mode === "predicted" ? "top-priority homes" : "weighted score"}
+            shadeLabel={mode === "predicted" ? "top-priority homes" : "team priority score"}
+            topPins={topPins}
+            onPinClick={(propId) => toggleExpand(propId)}
+            selectedHome={selectedHomeCard}
+            focusHome={focusHome}
           />
         </div>
       </Panel>
 
-      <Panel style={{ display: "flex", flexDirection: "column", minHeight: 0, height: "100%" }}>
-        <div style={{ marginBottom: "var(--space-2)" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: "var(--space-3)" }}>
-            <h2
-              style={{
-                fontFamily: "var(--type-heading-font-family)",
-                fontSize: "var(--type-heading-font-size)",
-                fontWeight: "var(--type-heading-font-weight)",
-                margin: 0,
-                textWrap: "balance",
-              }}
-            >
-              {selectedGeoid ? "Homes in this block group" : "Homes ranked county-wide"}
-            </h2>
-            <span
-              aria-live="polite"
-              style={{ fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)", whiteSpace: "nowrap" }}
-            >
-              {(mode === "weighted" ? loading : predictedLoading) ? "Re-ranking…" : ""}
-            </span>
-          </div>
-          {mode === "weighted" ? (
-            <p style={{ margin: "var(--space-1) 0 0 0", fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)" }}>
-              Click a home to see the full score breakdown below.
-            </p>
-          ) : null}
+      <aside className="ranking-board__rail">
+        <div className="ranking-rail__header">
+          <h2 className="ranking-rail__question">{questionText}</h2>
+          <div className="ranking-rail__status">{statusLine}</div>
 
-          <div
-            data-testid="geo-drilldown"
-            style={{ display: "flex", flexWrap: "nowrap", gap: "var(--space-3)", marginTop: "var(--space-2)" }}
-          >
-            <label style={{ display: "flex", flexDirection: "column", gap: "2px", fontSize: "var(--type-label-font-size)", flex: "1 1 0", minWidth: 0 }}>
-              City
-              <select
-                data-testid="drilldown-city"
-                value={selectedCity ?? ALL_VALUE}
-                onChange={(e) => handleSelectCity(fromSelectValue(e.target.value))}
-              >
-                <option value={ALL_VALUE}>All ({geoRollup.reduce((s, r) => s + r.homeCount, 0).toLocaleString()} homes)</option>
-                {cityBuckets.map((b) => (
-                  <option key={b.key || NULL_BUCKET_VALUE} value={toSelectValue(b.key)}>
-                    {(b.key || "No city on file")} ({b.homeCount.toLocaleString()} homes)
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label style={{ display: "flex", flexDirection: "column", gap: "2px", fontSize: "var(--type-label-font-size)", flex: "1 1 0", minWidth: 0 }}>
-              ZIP
-              <select
-                data-testid="drilldown-zip"
-                value={selectedZip ?? ALL_VALUE}
-                onChange={(e) => handleSelectZip(fromSelectValue(e.target.value))}
-              >
-                <option value={ALL_VALUE}>All ({rowsForCity.reduce((s, r) => s + r.homeCount, 0).toLocaleString()} homes)</option>
-                {zipBuckets.map((b) => (
-                  <option key={b.key || NULL_BUCKET_VALUE} value={toSelectValue(b.key)}>
-                    {(b.key || "No ZIP on file")} ({b.homeCount.toLocaleString()} homes)
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label style={{ display: "flex", flexDirection: "column", gap: "2px", fontSize: "var(--type-label-font-size)", flex: "1 1 0", minWidth: 0 }}>
-              Neighborhood
-              <select
-                data-testid="drilldown-blockgroup"
-                value={selectedGeoid ?? ALL_VALUE}
-                onChange={(e) => handleSelectGeoid(fromSelectValue(e.target.value))}
-              >
-                <option value={ALL_VALUE}>All ({rowsForZip.reduce((s, r) => s + r.homeCount, 0).toLocaleString()} homes)</option>
-                {bgBuckets.map((b) => (
-                  <option key={b.key} value={b.key}>
-                    {blockGroupLabel(b.key)} ({b.homeCount.toLocaleString()} homes)
-                  </option>
-                ))}
-              </select>
-            </label>
+          <div className="modes" role="group" aria-label="Ranking mode">
+            <button
+              type="button"
+              className={"modes__option" + (mode === "predicted" ? " modes__option--on" : "")}
+              onClick={() => handleModeChange("predicted")}
+              data-testid="ranking-mode-predicted"
+            >
+              Likely to add backup
+            </button>
+            <button
+              type="button"
+              className={"modes__option" + (mode === "weighted" ? " modes__option--on" : "")}
+              onClick={() => handleModeChange("weighted")}
+              data-testid="ranking-mode-weighted"
+            >
+              Team priorities
+            </button>
           </div>
 
-          {selectedCity !== null || selectedZip !== null || selectedGeoid !== null ? (
-            <div
-              data-testid="selected-blockgroup-chip"
-              style={{
-                display: "flex",
-                alignItems: "center",
-                flexWrap: "wrap",
-                gap: "var(--space-2)",
-                marginTop: "var(--space-2)",
-                fontSize: "var(--type-label-font-size)",
-              }}
-            >
-              {selectedCity !== null ? <span className="chip">{selectedCity || "No city on file"}</span> : null}
-              {selectedZip !== null ? <span className="chip">{selectedZip || "No ZIP on file"}</span> : null}
-              {selectedGeoid !== null ? <span className="chip">{blockGroupLabel(selectedGeoid)}</span> : null}
+          <div className="ranking-rail__controls">
+            <input
+              type="search"
+              className="ranking-rail__search"
+              placeholder="Find address or ZIP"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              aria-label="Find address or ZIP"
+            />
+            <div className="popover-anchor">
               <button
                 type="button"
                 className="btn btn--secondary"
-                onClick={() => handleSelectCity(null)}
-                aria-label="Clear city/ZIP/neighborhood selection and show all homes"
-                data-testid="clear-blockgroup"
-                style={{ whiteSpace: "nowrap" }}
+                onClick={() => {
+                  setFiltersOpen((v) => !v);
+                  setAdjustOpen(false);
+                }}
+                aria-expanded={filtersOpen}
+                data-testid="filters-toggle"
               >
-                Show all homes
+                Filters <span className="count-badge">{activeFilterCount}</span>
               </button>
+              {filtersOpen ? (
+                <div className="popover-panel" role="dialog" aria-label="Filters">
+                  <label style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", fontSize: "var(--type-body-font-size)" }}>
+                    <input
+                      type="checkbox"
+                      checked={hideOldHomes}
+                      onChange={(e) => setHideOldHomes(e.target.checked)}
+                      data-testid="hide-old-homes-toggle"
+                    />
+                    Hide homes built before 2000
+                  </label>
+                  <label style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", fontSize: "var(--type-body-font-size)", marginTop: "var(--space-2)" }}>
+                    <input
+                      type="checkbox"
+                      checked={hideExistingBackup}
+                      onChange={(e) => setHideExistingBackup(e.target.checked)}
+                      data-testid="hide-existing-backup-toggle"
+                    />
+                    Hide homes that already have backup
+                  </label>
+                  <label style={{ display: "flex", flexDirection: "column", gap: "2px", fontSize: "var(--type-label-font-size)", marginTop: "var(--space-3)" }}>
+                    Priority tier
+                    <select value={tierFilter} onChange={(e) => setTierFilter(e.target.value as PriorityTierKey | "all")} data-testid="tier-filter">
+                      <option value="all">All tiers</option>
+                      {PRIORITY_TIER_ORDER.filter((t) => t !== "unscored").map((t) => (
+                        <option key={t} value={t}>
+                          {tierMeta(t).label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <div data-testid="geo-drilldown" style={{ display: "flex", flexDirection: "column", gap: "var(--space-2)", marginTop: "var(--space-3)" }}>
+                    <label style={{ display: "flex", flexDirection: "column", gap: "2px", fontSize: "var(--type-label-font-size)" }}>
+                      City
+                      <select
+                        data-testid="drilldown-city"
+                        value={selectedCity ?? ALL_VALUE}
+                        onChange={(e) => handleSelectCity(fromSelectValue(e.target.value))}
+                      >
+                        <option value={ALL_VALUE}>All ({geoRollup.reduce((s, r) => s + r.homeCount, 0).toLocaleString()} homes)</option>
+                        {cityBuckets.map((b) => (
+                          <option key={b.key || NULL_BUCKET_VALUE} value={toSelectValue(b.key)}>
+                            {(b.key || "No city on file")} ({b.homeCount.toLocaleString()} homes)
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label style={{ display: "flex", flexDirection: "column", gap: "2px", fontSize: "var(--type-label-font-size)" }}>
+                      ZIP
+                      <select
+                        data-testid="drilldown-zip"
+                        value={selectedZip ?? ALL_VALUE}
+                        onChange={(e) => handleSelectZip(fromSelectValue(e.target.value))}
+                      >
+                        <option value={ALL_VALUE}>All ({rowsForCity.reduce((s, r) => s + r.homeCount, 0).toLocaleString()} homes)</option>
+                        {zipBuckets.map((b) => (
+                          <option key={b.key || NULL_BUCKET_VALUE} value={toSelectValue(b.key)}>
+                            {(b.key || "No ZIP on file")} ({b.homeCount.toLocaleString()} homes)
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label style={{ display: "flex", flexDirection: "column", gap: "2px", fontSize: "var(--type-label-font-size)" }}>
+                      Neighborhood
+                      <select
+                        data-testid="drilldown-blockgroup"
+                        value={selectedGeoid ?? ALL_VALUE}
+                        onChange={(e) => handleSelectGeoid(fromSelectValue(e.target.value))}
+                      >
+                        <option value={ALL_VALUE}>All ({rowsForZip.reduce((s, r) => s + r.homeCount, 0).toLocaleString()} homes)</option>
+                        {bgBuckets.map((b) => (
+                          <option key={b.key} value={b.key}>
+                            {blockGroupLabel(b.key)} ({b.homeCount.toLocaleString()} homes)
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                  {selectedCity !== null || selectedZip !== null || selectedGeoid !== null ? (
+                    <div
+                      data-testid="selected-blockgroup-chip"
+                      style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: "var(--space-2)", marginTop: "var(--space-3)", fontSize: "var(--type-label-font-size)" }}
+                    >
+                      {selectedCity !== null ? <span className="chip">{selectedCity || "No city on file"}</span> : null}
+                      {selectedZip !== null ? <span className="chip">{selectedZip || "No ZIP on file"}</span> : null}
+                      {selectedGeoid !== null ? <span className="chip">{blockGroupLabel(selectedGeoid)}</span> : null}
+                      <button
+                        type="button"
+                        className="btn btn--secondary"
+                        onClick={() => handleSelectCity(null)}
+                        aria-label="Clear city/ZIP/neighborhood selection and show all homes"
+                        data-testid="clear-blockgroup"
+                        style={{ whiteSpace: "nowrap" }}
+                      >
+                        Show all homes
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
             </div>
-          ) : null}
+
+            <div className="popover-anchor">
+              <button
+                type="button"
+                className="btn btn--secondary"
+                onClick={() => {
+                  setAdjustOpen((v) => !v);
+                  setFiltersOpen(false);
+                }}
+                aria-expanded={adjustOpen}
+                data-testid="adjust-priorities-toggle"
+              >
+                Adjust priorities
+              </button>
+              {adjustOpen ? (
+                <div className="popover-panel popover-panel--wide" role="dialog" aria-label="Adjust priorities" data-testid="adjust-priorities-disclosure">
+                  <p style={{ margin: "0 0 var(--space-3) 0", fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)" }}>
+                    The list is ordered by &ldquo;Likely to add backup&rdquo; by default. Switch to &ldquo;Team
+                    priorities&rdquo; only if your team wants to rank by its own signal mix instead.
+                  </p>
+                  <WeightSliders
+                    weights={weights}
+                    onChange={(next) => {
+                      setWeights(next);
+                      setMode("weighted");
+                    }}
+                    onReset={() => setWeights(equalWeights())}
+                    defaultWeights={defaultWeights}
+                  />
+                  <p style={{ margin: "var(--space-3) 0 0 0", fontSize: "var(--type-label-font-size)" }}>
+                    <Link href="/sources#how-leads-are-prioritized">How the ranking works →</Link>
+                  </p>
+                </div>
+              ) : null}
+            </div>
+          </div>
+
+          <div className="chips">
+            <span>
+              <span className="chips__dot" />
+              {hideExistingBackup ? "Homes with backup on file hidden" : "Homes with backup on file shown"}
+            </span>
+            <span>
+              <span className={"chips__dot" + (hideOldHomes ? "" : " chips__dot--off")} />
+              {hideOldHomes ? "Built before 2000 hidden" : "Built before 2000 shown"}
+            </span>
+          </div>
         </div>
+
+        <div className="ranking-rail__listhead">
+          <span>
+            <b>{(mode === "predicted" ? predictedTotal : total)?.toLocaleString() ?? "—"}</b> homes ranked
+          </span>
+          <span>
+            showing {activeRangeStart}–{activeRangeStart + (mode === "predicted" ? displayedPredictedRows.length : displayedRows.length) - 1} ·{" "}
+            {mode === "predicted" ? "likely to add backup, 12 months" : "team priority score"}
+          </span>
+          <span aria-live="polite" style={{ color: "var(--theme-ink-muted)" }}>
+            {(mode === "weighted" ? loading : predictedLoading) ? "Re-ranking…" : ""}
+          </span>
+        </div>
+
         {(mode === "weighted" ? error : predictedError) ? (
-          <div style={{ marginBottom: "var(--space-2)" }}>
+          <div style={{ padding: "0 var(--space-3)" }}>
             <MissingState variant="not-loaded" reason={(mode === "weighted" ? error : predictedError) ?? ""} />
           </div>
         ) : null}
-        {mode === "predicted" ? (
-          <>
-            <div style={{ flex: "1 1 auto", minHeight: 0, overflow: "auto" }}>
-              <PredictedHomesTable
-                rows={predictedRows}
-                countyName={countyName}
-                rangeStart={predictedRangeStart}
-                hoveredPropId={hoveredPropId}
-                onHoverRow={(row) => {
-                  setHoveredPropId(row?.propId ?? null);
-                  setHoveredGeoid(row?.blockGroupGeoid ?? null);
-                  setScrollToPropId(null);
-                }}
-                scrollToPropId={scrollToPropId}
-              />
-            </div>
-            <TopHomesPagination
-              rangeStart={predictedRangeStart}
-              // TopHomesPagination (a different ticket's component) only
-              // ever reads rows.length -- PredictedHomeRow's real shape
-              // isn't TopHomeRow, so this cast is scoped to that one safe
-              // fact rather than widening the component's own prop type.
-              rows={predictedRows as unknown as TopHomeRow[]}
-              total={predictedTotal}
-              hasPrevious={predictedPageIndex > 0}
-              hasNext={predictedRows.length === DEFAULT_PAGE_SIZE}
-              onPrevious={handlePredictedPrevious}
-              onNext={handlePredictedNext}
-            />
-          </>
-        ) : (
-          <>
-            <div style={{ flex: "1 1 auto", minHeight: 0, overflow: "auto" }} onClick={handleTableClick}>
-              <TopHomesTable
-                rows={rows}
-                rangeStart={rangeStart}
-                hoveredPropId={hoveredPropId}
-                onHoverRow={handleRowHover}
-                scrollToPropId={scrollToPropId}
-                rankDeltas={rankDeltas}
-              />
-            </div>
-            <TopHomesPagination
-              rangeStart={rangeStart}
-              rows={rows}
-              total={total}
-              hasPrevious={pageIndex > 0}
-              hasNext={rows.length === DEFAULT_PAGE_SIZE}
-              onPrevious={handlePrevious}
-              onNext={handleNext}
-            />
-          </>
-        )}
-      </Panel>
-    </div>
 
-    {explainPropId ? (
-      <Panel data-testid="score-explainer-panel">
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "var(--space-4)", marginBottom: "var(--space-3)" }}>
-          <h2
-            style={{
-              fontFamily: "var(--type-heading-font-family)",
-              fontSize: "var(--type-heading-font-size)",
-              fontWeight: "var(--type-heading-font-weight)",
-              margin: 0,
-            }}
-          >
-            Why this home
-          </h2>
-          <button
-            type="button"
-            className="btn btn--secondary"
-            onClick={() => setExplainPropId(null)}
-            aria-label="Close the score breakdown"
-            data-testid="close-score-explainer"
-          >
-            Close
-          </button>
+        <div
+          className="ranking-rail__list"
+          ref={listRef}
+          role="listbox"
+          aria-label="Ranked homes"
+          tabIndex={0}
+          onKeyDown={handleListKeyDown}
+        >
+          {mode === "predicted" ? (
+            <PredictedHomesTable
+              rows={displayedPredictedRows}
+              countyName={countyName}
+              rangeStart={predictedRangeStart}
+              hoveredPropId={hoveredPropId}
+              onHoverRow={(row) => {
+                setHoveredPropId(row?.propId ?? null);
+                setHoveredGeoid(row?.blockGroupGeoid ?? null);
+                setScrollToPropId(null);
+              }}
+              scrollToPropId={scrollToPropId}
+              expandedPropId={expandedPropId}
+              onToggleExpand={toggleExpand}
+              onLocateOnMap={handleLocateOnMap}
+            />
+          ) : (
+            <TopHomesTable
+              rows={displayedRows}
+              rangeStart={rangeStart}
+              hoveredPropId={hoveredPropId}
+              onHoverRow={handleRowHover}
+              scrollToPropId={scrollToPropId}
+              rankDeltas={rankDeltas}
+              expandedPropId={expandedPropId}
+              onToggleExpand={toggleExpand}
+              weights={weights}
+              onLocateOnMap={handleLocateOnMap}
+            />
+          )}
         </div>
-        <ScoreExplainer propId={explainPropId} weights={weights} countyName={countyName} />
-      </Panel>
-    ) : null}
+
+        {mode === "predicted" ? (
+          <TopHomesPagination
+            rangeStart={predictedRangeStart}
+            // TopHomesPagination (a different ticket's component) only
+            // ever reads rows.length -- PredictedHomeRow's real shape
+            // isn't TopHomeRow, so this cast is scoped to that one safe
+            // fact rather than widening the component's own prop type.
+            rows={predictedRows as unknown as TopHomeRow[]}
+            total={predictedTotal}
+            hasPrevious={predictedPageIndex > 0}
+            hasNext={predictedRows.length === DEFAULT_PAGE_SIZE}
+            onPrevious={handlePredictedPrevious}
+            onNext={handlePredictedNext}
+          />
+        ) : (
+          <TopHomesPagination
+            rangeStart={rangeStart}
+            rows={rows}
+            total={total}
+            hasPrevious={pageIndex > 0}
+            hasNext={rows.length === DEFAULT_PAGE_SIZE}
+            onPrevious={handlePrevious}
+            onNext={handleNext}
+          />
+        )}
+      </aside>
     </div>
   );
 }

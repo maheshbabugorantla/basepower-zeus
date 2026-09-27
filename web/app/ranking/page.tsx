@@ -273,53 +273,35 @@ export default async function RankingPage({
   // methodology, not a lead-list concern -- moved to /sources under "How
   // leads are prioritized" (it rendered BEFORE the map and list on
   // phone, the worst possible position for a rep who opened this page
-  // to see homes).
-  const leftRail = null;
+  // Redesign (Mock A): the old h1 "Lead list" + two paragraphs above the
+  // board become the rail's own header -- one question, one real status
+  // line built from the same api.gate_counts numbers as before (no
+  // "dashboard of panels above the fold" survives; RankingBoard now owns
+  // the whole viewport-height workspace).
+  const questionText = `Which ${county.name} homes should Base knock next?`;
+  const statusLine =
+    gateServableHomes === 0 ? (
+      <>
+        {gateTotalHomes.toLocaleString()} eligible homes · Base can&rsquo;t confirm service for any home here yet ·{" "}
+        <Link href="/sources#how-leads-are-prioritized">how the ranking works →</Link>
+      </>
+    ) : (
+      <>
+        {gateTotalHomes.toLocaleString()} eligible homes · Base serves {gateServableHomes.toLocaleString()}
+        {gateNeedsVerificationHomes > 0 ? ` · ${gateNeedsVerificationHomes.toLocaleString()} need a utility check` : ""}
+        {gateNotServedHomes > 0 ? ` · ${gateNotServedHomes.toLocaleString()} not served` : ""} ·{" "}
+        <Link href="/sources#how-leads-are-prioritized">how the ranking works →</Link>
+      </>
+    );
 
   return (
-    <div style={{ display: "grid", gap: "var(--space-4)" }}>
-      <div>
-        <h1
-          style={{
-            fontFamily: "var(--type-title-font-family)",
-            fontSize: "var(--type-title-font-size)",
-            fontWeight: "var(--type-title-font-weight)",
-            margin: 0,
-          }}
-        >
-          Lead list
-        </h1>
-        {/* One scope line (the only large/prominent line); everything
-            else here is small secondary text on as few lines as
-            possible -- no dashboard of panels above the fold, no
-            probability/multiple anywhere in it. */}
-        <p style={{ margin: "var(--space-1) 0 0 0", fontFamily: "var(--type-data-font-family)" }}>
-          {gateServableHomes === 0 ? (
-            <>
-              Now ranking: {county.name} County · {gateTotalHomes.toLocaleString()} eligible homes · Base can&rsquo;t
-              confirm service for any home here yet
-            </>
-          ) : (
-            <>
-              Now ranking: {county.name} County · {gateTotalHomes.toLocaleString()} eligible homes · Base serves{" "}
-              {gateServableHomes.toLocaleString()}
-              {gateNeedsVerificationHomes > 0
-                ? ` · ${gateNeedsVerificationHomes.toLocaleString()} need utility verification`
-                : ""}
-              {gateNotServedHomes > 0 ? ` · ${gateNotServedHomes.toLocaleString()} not served` : ""}
-            </>
-          )}
-        </p>
-        <p style={{ color: "var(--theme-ink-muted)", margin: "var(--space-1) 0 0 0", maxWidth: "90ch", fontSize: "var(--type-label-font-size)" }}>
-          Priority = a model trained on past backup-battery and generator permits, strongest signals shown per home
-          (<Link href="/sources#how-leads-are-prioritized">how this works</Link>). <Link href={`/ranking/coverage?county=${county.fips}`}>See coverage gaps →</Link>
-        </p>
-      </div>
+    <div className="ranking-page">
       <RankingBoard
         key={county.fips}
         rows={weightedHomes.rows}
         initialTotal={weightedHomes.total ?? 0}
-        leftRail={leftRail}
+        questionText={questionText}
+        statusLine={statusLine}
         defaultWeights={defaultWeights}
         predictedRows={predictedRows}
         predictedTotal={predictedTotal}

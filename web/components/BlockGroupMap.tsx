@@ -30,6 +30,51 @@ export const NOT_LOADED_HATCH_IMAGE_ID = "blockgroup-not-loaded-hatch";
 export const NOT_LOADED_HATCH_BG = "#e6e4e0"; // --color-not-loaded-bg
 export const NOT_LOADED_HATCH_STRIPE = "#d8d7d5"; // --color-surface-sunken
 
+// Camera-motion polish (2026-09-27 user feedback: "zooms and color changes
+// feel jumpy"), following the same patterns as the Hyperlocal reference
+// map (app/components/zoning/ZoningMap.tsx in that sibling repo, read-only
+// reference, no code copied): a single eased fitBounds per selection
+// change (never re-fit on every sourcedata tick), frame padding that
+// clears this map's own overlays, and prefers-reduced-motion falling back
+// to an instant jump everywhere a duration would otherwise animate.
+
+const reducedMotion = () =>
+  typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+type Pad = { top: number; bottom: number; left: number; right: number };
+
+/** Clears the legend (top-left), the selected-home card (bottom-left) and
+ * the zoom control (bottom-right) so a fitBounds frames the AREA in the
+ * clear part of the map, not underneath an overlay. */
+function framePadding(el: HTMLElement): Pad {
+  const wide = el.clientWidth >= 640;
+  return wide ? { top: 90, left: 260, right: 56, bottom: 150 } : { top: 24, left: 16, right: 16, bottom: 120 };
+}
+
+/** fitBounds adds its padding to whatever padding the camera already
+ * holds, so pass only the difference (Hyperlocal's extraPad). */
+function extraPad(map: MapLibreMap, want: Pad): Pad {
+  const p = map.getPadding();
+  const have = { top: p.top ?? 0, bottom: p.bottom ?? 0, left: p.left ?? 0, right: p.right ?? 0 };
+  return {
+    top: Math.max(0, want.top - have.top),
+    bottom: Math.max(0, want.bottom - have.bottom),
+    left: Math.max(0, want.left - have.left),
+    right: Math.max(0, want.right - have.right),
+  };
+}
+
+// NOTE: the style spec only allows a ["zoom"] expression to appear as
+// the OUTERMOST expression, or nested directly inside a top-level
+// case/match/coalesce/let -- never further inside arithmetic like ["*",
+// ...]. A first version of this file's zoom-interpolated "fills fade in
+// as you zoom" polish (Hyperlocal's fadeIn) nested interpolate(zoom)
+// inside a "*", which MapLibre rejects when validating the layer at
+// addLayer() time -- silently throwing inside the map's "load" handler
+// and leaving `ready` stuck false (the map never rendered at all, in
+// dev testing). Dropped the zoom fade-in nicety rather than risk that
+// again; the dimming behavior below still holds without it.
+
 /** score is api.blockgroup_scores_weighted's absolute mean final_score (0..1) across the group's scored homes, or null. */
 export function scoreRampColor(score: number): (typeof SCORE_RAMP)[number] {
   const clamped = Math.min(1, Math.max(0, score));
@@ -163,6 +208,26 @@ export interface BlockGroupMapProps {
   /** Legend + a11y label for what the ramp means -- "top-priority homes"
    * (predicted, default) vs "weighted score" (manager's secondary mode). */
   shadeLabel?: string;
+  /** Redesign (Mock A): the top-ranked homes on the CURRENT page-1 list
+   * (real rows, never synthetic), rendered as numbered pins regardless of
+   * block-group selection -- rank 1-6 filled forest, 7-10 outlined, so
+   * the top five still read from across a room. */
+  topPins?: Array<{ propId: string; rank: number; lon: number | null; lat: number | null }>;
+  onPinClick?: (propId: string) => void;
+  /** Bottom-left "selected home" card -- rank/address/tier + a link to
+   * the full record. Null hides the card entirely. */
+  selectedHome?: {
+    rank: number | null;
+    address: string;
+    metaLine: string;
+    tierLabel: string;
+    tierSublabel: string;
+    propId: string;
+  } | null;
+  /** "Locate on map" -- flies to one home's real parcel centroid. Never
+   * recenters on a fabricated coordinate; a home with no centroid yet
+   * simply doesn't move the map. */
+  focusHome?: { lon: number | null; lat: number | null } | null;
 }
 
 const SOURCE_ID = "blockgroups";
@@ -189,6 +254,10 @@ export function BlockGroupMap({
   fitToGeoids = null,
   priorityByGeoid = null,
   shadeLabel = "top-priority homes",
+  topPins = [],
+  onPinClick,
+  selectedHome = null,
+  focusHome = null,
 }: BlockGroupMapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
@@ -196,6 +265,15 @@ export function BlockGroupMap({
   const geoidsRef = useRef<Set<string>>(new Set());
   const scoresRef = useRef<Map<string, number>>(new Map());
   const markersRef = useRef<Map<string, InstanceType<typeof maplibregl.Marker>>>(new Map());
+  const pinMarkersRef = useRef<Map<string, InstanceType<typeof maplibregl.Marker>>>(new Map());
+  // null = nothing dimmed (no city/ZIP/neighborhood selection); a Set =
+  // exactly those geoids that stay at full opacity, everything else dims.
+  const dimSetRef = useRef<Set<string> | null>(null);
+  // Tracks the selection key (fitToGeoids, sorted+joined, or "" for
+  // "whole county") a camera fit has already completed for, so a later
+  // sourcedata tick for the SAME selection never re-triggers fitBounds
+  // (the reported "jumpy" bug) -- only a genuinely new selection does.
+  const fittedKeyRef = useRef<string | null>(null);
   const [scoredCount, setScoredCount] = useState(0);
   const [ready, setReady] = useState(false);
 
@@ -222,7 +300,13 @@ export function BlockGroupMap({
     });
     mapRef.current = map;
 
+    map.on("error", (e: unknown) => {
+      // eslint-disable-next-line no-console
+      console.error("BlockGroupMap error event", e);
+    });
+
     map.on("load", () => {
+      try {
       if (!map.hasImage(NOT_LOADED_HATCH_IMAGE_ID)) {
         map.addImage(NOT_LOADED_HATCH_IMAGE_ID, buildHatchPattern());
       }
@@ -240,18 +324,32 @@ export function BlockGroupMap({
         id: LAYER_UNSCORED,
         type: "fill",
         source: SOURCE_ID,
-        paint: { "fill-pattern": NOT_LOADED_HATCH_IMAGE_ID },
+        paint: {
+          "fill-pattern": NOT_LOADED_HATCH_IMAGE_ID,
+          "fill-opacity-transition": { duration: 300, delay: 0 },
+        },
       });
 
       // Scored fill sits on top, opacity 0 (transparent, hatch shows
-      // through) wherever feature-state score hasn't been set.
+      // through) wherever feature-state score hasn't been set. A
+      // zoom-interpolated base opacity (FILL_OPACITY_BASE) keeps basemap
+      // streets readable when zoomed in; DIMMED_FACTOR dims every block
+      // group outside the current city/ZIP/neighborhood selection to 30%
+      // (never removes it — color and shape stay legible for context).
       map.addLayer({
         id: LAYER_SCORED,
         type: "fill",
         source: SOURCE_ID,
         paint: {
           "fill-color": scoreFillExpression(),
-          "fill-opacity": ["case", HAS_FEATURE_STATE_SCORE, 0.75, 0],
+          "fill-opacity": [
+            "case",
+            ["==", ["feature-state", "dimmed"], true],
+            ["case", HAS_FEATURE_STATE_SCORE, 0.225, 0],
+            ["case", HAS_FEATURE_STATE_SCORE, 0.75, 0],
+          ] as unknown as ExpressionSpecification,
+          "fill-opacity-transition": { duration: 300, delay: 0 },
+          "fill-color-transition": { duration: 300, delay: 0 },
         },
       });
 
@@ -267,7 +365,7 @@ export function BlockGroupMap({
         type: "line",
         source: SOURCE_ID,
         filter: ["==", ["get", "geoid"], ""],
-        paint: { "line-color": "#048ee5", "line-width": 3 },
+        paint: { "line-color": "#048ee5", "line-width": 3, "line-opacity": 1, "line-opacity-transition": { duration: 150, delay: 0 } },
       });
 
       // Selected block group — forest outline (DESIGN.md brand-strong),
@@ -277,7 +375,7 @@ export function BlockGroupMap({
         type: "line",
         source: SOURCE_ID,
         filter: ["==", ["get", "geoid"], ""],
-        paint: { "line-color": "#1e4d2b", "line-width": 4 },
+        paint: { "line-color": "#1e4d2b", "line-width": 4, "line-opacity": 1, "line-opacity-transition": { duration: 150, delay: 0 } },
       });
 
       const readGeoid = (e: MapLayerMouseEvent) =>
@@ -320,15 +418,22 @@ export function BlockGroupMap({
 
       mapLoadedRef.current = true;
       setReady(true);
+      } catch (err) {
+        console.error("BlockGroupMap load handler threw", err);
+      }
     });
 
     function applyScores() {
       const m = mapRef.current;
       if (!m) return;
       let scored = 0;
+      const dimSet = dimSetRef.current;
       for (const geoid of geoidsRef.current) {
         const score = scoresRef.current.get(geoid);
-        m.setFeatureState({ source: SOURCE_ID, id: geoid }, { score: score ?? null });
+        m.setFeatureState(
+          { source: SOURCE_ID, id: geoid },
+          { score: score ?? null, dimmed: dimSet !== null && !dimSet.has(geoid) }
+        );
         if (score !== undefined) scored += 1;
       }
       setScoredCount(scored);
@@ -436,12 +541,22 @@ export function BlockGroupMap({
     if (!map || !ready) return;
 
     // Layout-review fix: fit the WHOLE county's block groups on load
-    // (padding 24) instead of a fixed center/zoom guess, whenever no
-    // specific city/ZIP/neighborhood is selected -- same bbox logic
-    // below, just unfiltered (every feature the source has) instead of
-    // filtered to a wanted-geoid set.
+    // (whenever no specific city/ZIP/neighborhood is selected) -- same
+    // bbox logic below, just unfiltered (every feature the source has)
+    // instead of filtered to a wanted-geoid set.
+    //
+    // 2026-09-27 motion fix: dim every block group outside the wanted set
+    // (never remove it) so the selection reads without hiding context,
+    // and fit the camera ONCE per selection key -- fittedKeyRef stops a
+    // later sourcedata tick for the SAME selection from re-triggering
+    // fitBounds (the reported "jumpy" bug); only a genuinely new
+    // selection fits again.
     const hasSelection = !!fitToGeoids && fitToGeoids.length > 0;
     const wanted = hasSelection ? new Set(fitToGeoids) : null;
+    const selectionKey = hasSelection ? Array.from(wanted!).sort().join(",") : "";
+    dimSetRef.current = wanted;
+    (map as unknown as { __applyScores?: () => void }).__applyScores?.();
+
     let cancelled = false;
     let usedFallbackCenter = false;
 
@@ -452,6 +567,7 @@ export function BlockGroupMap({
 
     function tryFit() {
       if (cancelled) return;
+      if (fittedKeyRef.current === selectionKey) return; // already fit this exact selection
       let features: ReturnType<MapLibreMap["querySourceFeatures"]>;
       try {
         features = wanted
@@ -469,7 +585,8 @@ export function BlockGroupMap({
         if (!hasSelection && !usedFallbackCenter) {
           usedFallbackCenter = true;
           const mapCenter = COUNTY_MAP_CENTER[countyFips] ?? COUNTY_MAP_CENTER["48453"];
-          m.easeTo({ center: mapCenter.center, zoom: mapCenter.zoom, duration: 0 });
+          if (reducedMotion()) m.jumpTo({ center: mapCenter.center, zoom: mapCenter.zoom });
+          else m.easeTo({ center: mapCenter.center, zoom: mapCenter.zoom, duration: 0 });
         }
         return;
       }
@@ -478,13 +595,14 @@ export function BlockGroupMap({
         if (f.geometry && "coordinates" in f.geometry) extendBbox(bbox, f.geometry.coordinates);
       }
       if (!Number.isFinite(bbox[0])) return;
-      m.fitBounds(
-        [
-          [bbox[0], bbox[1]],
-          [bbox[2], bbox[3]],
-        ],
-        { padding: 24, maxZoom: 15, duration: 500 }
-      );
+      const bounds: [[number, number], [number, number]] = [
+        [bbox[0], bbox[1]],
+        [bbox[2], bbox[3]],
+      ];
+      const opts = { padding: extraPad(m, framePadding(m.getContainer())), maxZoom: 14, pitch: 0, bearing: 0 };
+      if (reducedMotion()) m.fitBounds(bounds, { ...opts, animate: false });
+      else m.fitBounds(bounds, { ...opts, duration: 900, essential: true });
+      fittedKeyRef.current = selectionKey; // one glide per selection -- no re-fit on later sourcedata ticks
     }
 
     tryFit();
@@ -548,6 +666,77 @@ export function BlockGroupMap({
     }
   }, [hoveredPropId]);
 
+  // ---------------------------------------------------------------------
+  // Top-ranked pins (Mock A): numbered markers for the current page-1
+  // list, independent of any block-group selection/dots. Rank 1-6 filled
+  // forest, 7-10 outlined, per the mock -- real ranks/coordinates only.
+  // ---------------------------------------------------------------------
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    for (const marker of pinMarkersRef.current.values()) marker.remove();
+    pinMarkersRef.current = new Map();
+
+    for (const pin of topPins) {
+      if (pin.lon === null || pin.lat === null) continue;
+      const filled = pin.rank <= 6;
+      const el = document.createElement("div");
+      el.className = "map-pin";
+      el.dataset.testid = "map-pin";
+      el.dataset.propId = pin.propId;
+      el.dataset.rank = String(pin.rank);
+      el.style.width = "24px";
+      el.style.height = "24px";
+      el.style.borderRadius = "50%";
+      el.style.display = "flex";
+      el.style.alignItems = "center";
+      el.style.justifyContent = "center";
+      el.style.fontSize = "11px";
+      el.style.fontWeight = "600";
+      el.style.fontFamily = "var(--type-body-font-family, sans-serif)";
+      el.style.cursor = "pointer";
+      el.style.boxShadow = "0 1px 3px rgba(0,0,0,0.35)";
+      if (filled) {
+        el.style.background = "#1e4d2b";
+        el.style.color = "#fff";
+        el.style.border = "2px solid #ffffff";
+      } else {
+        el.style.background = "#ffffff";
+        el.style.color = "#1e4d2b";
+        el.style.border = "2px solid #1e4d2b";
+      }
+      el.textContent = String(pin.rank);
+      el.addEventListener("mouseenter", () => onDotHover?.(pin.propId));
+      el.addEventListener("mouseleave", () => onDotHover?.(null));
+      el.addEventListener("click", (e) => {
+        e.stopPropagation();
+        onPinClick?.(pin.propId);
+      });
+
+      const marker = new maplibregl.Marker({ element: el, anchor: "center" }).setLngLat([pin.lon, pin.lat]).addTo(map);
+      pinMarkersRef.current.set(pin.propId, marker);
+    }
+
+    return () => {
+      for (const marker of pinMarkersRef.current.values()) marker.remove();
+      pinMarkersRef.current = new Map();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [JSON.stringify(topPins)]);
+
+  // ---------------------------------------------------------------------
+  // "Locate on map" -- flies to a real parcel centroid only; never moves
+  // the camera for a home with no loaded coordinate.
+  // ---------------------------------------------------------------------
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready || !focusHome || focusHome.lon === null || focusHome.lat === null) return;
+    const target = { center: [focusHome.lon, focusHome.lat] as [number, number], zoom: Math.max(map.getZoom(), 15) };
+    if (reducedMotion()) map.jumpTo(target);
+    else map.flyTo({ ...target, duration: 900, essential: true });
+  }, [ready, focusHome]);
+
   return (
     <div style={{ position: "relative", width: "100%", height, minHeight: "360px" }}>
       <div
@@ -563,6 +752,48 @@ export function BlockGroupMap({
         }}
       />
       <MapLegend selected={selectedGeoid !== null} shadeLabel={shadeLabel} />
+      {selectedHome ? <SelectedHomeCard home={selectedHome} /> : null}
+    </div>
+  );
+}
+
+function SelectedHomeCard({
+  home,
+}: {
+  home: NonNullable<BlockGroupMapProps["selectedHome"]>;
+}) {
+  return (
+    <div
+      data-testid="map-selected-home-card"
+      style={{
+        position: "absolute",
+        left: "var(--space-3)",
+        bottom: "var(--space-3)",
+        maxWidth: "300px",
+        backgroundColor: "var(--theme-surface)",
+        color: "var(--theme-ink)",
+        borderRadius: "var(--rounded-md)",
+        padding: "var(--space-3)",
+        boxShadow: "0 4px 12px rgba(0,0,0,0.16)",
+      }}
+    >
+      <div style={{ fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)" }}>
+        {home.rank !== null ? `Rank ${home.rank} · selected home` : "Selected home"}
+      </div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: "var(--space-2)", marginTop: "2px" }}>
+        <div style={{ fontWeight: 600 }}>{home.address}</div>
+        <div style={{ fontSize: "var(--type-label-font-size)", fontWeight: 600, color: "var(--theme-brand-accent-text)", textAlign: "right", whiteSpace: "nowrap" }}>
+          {home.tierLabel}
+          <div style={{ fontWeight: 400, color: "var(--theme-ink-muted)", fontSize: "11px" }}>{home.tierSublabel}</div>
+        </div>
+      </div>
+      <div style={{ fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)", marginTop: "2px" }}>{home.metaLine}</div>
+      <a
+        href={`/home/${home.propId}`}
+        style={{ marginTop: "var(--space-2)", fontSize: "var(--type-label-font-size)", fontWeight: 600, color: "var(--theme-brand-accent-text)", display: "block" }}
+      >
+        Open full record →
+      </a>
     </div>
   );
 }

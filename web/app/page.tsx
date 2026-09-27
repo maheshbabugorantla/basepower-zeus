@@ -1,18 +1,15 @@
 import Link from "next/link";
 import { query } from "../lib/db";
-import { Panel } from "../components/ui/Panel";
 import { MissingState } from "../components/ui/MissingState";
-import type { ProvenancePopoverProps } from "../components/ui/ProvenancePopover";
 import {
   OutageSummary,
   type CountyOutageContext,
   type DistributorReliabilityRow,
   type OutageSummaryData,
 } from "../components/OutageSummary";
-import { StatRow, StatList } from "../components/ui/StatRow";
 import { PermitTimelinePanel, type PermitQuarterRow } from "../components/PermitTimelinePanel";
 import { getCountiesWithScoredHomes } from "../lib/counties.server";
-import { COUNTY_CANDIDATES, resolveCounty } from "../lib/counties";
+import { COUNTY_CANDIDATES, type CountyOption } from "../lib/counties";
 import { StormRecordPanel, type StormRecordCounty } from "../components/StormRecordPanel";
 
 // M0-W1: server component. `force-dynamic` is required, not decorative —
@@ -20,35 +17,29 @@ import { StormRecordPanel, type StormRecordCounty } from "../components/StormRec
 // backfill can land while the app is live), never bake a value in at
 // build time.
 //
-// M1-W3 fix #4: Overview was "one sentence in a narrow column on an empty
-// page." A real overview needs several headline facts, each with its own
-// unit and provenance, and links into Ranking and Sources — never a hero
-// stat-card grid (DESIGN.md §6 Don't).
+// Redesign (Mock C, 2026-09-27 user decision): Overview is TERRITORY-WIDE
+// -- it covers every county getCountiesWithScoredHomes() returns and
+// ignores `?county=` entirely (the county switcher is hidden on this
+// route, see components/TopBar.tsx). A 2x2 grid at viewport height:
+// outage exposure by distributor (grouped by county, deduped within
+// each), the three-county storm record, one ranking-readiness row per
+// county, and permits/model figures for the one jurisdiction that
+// actually has permit data loaded (City of Austin/Travis).
 export const dynamic = "force-dynamic";
 
-const TRAVIS_COUNTY_FIPS = "48453";
-const TRAVIS_COUNTY_NAME = "Travis";
 const OUTAGE_YEAR = 2025;
 
-// M2-W-fix (user feedback): the county-wide EAGLE-I total ("2,439,878.25
-// customer-hours") is a Travis-wide sum across every customer, not a
-// per-home figure — no single home experiences it, so it must never be the
-// Overview headline (DESIGN.md's Unit Rule + the real-data rule's "missing
-// is a state, not a zero" spirit both point the same way: don't let a
-// technically-real number imply something false at the wrong altitude).
-// The headline is now each Base-served distributor's own EIA-861 SAIDI
-// (minutes without power per customer per year) — a real per-customer
-// figure — for the distributors actually present among gate-passed Travis
-// homes (ground-truthed against core.mv_home_signals: Austin Energy and
-// Oncor). CenterPoint is Base-served too but serves Harris, not Travis, so
-// it is listed but marked as arriving once Harris loads, never faked with
-// a Travis figure. This eia_id/base_name pairing used to be a small,
-// fixed candidate array (documented in supabase/migrations/0201_m2.sql's
-// core.territories comment) -- M3-W1 replaces that fixed list with a
-// data-driven one: whatever distributor(s) actually cover a gate-passed
-// home in a county that has scored homes, discovered from
-// core.mv_home_signals itself (indexed on county_fips/territory_eia_id,
-// migration 0208), never a candidate list chosen ahead of what loaded.
+// Confirmed live via `select distinct jurisdiction from
+// api.permit_path_stats` (2026-09-27): every jurisdiction row is an
+// Austin-area ETJ/full-purpose variant, plus the pre-aggregated 'ALL'.
+// No Harris or Williamson jurisdiction has ever been loaded (City of
+// Austin permits are the only public permit feed this app has a
+// pipeline for -- PRODUCT.md). This is a record of that confirmed DB
+// state, not a guess -- a county absent from this map renders the
+// MissingState below, never a fabricated figure.
+const COUNTY_PERMIT_JURISDICTION: Record<string, string> = {
+  "48453": "ALL", // Travis -> City of Austin
+};
 
 interface DistributorReliabilityDbRow {
   base_name: string;
@@ -74,21 +65,17 @@ interface DistributorReliabilityDbRow {
  * Per-distributor EIA-861 reliability (SAIDI incl. major events), latest
  * year first, for every distributor that actually covers a gate-passed
  * home in one of `countyFipsList` -- discovered live, not a fixed
- * candidate array. `distinct` is over an already-indexed pair of columns
- * on the materialized core.mv_home_signals, not a live spatial join.
+ * candidate array. One row per (county_fips, territory_eia_id) pair (the
+ * view's own PK), so a distributor covering two counties (e.g. Bluebonnet
+ * in both Travis and Williamson) legitimately appears once per county --
+ * OutageSummary groups by county and never repeats a distributor WITHIN
+ * one county's own group (the critique's dedupe bug).
  */
-async function getDistributorReliability(
-  countyFipsList: string[]
-): Promise<DistributorReliabilityRow[]> {
+async function getDistributorReliability(countyFipsList: string[]): Promise<DistributorReliabilityRow[]> {
   try {
     const rows = await query<DistributorReliabilityDbRow>(
-      // Perf follow-up: was a live `select distinct county_fips,
-      // territory_eia_id from core.mv_home_signals` (measured 1.4s x21 on
-      // zeus_web_ro -- a full scan+distinct over every gated home).
-      // api.county_territories (0303b) is the same distinct pair,
-      // precomputed once per refresh.
       `with present as (
-         select county_fips, territory_eia_id
+         select distinct county_fips, territory_eia_id
          from api.county_territories
          where county_fips = any($1::text[])
        )
@@ -162,6 +149,7 @@ async function getDistributorReliability(
 }
 
 interface CountyOutageDbRow {
+  county_fips: string;
   customer_hours_out: string | number | null;
   customer_hours_out_null_reason: string | null;
   hours_per_customer: string | number | null;
@@ -178,70 +166,71 @@ interface CountyOutageDbRow {
 }
 
 /**
- * County-level EAGLE-I context for the muted secondary line — a
- * per-customer average (hours_per_customer), never the raw county-wide
- * customer_hours_out total (see the module comment above `TRAVIS_COUNTY_FIPS`).
+ * County-level EAGLE-I context (hours_per_customer, never the raw
+ * county-wide customer_hours_out total) -- one row per scored county,
+ * queried once for the whole territory.
  */
-async function getCountyOutageContext(): Promise<CountyOutageContext | null> {
-  const rows = await query<CountyOutageDbRow>(
-    `select
-       co.customer_hours_out,
-       co.customer_hours_out_null_reason,
-       co.hours_per_customer,
-       co.hours_per_customer_null_reason,
-       s.source,
-       s.url,
-       s.retrieved_at,
-       s.sha256,
-       s.storage_key,
-       s.runner,
-       s.latest_run_id,
-       s.latest_run_rows_in,
-       s.latest_run_rows_loaded
-     from api.county_outage co
-     left join api.sources s on s.source_id = co.source_ids[1]
-     where co.county_fips = $1 and co.year = $2
-     limit 1`,
-    [TRAVIS_COUNTY_FIPS, OUTAGE_YEAR]
-  );
+async function getCountyOutageContexts(countyFipsList: string[]): Promise<CountyOutageContext[]> {
+  try {
+    const rows = await query<CountyOutageDbRow>(
+      `select
+         co.county_fips,
+         co.customer_hours_out,
+         co.customer_hours_out_null_reason,
+         co.hours_per_customer,
+         co.hours_per_customer_null_reason,
+         s.source,
+         s.url,
+         s.retrieved_at,
+         s.sha256,
+         s.storage_key,
+         s.runner,
+         s.latest_run_id,
+         s.latest_run_rows_in,
+         s.latest_run_rows_loaded
+       from api.county_outage co
+       left join api.sources s on s.source_id = co.source_ids[1]
+       where co.county_fips = any($1::text[]) and co.year = $2`,
+      [countyFipsList, OUTAGE_YEAR]
+    );
+    const countyNameByFips = new Map(COUNTY_CANDIDATES.map((c) => [c.fips, c.name]));
 
-  if (rows.length === 0) return null;
-  const row = rows[0];
+    return rows.map((row) => {
+      const hasSource =
+        row.source !== null &&
+        row.url !== null &&
+        row.retrieved_at !== null &&
+        row.sha256 !== null &&
+        row.storage_key !== null &&
+        row.runner !== null;
 
-  const hasSource =
-    row.source !== null &&
-    row.url !== null &&
-    row.retrieved_at !== null &&
-    row.sha256 !== null &&
-    row.storage_key !== null &&
-    row.runner !== null;
-
-  return {
-    countyName: TRAVIS_COUNTY_NAME,
-    year: OUTAGE_YEAR,
-    hoursPerCustomer:
-      row.hours_per_customer === null ? null : Number(row.hours_per_customer),
-    hoursPerCustomerNullReason: row.hours_per_customer_null_reason,
-    customerHoursOut:
-      row.customer_hours_out === null ? null : Number(row.customer_hours_out),
-    customerHoursOutNullReason: row.customer_hours_out_null_reason,
-    source: hasSource
-      ? {
-          dataset: row.source as string,
-          url: row.url as string,
-          retrievedAt:
-            row.retrieved_at instanceof Date
-              ? row.retrieved_at.toISOString()
-              : (row.retrieved_at as string),
-          sha256: row.sha256 as string,
-          runId: row.latest_run_id ?? "none",
-          runner: row.runner as "cron" | "cli",
-          rowsIn: row.latest_run_rows_in,
-          rowsLoaded: row.latest_run_rows_loaded,
-          rawFileHref: `/storage/${row.storage_key}`,
-        }
-      : null,
-  };
+      return {
+        countyName: countyNameByFips.get(row.county_fips) ?? row.county_fips,
+        year: OUTAGE_YEAR,
+        hoursPerCustomer: row.hours_per_customer === null ? null : Number(row.hours_per_customer),
+        hoursPerCustomerNullReason: row.hours_per_customer_null_reason,
+        customerHoursOut: row.customer_hours_out === null ? null : Number(row.customer_hours_out),
+        customerHoursOutNullReason: row.customer_hours_out_null_reason,
+        source: hasSource
+          ? {
+              dataset: row.source as string,
+              url: row.url as string,
+              retrievedAt:
+                row.retrieved_at instanceof Date ? row.retrieved_at.toISOString() : (row.retrieved_at as string),
+              sha256: row.sha256 as string,
+              runId: row.latest_run_id ?? "none",
+              runner: row.runner as "cron" | "cli",
+              rowsIn: row.latest_run_rows_in,
+              rowsLoaded: row.latest_run_rows_loaded,
+              rawFileHref: `/storage/${row.storage_key}`,
+            }
+          : null,
+      };
+    });
+  } catch (err) {
+    console.error("page: failed to load api.county_outage", err);
+    return [];
+  }
 }
 
 interface OutageMetricDbRow {
@@ -295,119 +284,64 @@ async function getStormRecords(countyFipsList: string[]): Promise<StormRecordCou
   }
 }
 
-interface GateCountsRow {
+interface ReadinessRow {
+  county: CountyOption;
+  totalParcels: number | null;
+  singleFamilyCount: number | null;
+  homesteadCount: number | null;
+  gatedCount: number | null;
+  passedCount: number | null;
+  utilityNotConfirmedCount: number | null;
+}
+
+interface GateCountsDbRow {
   total_parcels: string | number;
   single_family_count: string | number;
   homestead_count: string | number;
   gated_count: string | number | null;
-  source: string | null;
-  url: string | null;
-  retrieved_at: string | Date | null;
-  sha256: string | null;
-  storage_key: string | null;
-  runner: "cron" | "cli" | null;
-  latest_run_id: string | null;
-  latest_run_rows_in: number | null;
-  latest_run_rows_loaded: number | null;
 }
 
-interface GateCounts {
-  totalParcels: number;
-  singleFamilyCount: number;
-  homesteadCount: number;
-  /**
-   * M2-W1 perf fix: this used to run its own live
-   * `count(*) from core.parcels where (single-family) and hs_exempt='T'`
-   * subquery on every Overview request — a full scan of core.parcels
-   * (441,961 rows), duplicating work app/ranking/page.tsx's funnel ran
-   * too. A live incident (statement-timeout cascades under concurrent
-   * load) showed this doesn't scale. Read instead from api.gate_counts
-   * (0201_m2.sql, built on the materialized core.mv_home_signals): the
-   * sum of every reason's home_count is exactly the single-family +
-   * homestead + parcel-geometry population core.mv_home_block_group (the
-   * M1 gate) contains, since core.mv_home_signals has one row per home in
-   * that population regardless of the M2 territory-gate outcome.
-   */
-  gatedCount: number | null;
-  source: (Omit<ProvenancePopoverProps, "children" | "id">) | null;
-}
-
-async function getGateCounts(countyFips: string): Promise<GateCounts | null> {
+async function getReadinessRow(county: CountyOption): Promise<ReadinessRow> {
   try {
-    const rows = await query<GateCountsRow>(
-      `select
-         pgc.total_parcels,
-         pgc.single_family_count,
-         pgc.homestead_count,
-         (select sum(home_count) from api.gate_counts where county_fips = $1) as gated_count,
-         s.source, s.url, s.retrieved_at, s.sha256, s.storage_key, s.runner,
-         s.latest_run_id, s.latest_run_rows_in, s.latest_run_rows_loaded
-       from api.parcel_gate_counts pgc
-       left join api.sources s on s.source_id = pgc.source_ids[1]
-       where pgc.county_fips = $1`,
-      [countyFips]
-    );
-    const row = rows[0];
-    if (!row) return null;
-
-    const hasSource =
-      row.source !== null &&
-      row.url !== null &&
-      row.retrieved_at !== null &&
-      row.sha256 !== null &&
-      row.storage_key !== null &&
-      row.runner !== null;
-
+    const [gateRows, topHomesRows] = await Promise.all([
+      query<GateCountsDbRow>(
+        `select
+           pgc.total_parcels,
+           pgc.single_family_count,
+           pgc.homestead_count,
+           (select sum(home_count) from api.gate_counts where county_fips = $1) as gated_count
+         from api.parcel_gate_counts pgc
+         where pgc.county_fips = $1`,
+        [county.fips]
+      ),
+      query<{ reason: string; n: string | number | null }>(
+        `select reason, home_count as n from api.gate_counts
+         where county_fips = $1 and reason in ('passed', 'utility_not_confirmed')`,
+        [county.fips]
+      ),
+    ]);
+    const gateRow = gateRows[0];
+    const byReason = new Map(topHomesRows.map((r) => [r.reason, r.n === null ? null : Number(r.n)]));
     return {
-      totalParcels: Number(row.total_parcels),
-      singleFamilyCount: Number(row.single_family_count),
-      homesteadCount: Number(row.homestead_count),
-      gatedCount: row.gated_count === null ? null : Number(row.gated_count),
-      source: hasSource
-        ? {
-            dataset: row.source as string,
-            url: row.url as string,
-            retrievedAt:
-              row.retrieved_at instanceof Date ? row.retrieved_at.toISOString() : (row.retrieved_at as string),
-            sha256: row.sha256 as string,
-            runId: row.latest_run_id ?? "none",
-            runner: row.runner as "cron" | "cli",
-            rowsIn: row.latest_run_rows_in,
-            rowsLoaded: row.latest_run_rows_loaded,
-            rawFileHref: `/storage/${row.storage_key}`,
-          }
-        : null,
-    };
-  } catch (err) {
-    console.error("page: failed to load api.parcel_gate_counts", err);
-    return null;
-  }
-}
-
-interface TopHomesCount {
-  passedCount: number | null;
-  /** M-utility-gate: homes that ARE ranked/scored but not yet confirmed
-   * Base-servable (Williamson today) -- read separately so the Overview
-   * can say why the count is 0/low instead of the generic "ranking not
-   * available" (which would wrongly imply the pipeline hasn't run). */
-  utilityNotConfirmedCount: number | null;
-}
-
-async function getTopHomesCount(countyFips: string): Promise<TopHomesCount> {
-  try {
-    const rows = await query<{ reason: string; n: string | number | null }>(
-      `select reason, home_count as n from api.gate_counts
-       where county_fips = $1 and reason in ('passed', 'utility_not_confirmed')`,
-      [countyFips]
-    );
-    const byReason = new Map(rows.map((r) => [r.reason, r.n === null ? null : Number(r.n)]));
-    return {
+      county,
+      totalParcels: gateRow ? Number(gateRow.total_parcels) : null,
+      singleFamilyCount: gateRow ? Number(gateRow.single_family_count) : null,
+      homesteadCount: gateRow ? Number(gateRow.homestead_count) : null,
+      gatedCount: gateRow?.gated_count == null ? null : Number(gateRow.gated_count),
       passedCount: byReason.get("passed") ?? null,
       utilityNotConfirmedCount: byReason.get("utility_not_confirmed") ?? null,
     };
   } catch (err) {
-    console.error("page: failed to load ranked home count", err);
-    return { passedCount: null, utilityNotConfirmedCount: null };
+    console.error(`page: failed to load readiness row for ${county.fips}`, err);
+    return {
+      county,
+      totalParcels: null,
+      singleFamilyCount: null,
+      homesteadCount: null,
+      gatedCount: null,
+      passedCount: null,
+      utilityNotConfirmedCount: null,
+    };
   }
 }
 
@@ -419,17 +353,17 @@ interface PermitQuarterDbRow {
   p90_days: string | number | null;
 }
 
-/** M2-P9: "Time to permit a home battery in Austin" -- api.permit_path_stats,
- * period_type='quarter', jurisdiction='ALL', label='battery'. Pivots the
- * two is_base_power rows per quarter into one row per quarter (Other
- * installers / Base Power side by side). */
-async function getPermitTimelineByQuarter(): Promise<PermitQuarterRow[]> {
+/** M2-P9: "Time to permit a home battery" -- api.permit_path_stats, scoped
+ * to whichever real jurisdiction covers `countyFips` (COUNTY_PERMIT_JURISDICTION
+ * above); null when no jurisdiction has ever been loaded for that county. */
+async function getPermitTimelineByQuarter(jurisdiction: string): Promise<PermitQuarterRow[]> {
   try {
     const rows = await query<PermitQuarterDbRow>(
       `select period, is_base_power, n, median_days, p90_days
        from api.permit_path_stats
-       where jurisdiction = 'ALL' and label = 'battery' and period_type = 'quarter'
-       order by period`
+       where jurisdiction = $1 and label = 'battery' and period_type = 'quarter'
+       order by period`,
+      [jurisdiction]
     );
     const byPeriod = new Map<string, PermitQuarterRow>();
     for (const row of rows) {
@@ -470,36 +404,47 @@ async function getSourcesLoadedCount(): Promise<number | null> {
   }
 }
 
-export default async function HomePage({
-  // Optional (default {}) so existing tests that render HomePage() with
-  // no args (pre-dating this county-scoping change) keep compiling and
-  // get Travis/the first available county, exactly as before.
-  searchParams = Promise.resolve({}),
-}: {
-  searchParams?: Promise<{ county?: string }>;
-} = {}) {
-  const [{ county: requestedCounty }, scoredCounties] = await Promise.all([
-    searchParams,
-    getCountiesWithScoredHomes(),
-  ]);
-  const county = resolveCounty(requestedCounty, scoredCounties);
-  const scoredCountyFips = scoredCounties.map((c) => c.fips);
-  const [distributors, countyContext, gateCounts, topHomesCount, sourcesLoadedCount, permitTimeline, stormRecords] =
-    await Promise.all([
-      getDistributorReliability(scoredCountyFips),
-      getCountyOutageContext(),
-      getGateCounts(county.fips),
-      getTopHomesCount(county.fips),
-      getSourcesLoadedCount(),
-      getPermitTimelineByQuarter(),
-      getStormRecords(scoredCountyFips),
-    ]);
+/** "Texas, at a glance" / "Travis, Harris and Williamson, at a glance" --
+ * built from the real, currently-scored county list, never hand-typed. */
+function formatCountyListTitle(names: string[]): string {
+  if (names.length === 0) return "Texas, at a glance";
+  if (names.length === 1) return `${names[0]} County, at a glance`;
+  if (names.length === 2) return `${names[0]} and ${names[1]} Counties, at a glance`;
+  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]} Counties, at a glance`;
+}
 
-  const outageData: OutageSummaryData = { distributors, countyContext };
+export default async function HomePage() {
+  const scoredCounties = await getCountiesWithScoredHomes();
+  const scoredCountyFips = scoredCounties.map((c) => c.fips);
+
+  const [distributors, countyContexts, sourcesLoadedCount, stormRecords, readinessRows] = await Promise.all([
+    getDistributorReliability(scoredCountyFips),
+    getCountyOutageContexts(scoredCountyFips),
+    getSourcesLoadedCount(),
+    getStormRecords(scoredCountyFips),
+    Promise.all(scoredCounties.map((c) => getReadinessRow(c))),
+  ]);
+
+  const outageData: OutageSummaryData = { distributors, countyContext: countyContexts };
+
+  const totalRanked = readinessRows.reduce((sum, r) => sum + (r.passedCount ?? 0), 0);
+
+  // Permits panel: only the counties with a real, loaded jurisdiction
+  // (see COUNTY_PERMIT_JURISDICTION above) get their own figures; the
+  // rest render one honest MissingState line, never the Austin numbers
+  // relabelled.
+  const permitCountiesWithData = scoredCounties.filter((c) => COUNTY_PERMIT_JURISDICTION[c.fips]);
+  const permitCountiesWithoutData = scoredCounties.filter((c) => !COUNTY_PERMIT_JURISDICTION[c.fips]);
+  const permitTimelines = await Promise.all(
+    permitCountiesWithData.map(async (c) => ({
+      county: c,
+      rows: await getPermitTimelineByQuarter(COUNTY_PERMIT_JURISDICTION[c.fips]),
+    }))
+  );
 
   return (
-    <div style={{ display: "grid", gap: "var(--space-6)", maxWidth: "1000px" }}>
-      <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-1)" }}>
+    <div className="overview-page">
+      <div className="ov-head" style={{ display: "flex", alignItems: "baseline", gap: "var(--space-4)", flexWrap: "wrap" }}>
         <h1
           style={{
             fontFamily: "var(--type-title-font-family)",
@@ -508,165 +453,136 @@ export default async function HomePage({
             margin: 0,
           }}
         >
-          Overview
+          {formatCountyListTitle(scoredCounties.map((c) => c.name))}
         </h1>
-        <p style={{ color: "var(--theme-ink-muted)", margin: 0, maxWidth: "70ch" }}>
-          Real public data on Texas homes ({scoredCounties.map((c) => c.name).join(", ")}{" "}
-          {scoredCounties.length > 1 ? "Counties" : "County"} so far), gated to owner-occupied
-          single-family parcels, scored for Base Power outreach. Ranking readiness below is for{" "}
-          {county.name} County.
-        </p>
+        <span style={{ color: "var(--theme-ink-muted)", fontSize: "var(--type-label-font-size)" }}>
+          Real public data, gated to owner-occupied single-family parcels · {totalRanked.toLocaleString()} homes
+          ranked for Base outreach across {scoredCounties.length} {scoredCounties.length === 1 ? "county" : "counties"}
+        </span>
       </div>
 
-      <Panel>
-        <h2
-          style={{
-            fontFamily: "var(--type-heading-font-family)",
-            fontSize: "var(--type-heading-font-size)",
-            fontWeight: "var(--type-heading-font-weight)",
-            marginTop: 0,
-          }}
-        >
-          Outage exposure
-        </h2>
-        <OutageSummary data={outageData} />
-      </Panel>
+      <div className="overview-grid">
+        <div className="overview-panel">
+          <h2
+            style={{
+              fontFamily: "var(--type-heading-font-family)",
+              fontSize: "var(--type-heading-font-size)",
+              fontWeight: "var(--type-heading-font-weight)",
+              margin: "0 0 var(--space-1) 0",
+            }}
+          >
+            Outage exposure by distributor
+          </h2>
+          <p style={{ margin: "0 0 var(--space-2) 0", fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)" }}>
+            Minutes without power per customer, SAIDI including major events.
+          </p>
+          <OutageSummary data={outageData} />
+          <div className="overview-panel__go">
+            <Link href="/ranking">See the ranked list →</Link>
+          </div>
+        </div>
 
-      <Panel>
-        <h2
-          style={{
-            fontFamily: "var(--type-heading-font-family)",
-            fontSize: "var(--type-heading-font-size)",
-            fontWeight: "var(--type-heading-font-weight)",
-            marginTop: 0,
-          }}
-        >
-          Storm record
-        </h2>
-        <StormRecordPanel counties={stormRecords} />
-      </Panel>
+        <div className="overview-panel">
+          <h2
+            style={{
+              fontFamily: "var(--type-heading-font-family)",
+              fontSize: "var(--type-heading-font-size)",
+              fontWeight: "var(--type-heading-font-weight)",
+              margin: "0 0 var(--space-1) 0",
+            }}
+          >
+            Storm record
+          </h2>
+          <StormRecordPanel counties={stormRecords} />
+          <div className="overview-panel__go">
+            <Link href="/sources">Sources →</Link>
+          </div>
+        </div>
 
-      <Panel>
-        <h2
-          style={{
-            fontFamily: "var(--type-heading-font-family)",
-            fontSize: "var(--type-heading-font-size)",
-            fontWeight: "var(--type-heading-font-weight)",
-            marginTop: 0,
-          }}
-        >
-          Ranking readiness -- {county.name} County
-        </h2>
-        {gateCounts === null ? (
-          <MissingState variant="not-loaded" reason="County parcel records not loaded yet" />
-        ) : (
-          <StatList>
-            <StatRow
-              id="overview-total-parcels"
-              label="Parcels on the appraisal rolls loaded so far"
-              value={gateCounts.totalParcels.toLocaleString()}
-              unit="parcels"
-              source={gateCounts.source}
-            />
-            <StatRow
-              id="overview-single-family"
-              label="Single-family homes"
-              value={gateCounts.singleFamilyCount.toLocaleString()}
-              unit="parcels"
-              source={gateCounts.source}
-            />
-            <StatRow
-              id="overview-homestead"
-              label="Homestead (owner-occupied)"
-              value={gateCounts.homesteadCount.toLocaleString()}
-              unit="parcels"
-              source={gateCounts.source}
-            />
-            <StatRow
-              id="overview-gated"
-              label="Owner-occupied single-family homes with a mapped lot"
-              value={gateCounts.gatedCount === null ? "not loaded" : gateCounts.gatedCount.toLocaleString()}
-              unit="homes"
-              source={gateCounts.source}
-              linkHref="/ranking"
-              linkLabel="Who Base can serve"
-            />
-            <StatRow
-              id="overview-top-homes"
-              label="Homes ranked (Base can serve them)"
-              // A real 0-with-utility-not-confirmed-homes county
-              // (Williamson) renders the explanatory MissingState below
-              // instead of a bare "0 homes" -- that reads as "ranking
-              // hasn't run" when actually every home there IS ranked,
-              // just not yet confirmed Base-servable.
-              value={
-                topHomesCount.passedCount === 0 && (topHomesCount.utilityNotConfirmedCount ?? 0) > 0
-                  ? null
-                  : topHomesCount.passedCount === null
-                    ? null
-                    : topHomesCount.passedCount.toLocaleString()
-              }
-              unit="homes"
-              missingReason={
-                topHomesCount.passedCount === 0 && (topHomesCount.utilityNotConfirmedCount ?? 0) > 0
-                  ? `${(topHomesCount.utilityNotConfirmedCount ?? 0).toLocaleString()} homes are ranked but not yet confirmed Base-servable -- check the address with the utility`
-                  : "Ranking not available right now"
-              }
-              linkHref="/ranking"
-              linkLabel="See table & map"
-            />
-          </StatList>
-        )}
-      </Panel>
+        <div className="overview-panel">
+          <h2
+            style={{
+              fontFamily: "var(--type-heading-font-family)",
+              fontSize: "var(--type-heading-font-size)",
+              fontWeight: "var(--type-heading-font-weight)",
+              margin: "0 0 var(--space-1) 0",
+            }}
+          >
+            Ranking readiness
+          </h2>
+          <p style={{ margin: "0 0 var(--space-2) 0", fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)" }}>
+            How many parcels make it into the ranked list, by county.
+          </p>
+          <div className="readiness-grid" role="table" aria-label="Ranking readiness by county">
+            <div className="readiness-grid__row readiness-grid__row--head" role="row">
+              <div role="columnheader">County</div>
+              <div role="columnheader">Parcels</div>
+              <div role="columnheader">Single-family</div>
+              <div role="columnheader">Homestead</div>
+              <div role="columnheader">Mapped lot</div>
+              <div role="columnheader">Ranked</div>
+            </div>
+            {readinessRows.map((r) => (
+              <div className="readiness-grid__row" role="row" key={r.county.fips}>
+                <div role="cell" className="readiness-grid__county">
+                  {r.county.name}
+                </div>
+                <div role="cell">{r.totalParcels === null ? <MissingState variant="not-loaded" reason="Not loaded" /> : r.totalParcels.toLocaleString()}</div>
+                <div role="cell">{r.singleFamilyCount === null ? <MissingState variant="not-loaded" reason="Not loaded" /> : r.singleFamilyCount.toLocaleString()}</div>
+                <div role="cell">{r.homesteadCount === null ? <MissingState variant="not-loaded" reason="Not loaded" /> : r.homesteadCount.toLocaleString()}</div>
+                <div role="cell">{r.gatedCount === null ? <MissingState variant="not-loaded" reason="Not loaded" /> : r.gatedCount.toLocaleString()}</div>
+                <div role="cell">
+                  {r.passedCount === null ? (
+                    <MissingState variant="not-loaded" reason="Ranking not available right now" />
+                  ) : (
+                    <Link href={`/ranking?county=${r.county.fips}`}>{r.passedCount.toLocaleString()} →</Link>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="overview-panel__go">
+            <Link href="/ranking">Open the ranked list →</Link>
+          </div>
+        </div>
 
-      <Panel>
-        <h2
-          style={{
-            fontFamily: "var(--type-heading-font-family)",
-            fontSize: "var(--type-heading-font-size)",
-            fontWeight: "var(--type-heading-font-weight)",
-            marginTop: 0,
-          }}
-        >
-          Time to permit a home battery in Austin
-        </h2>
-        <p style={{ margin: "0 0 var(--space-3) 0", color: "var(--theme-ink-muted)", maxWidth: "70ch" }}>
-          Days from application to issue for a City of Austin (Austin Energy) battery permit, by quarter --
-          other installers vs. Base Power&rsquo;s own permits.
-        </p>
-        <PermitTimelinePanel rows={permitTimeline} />
-      </Panel>
+        <div className="overview-panel">
+          <h2
+            style={{
+              fontFamily: "var(--type-heading-font-family)",
+              fontSize: "var(--type-heading-font-size)",
+              fontWeight: "var(--type-heading-font-weight)",
+              margin: "0 0 var(--space-1) 0",
+            }}
+          >
+            Battery permits, City of Austin
+          </h2>
+          {permitTimelines.length === 0 ? (
+            <MissingState variant="not-available" reason="No jurisdiction's permit records are loaded yet" />
+          ) : (
+            permitTimelines.map(({ county, rows }) => <PermitTimelinePanel key={county.fips} rows={rows} />)
+          )}
+          {permitCountiesWithoutData.length > 0 ? (
+            <p style={{ margin: "var(--space-2) 0 0 0", fontSize: "var(--type-label-font-size)" }}>
+              <MissingState
+                variant="not-available"
+                reason={`${permitCountiesWithoutData.map((c) => c.name).join(" and ")} permit records are not a loaded public source`}
+              />
+            </p>
+          ) : null}
+          <div className="overview-panel__go">
+            <Link href="/sources#how-leads-are-prioritized">How the ranking works →</Link>
+          </div>
+        </div>
+      </div>
 
-      <p style={{ margin: 0 }}>
-        <Link href="/sources#how-leads-are-prioritized">How leads are prioritized &amp; the model&rsquo;s accuracy check →</Link>
-      </p>
-
-      <Panel>
-        <h2
-          style={{
-            fontFamily: "var(--type-heading-font-family)",
-            fontSize: "var(--type-heading-font-size)",
-            fontWeight: "var(--type-heading-font-weight)",
-            marginTop: 0,
-          }}
-        >
-          Provenance
-        </h2>
-        <StatList>
-          <StatRow
-            id="overview-sources-loaded"
-            label="Source files loaded"
-            value={sourcesLoadedCount}
-            unit="files"
-            missingReason="Source list not available right now"
-            linkHref="/sources"
-            linkLabel="Full manifest"
-          />
-        </StatList>
-        <p style={{ margin: "var(--space-3) 0 0 0", maxWidth: "70ch", color: "var(--theme-ink-muted)" }}>
-          Every number on screen traces to one of them, with retrieval time and SHA-256.
-        </p>
-      </Panel>
+      <div className="overview-prov">
+        <span>
+          <strong>{sourcesLoadedCount ?? "—"}</strong> source files loaded
+        </span>
+        <span>Every figure on screen opens its source file</span>
+        <Link href="/sources">Sources →</Link>
+      </div>
     </div>
   );
 }

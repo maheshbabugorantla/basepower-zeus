@@ -18,12 +18,15 @@ import { getPool, query } from "../../lib/db";
 // only precomputed views, same as the app: api.gate_counts (built on the
 // materialized core.mv_home_signals) for the "gated" figure, and
 // api.parcel_gate_counts.homestead_count for the regression guard.
-
-// M-utility-gate (0303b): both views now carry county_fips, one row set
-// per loaded county -- both HomePage() and RankingPage() called below with
-// no `?county=` default to Travis (lib/counties.ts's DEFAULT_COUNTY), so
-// this must scope its own comparison query to Travis too, or it would sum
-// Travis+Harris+Williamson into a bigger number the page never shows.
+//
+// Redesign (Mock C, 2026-09-27): Overview is territory-wide now — it no
+// longer has a single "Owner-occupied single-family homes with a mapped
+// lot N homes" sentence for one implicit county. The same real number
+// now lives in the "Ranking readiness" table's Travis row (Parcels /
+// Single-family / Homestead / Mapped lot / Ranked columns, in that
+// order) — this checks the row's own flattened text, still never a
+// substring match anywhere on the page, so relabeling the wrong count as
+// "gated" (the original bug) would still fail this.
 
 const TRAVIS_COUNTY_FIPS = "48453";
 
@@ -32,14 +35,14 @@ describe.skipIf(!process.env.POSTGRES_URL)("Overview — gated count matches the
     await getPool().end();
   });
 
-  it("Overview's 'Gated for ranking' figure equals api.gate_counts' total, and the Ranking funnel", async () => {
+  it("Overview's Travis readiness row shows the same 'mapped lot' figure as api.gate_counts' total, and the Ranking funnel agrees", async () => {
     const [gateRows, pgcRows] = await Promise.all([
       query<{ home_count: string | number }>(
         `select home_count from api.gate_counts where county_fips = $1`,
         [TRAVIS_COUNTY_FIPS]
       ),
-      query<{ homestead_count: string | number }>(
-        `select homestead_count from api.parcel_gate_counts where county_fips = $1`,
+      query<{ total_parcels: string | number; single_family_count: string | number; homestead_count: string | number }>(
+        `select total_parcels, single_family_count, homestead_count from api.parcel_gate_counts where county_fips = $1`,
         [TRAVIS_COUNTY_FIPS]
       ),
     ]);
@@ -47,23 +50,29 @@ describe.skipIf(!process.env.POSTGRES_URL)("Overview — gated count matches the
     if (gatedCount === 0) return; // core.mv_home_signals not populated yet — nothing to assert against.
 
     const gatedFormatted = gatedCount.toLocaleString();
-    const homesteadCount = pgcRows[0] ? Number(pgcRows[0].homestead_count) : 0;
+    const pgc = pgcRows[0];
+    if (!pgc) return;
+    const totalParcelsFormatted = Number(pgc.total_parcels).toLocaleString();
+    const singleFamilyFormatted = Number(pgc.single_family_count).toLocaleString();
+    const homesteadCount = Number(pgc.homestead_count);
     const homesteadFormatted = homesteadCount.toLocaleString();
 
     const overviewText = textOf(renderToStaticMarkup(await HomePage()));
-    const rankingText = textOf(renderToStaticMarkup(await RankingPage({ searchParams: Promise.resolve({}) })));
+    const rankingText = textOf(renderToStaticMarkup(await RankingPage({ searchParams: Promise.resolve({ county: TRAVIS_COUNTY_FIPS }) })));
 
-    // Same real number, read straight from the stat row's own label — not
-    // a substring match anywhere on the page, so relabeling the wrong
-    // count as "gated" (the original bug) would still fail this.
-    expect(overviewText).toContain(`Owner-occupied single-family homes with a mapped lot ${gatedFormatted} homes`);
+    // The readiness table's Travis row, in real column order (County,
+    // Parcels, Single-family, Homestead, Mapped lot, Ranked) — this is
+    // the same real number appearing under its own real "Mapped lot"
+    // header, not a substring match anywhere on the page.
+    expect(overviewText).toContain(
+      `Travis ${totalParcelsFormatted} ${singleFamilyFormatted} ${homesteadFormatted} ${gatedFormatted}`
+    );
 
-    // Layout-review redesign: the Ranking funnel panel was removed --
-    // /ranking's scope line now states the same api.gate_counts numbers
-    // directly (eligible = sum of every reason == gatedCount; "Base
-    // serves" = the 'passed' reason). Read straight from api.gate_counts,
-    // never derived by subtraction, matching web/app/ranking/page.tsx's
-    // own computation exactly.
+    // /ranking's rail status line states the same api.gate_counts
+    // numbers directly (eligible = sum of every reason == gatedCount;
+    // "Base serves" = the 'passed' reason). Read straight from
+    // api.gate_counts, never derived by subtraction, matching
+    // web/app/ranking/page.tsx's own computation exactly.
     const servedRows = await query<{ reason: string; home_count: string | number }>(
       `select reason, home_count from api.gate_counts where county_fips = $1`,
       [TRAVIS_COUNTY_FIPS]
@@ -74,11 +83,11 @@ describe.skipIf(!process.env.POSTGRES_URL)("Overview — gated count matches the
     expect(rankingText).toContain(`Base serves ${servedFormatted}`);
 
     // The original bug used the (larger, independent) all-homestead count
-    // as the "gated" figure. Guard against that regression whenever the
-    // two real counts actually differ.
+    // as the "gated"/"mapped lot" figure. Guard against that regression
+    // whenever the two real counts actually differ.
     if (homesteadCount !== gatedCount) {
       expect(overviewText).not.toContain(
-        `Owner-occupied single-family homes with a mapped lot ${homesteadFormatted} homes`
+        `Travis ${totalParcelsFormatted} ${singleFamilyFormatted} ${homesteadFormatted} ${homesteadFormatted}`
       );
     }
   }, 60000);
