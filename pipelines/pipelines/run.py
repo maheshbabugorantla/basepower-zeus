@@ -25,6 +25,16 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="run a full backfill instead of an incremental update",
     )
+    parser.add_argument(
+        "--county",
+        default=None,
+        help=(
+            "run a single county_fips only, instead of every county "
+            "already in core.parcels. Only supported by source modules "
+            "whose run() accepts a cursor of {'counties': [<county_fips>]} "
+            "(currently: home_spatial)."
+        ),
+    )
     args = parser.parse_args(argv)
 
     module = registry.load_source(args.source)
@@ -42,6 +52,25 @@ def main(argv: list[str] | None = None) -> int:
     if run_fn is None:
         print(f"error: source module {args.source!r} has no run()", file=sys.stderr)
         return 1
+
+    if args.county is not None:
+        # Only home_spatial's run() understands a {'counties': [...]}
+        # cursor as "restrict to these counties" (see its own docstring —
+        # `run_county()` is the direct single-county entrypoint; this CLI
+        # flag reaches the same place through the registry's uniform
+        # run(runner=, backfill=, cursor=) contract instead of importing
+        # a source-specific function here). Reject it explicitly for
+        # every other module rather than silently passing a cursor shape
+        # that module doesn't expect.
+        if args.source != "home_spatial":
+            print(
+                f"error: --county is only supported for the home_spatial source, "
+                f"not {args.source!r}",
+                file=sys.stderr,
+            )
+            return 1
+        run_fn(runner="cli", backfill=args.backfill, cursor={"counties": [args.county]})
+        return 0
 
     run_fn(runner="cli", backfill=args.backfill)
     return 0
