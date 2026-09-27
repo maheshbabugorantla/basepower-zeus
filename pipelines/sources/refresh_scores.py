@@ -40,6 +40,7 @@ from typing import Any, Literal
 import psycopg
 
 from pipelines.core import config, runs
+from pipelines.sources import scoring_refresh
 
 SOURCE = "refresh_scores"
 
@@ -81,7 +82,16 @@ def refresh_all(conn: psycopg.Connection) -> dict[str, int]:
     row_counts: dict[str, int] = {}
     with conn.cursor() as cur:
         cur.execute(f"set statement_timeout = '{STATEMENT_TIMEOUT}'")
-        cur.execute("select core.refresh_all_scores()")
+        # Perf follow-up (0307_batched_scoring_swap.sql): core.mv_home_signals
+        # and core.mv_home_terms are plain tables now, kept current by
+        # scoring_refresh.run()'s batched prop_id-keyset upserts, not by
+        # `REFRESH MATERIALIZED VIEW CONCURRENTLY`. scoring_refresh.run()
+        # does the full sequence itself -- batches, then
+        # `select core.refresh_all_scores()` last for the remaining legacy
+        # v0 chain / gate counts / market / anchors+medians / geo rollup /
+        # county territories (see that module's run() docstring) -- so this
+        # cursor no longer calls refresh_all_scores() directly.
+        scoring_refresh.run()
         for mv in MATERIALIZED_VIEWS:
             cur.execute(f"select count(*) from {mv}")
             row = cur.fetchone()
