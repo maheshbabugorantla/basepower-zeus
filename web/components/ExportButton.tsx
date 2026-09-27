@@ -1,40 +1,46 @@
 "use client";
 
+import type { MouseEvent, FocusEvent } from "react";
 import { usePathname, useSearchParams } from "next/navigation";
 
-// M5-W1: "Export CSV" now links to a real streamed CSV instead of the
-// disabled M1-W3 placeholder. It reads the CURRENT url's search params
-// (client component, so it follows navigation without a full reload) --
-// on the coverage screen (/ranking/coverage) it exports coverage zones
-// (api.coverage_gaps_bg); anywhere else it exports the ranked-homes list
-// for the selected county.
-//
-// M-urlstate (item 4): RankingBoard now syncs mode/weights/backup/pre2000/
-// city/zip/bg into the url (window.history.replaceState), so every param
-// present on the current url -- forwarded here verbatim -- reflects
-// exactly what's on screen; see app/export/homes/route.ts's own comment
-// for the full param contract.
+// Export follows exactly what the ranking view is showing. RankingBoard keeps
+// its filters (mode, weights, backup, pre2000, city, zip, bg, tier) in the url
+// with window.history.replaceState, which useSearchParams() does not observe,
+// so a link built only at render time went stale and exported the whole
+// county. The link is rebuilt from the live location on hover, focus and
+// click, so the file always matches the filtered view.
+function exportHref(target: string, search: string): string {
+  const params = new URLSearchParams(search);
+  params.delete("intro"); // reel control flag, not a filter
+  const qs = params.toString();
+  return qs ? `${target}?${qs}` : target;
+}
 
 export function ExportButton() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
 
-  // T4/T8 fix: a home-detail page (/home/[prop_id]) has no "selected
-  // county" concept (see TopBar's CountySwitcherInner) and isn't a
-  // ranked list -- exporting "the ranked homes CSV" from here used to
-  // silently export whatever county happened to be left in the url
-  // (defaulting to Travis), which could easily be a different county
-  // than the one home actually being viewed. Unavailable here, same as
-  // the county switcher.
   if (pathname?.startsWith("/home/")) return null;
 
   const isCoverage = pathname?.startsWith("/ranking/coverage") ?? false;
   const target = isCoverage ? "/export/coverage" : "/export/homes";
-  const href = `${target}?${searchParams.toString()}`;
   const label = isCoverage ? "Export coverage CSV" : "Export ranked homes CSV";
 
+  function syncHref(e: MouseEvent<HTMLAnchorElement> | FocusEvent<HTMLAnchorElement>) {
+    e.currentTarget.href = exportHref(target, window.location.search);
+  }
+
   return (
-    <a href={href} download className="btn btn--secondary" data-testid="export-csv-link">
+    <a
+      href={exportHref(target, searchParams.toString())}
+      download
+      className="btn btn--secondary"
+      data-testid="export-csv-link"
+      title="Downloads the homes in the current view with its filters, top 5,000 rows at most"
+      onMouseEnter={syncHref}
+      onFocus={syncHref}
+      onClick={syncHref}
+    >
       {label}
     </a>
   );
