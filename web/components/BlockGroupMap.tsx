@@ -30,7 +30,7 @@ export const NOT_LOADED_HATCH_IMAGE_ID = "blockgroup-not-loaded-hatch";
 export const NOT_LOADED_HATCH_BG = "#e6e4e0"; // --color-not-loaded-bg
 export const NOT_LOADED_HATCH_STRIPE = "#d8d7d5"; // --color-surface-sunken
 
-/** score is api.blockgroup_scores_weighted's percent_rank (0..1), or null. */
+/** score is api.blockgroup_scores_weighted's absolute mean final_score (0..1) across the group's scored homes, or null. */
 export function scoreRampColor(score: number): (typeof SCORE_RAMP)[number] {
   const clamped = Math.min(1, Math.max(0, score));
   const idx = Math.min(SCORE_RAMP.length - 1, Math.floor(clamped * SCORE_RAMP.length));
@@ -527,8 +527,8 @@ export function BlockGroupMap({
 
 // ---------------------------------------------------------------------------
 // Legend — DESIGN.md's 5-step score ramp (low -> high, at the CURRENT
-// weights, since the ramp is a percent_rank recomputed every slider
-// move — never a fixed number), the hatch swatch for "no gated homes /
+// weights, since the ramp is an absolute mean score recomputed every
+// slider move — never a fixed number), the hatch swatch for "no gated homes /
 // not scored", and, only while a block group is selected, the home-dot
 // scale + the selected-outline swatch. Bottom-left overlay so it never
 // covers the basemap's (bottom-right) attribution control.

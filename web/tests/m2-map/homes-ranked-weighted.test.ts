@@ -91,10 +91,16 @@ describe.skipIf(!process.env.POSTGRES_URL)("POST /api/top-homes (api.homes_ranke
       );
       const scoped = await scopedResponse.json();
 
+      // Block-group GEOIDs are not always unique across counties in the
+      // loaded data (e.g. a handful of Williamson homes share a Travis
+      // GEOID) -- scope to the requested county too, matching
+      // api.homes_ranked_weighted's own narrow cte (county_fips AND
+      // block_group_geoid), or this would count homes from a different
+      // county that happen to share the GEOID.
       const [{ n }] = await query<{ n: string | number }>(
         `select count(*) as n from core.mv_home_signals
-         where gate_reason is null and block_group_geoid = $1`,
-        [geoid]
+         where gate_reason is null and block_group_geoid = $1 and county_fips = $2`,
+        [geoid, TRAVIS_COUNTY_FIPS]
       );
       // scoped.rows only includes homes with a nonzero weight sum
       // (equalWeights() -> every signal weighted equally, so any home
@@ -103,13 +109,22 @@ describe.skipIf(!process.env.POSTGRES_URL)("POST /api/top-homes (api.homes_ranke
       expect(scoped.rows.length).toBeLessThanOrEqual(Number(n));
       expect(scoped.rows.every((r: { blockGroupGeoid: string }) => r.blockGroupGeoid === geoid)).toBe(true);
 
+      // Score is now an absolute term (real value / anchor, capped), not a
+      // percentile -- api.homes_ranked_weighted keeps a home only when its
+      // weight_sum > 0, i.e. at least one of the 13 *_term columns
+      // core.mv_home_terms carries is non-null (equalWeights() weights
+      // every one of them, so any non-null term qualifies). Scoped to the
+      // requested county too -- see the same-GEOID-different-county note
+      // above.
       const [{ nonzero }] = await query<{ nonzero: string | number }>(
-        `select count(*) as nonzero from core.mv_home_signals
-         where gate_reason is null and block_group_geoid = $1
-           and (distributor_saidi_pctile is not null or flood_pctile is not null
-                or empower_pctile is not null or acs_65_pctile is not null
-                or acs_heat_pctile is not null or backup_intent_pctile is not null)`,
-        [geoid]
+        `select count(*) as nonzero from core.mv_home_terms
+         where block_group_geoid = $1 and county_fips = $2
+           and (outage_term is not null or flood_term is not null or empower_term is not null
+                or age65_term is not null or electric_heat_term is not null or backup_intent_term is not null
+                or owner65_term is not null or permits_term is not null or installability_term is not null
+                or home_value_term is not null or income100k_term is not null or age3564_term is not null
+                or permitrisk_term is not null)`,
+        [geoid, TRAVIS_COUNTY_FIPS]
       );
       expect(scoped.rows.length).toBe(Number(nonzero));
     },

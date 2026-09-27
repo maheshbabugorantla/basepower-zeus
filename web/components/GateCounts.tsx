@@ -47,9 +47,16 @@ function labelFor(reason: string): string {
 
 const NOT_LOADED_REASONS = new Set(["territories_not_loaded", "crosswalk_not_loaded"]);
 
+// Data IS loaded here (unlike NOT_LOADED_REASONS) -- overlapping utility
+// service-area polygons just make the actual utility unconfirmable
+// without the address. Styled the same as "not yet resolved" (not
+// "excluded"), but never shown with the fail-open caveat below, since
+// that caveat is specifically about the *_not_loaded mechanism.
+const UNCONFIRMED_REASONS = new Set(["utility_not_confirmed"]);
+
 function segmentClass(reason: string): string {
   if (reason === "passed") return "gate-funnel__segment--passed";
-  if (NOT_LOADED_REASONS.has(reason)) return "gate-funnel__segment--not-loaded";
+  if (NOT_LOADED_REASONS.has(reason) || UNCONFIRMED_REASONS.has(reason)) return "gate-funnel__segment--not-loaded";
   return "gate-funnel__segment--excluded";
 }
 

@@ -318,7 +318,21 @@ export async function fetchPredictedHomes(params: {
   }
 
   function buildWhere(): string {
-    const clauses = ["hp.county_fips = $1"];
+    // $2/$3/$4 (block group / city / ZIP) are fixed slots regardless of
+    // which filters are active (see baseParams' own comment below), but a
+    // placeholder that never appears anywhere in the final SQL text makes
+    // Postgres's extended query protocol fail with "could not determine
+    // data type of parameter $N" -- or, once none of $2-$4 appear at all,
+    // "bind message supplies N parameters, but prepared statement
+    // requires 1". These three no-op, always-true casts pin every
+    // placeholder's type and keep it referenced even when its filter is
+    // inactive, without requiring the join that filter's real predicate needs.
+    const clauses = [
+      "hp.county_fips = $1",
+      "($2::text is null or true)",
+      "($3::text is null or true)",
+      "($4::text is null or true)",
+    ];
     if (blockGroupGeoid !== null) clauses.push("s.block_group_geoid = $2");
     if (excludeBackup) clauses.push("coalesce(hc.bucket, 'prospect') not in ('base_customer', 'other_backup')");
     if (hideOldHomes) clauses.push(`(s.yr_built is null or s.yr_built >= ${HIDE_OLD_HOMES_CUTOFF_YEAR})`);

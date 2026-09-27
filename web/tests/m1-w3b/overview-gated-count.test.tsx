@@ -19,6 +19,14 @@ import { getPool, query } from "../../lib/db";
 // materialized core.mv_home_signals) for the "gated" figure, and
 // api.parcel_gate_counts.homestead_count for the regression guard.
 
+// M-utility-gate (0303b): both views now carry county_fips, one row set
+// per loaded county -- both HomePage() and RankingPage() called below with
+// no `?county=` default to Travis (lib/counties.ts's DEFAULT_COUNTY), so
+// this must scope its own comparison query to Travis too, or it would sum
+// Travis+Harris+Williamson into a bigger number the page never shows.
+
+const TRAVIS_COUNTY_FIPS = "48453";
+
 describe.skipIf(!process.env.POSTGRES_URL)("Overview — gated count matches the Ranking funnel", () => {
   afterAll(async () => {
     await getPool().end();
@@ -26,8 +34,14 @@ describe.skipIf(!process.env.POSTGRES_URL)("Overview — gated count matches the
 
   it("Overview's 'Gated for ranking' figure equals api.gate_counts' total, and the Ranking funnel", async () => {
     const [gateRows, pgcRows] = await Promise.all([
-      query<{ home_count: string | number }>(`select home_count from api.gate_counts`),
-      query<{ homestead_count: string | number }>(`select homestead_count from api.parcel_gate_counts`),
+      query<{ home_count: string | number }>(
+        `select home_count from api.gate_counts where county_fips = $1`,
+        [TRAVIS_COUNTY_FIPS]
+      ),
+      query<{ homestead_count: string | number }>(
+        `select homestead_count from api.parcel_gate_counts where county_fips = $1`,
+        [TRAVIS_COUNTY_FIPS]
+      ),
     ]);
     const gatedCount = gateRows.reduce((sum, r) => sum + Number(r.home_count), 0);
     if (gatedCount === 0) return; // core.mv_home_signals not populated yet — nothing to assert against.

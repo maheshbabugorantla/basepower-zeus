@@ -33,14 +33,16 @@ describe.skipIf(!process.env.POSTGRES_URL)("POST /api/top-homes", () => {
       expect(Array.isArray(body.rows)).toBe(true);
       expect(body.rows.length).toBeLessThanOrEqual(50);
 
+      // Score is now an absolute term (real value / anchor, capped), not a
+      // percentile -- weight_sum > 0 (the request's own weighted keys)
+      // requires at least one of these six *_term columns to be non-null.
       const [{ n }] = await query<{ n: string | number }>(
         `select count(*) as n
-         from core.mv_home_signals
-         where gate_reason is null
-           and county_fips = $1
-           and (distributor_saidi_pctile is not null or flood_pctile is not null
-                or empower_pctile is not null or acs_65_pctile is not null
-                or acs_heat_pctile is not null or backup_intent_pctile is not null)`,
+         from core.mv_home_terms
+         where county_fips = $1
+           and (outage_term is not null or flood_term is not null
+                or empower_term is not null or age65_term is not null
+                or electric_heat_term is not null or backup_intent_term is not null)`,
         [TRAVIS_COUNTY_FIPS]
       );
       if (Number(n) >= 50) {
@@ -53,20 +55,21 @@ describe.skipIf(!process.env.POSTGRES_URL)("POST /api/top-homes", () => {
   it(
     "changes row order when weighted toward a different signal, once at least two signals have real values",
     async () => {
-      // "Populated" means more than one *distinct* percentile value among
-      // gated Travis homes — a signal that is non-null but identical for
-      // every home (e.g. one distributor covering the whole gated set)
-      // has zero discriminating power and can't be expected to change
-      // the order on its own, even though the column itself has loaded.
+      // "Populated" means more than one *distinct* term value among gated
+      // Travis homes (score is now an absolute term, not a percentile) — a
+      // signal that is non-null but identical for every home (e.g. one
+      // distributor covering the whole gated set) has zero discriminating
+      // power and can't be expected to change the order on its own, even
+      // though the column itself has loaded.
       const [{ age65_distinct, heat_distinct }] = await query<{
         age65_distinct: string | number;
         heat_distinct: string | number;
       }>(
         `select
-           count(distinct acs_65_pctile) as age65_distinct,
-           count(distinct acs_heat_pctile) as heat_distinct
-         from core.mv_home_signals
-         where gate_reason is null and county_fips = $1`,
+           count(distinct age65_term) as age65_distinct,
+           count(distinct electric_heat_term) as heat_distinct
+         from core.mv_home_terms
+         where county_fips = $1`,
         [TRAVIS_COUNTY_FIPS]
       );
       const bothSignalsPopulated = Number(age65_distinct) > 1 && Number(heat_distinct) > 1;
