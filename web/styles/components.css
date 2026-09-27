@@ -2324,3 +2324,40 @@ button:focus-visible,
     font-size: 1.45rem;
   }
 }
+
+
+/* Home record header: address as the one title line, then one meta line
+ * (city and ZIP, the appraisal-district property id, the two gate chips). */
+.home-head__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-3);
+  margin-top: var(--space-1);
+  font-size: var(--type-label-font-size);
+  color: var(--theme-ink-muted);
+}
+
+/* Short windows (a laptop or projector ~770 px tall): tighten the home
+ * record and the Overview header so both stay on one screen. */
+@media (max-height: 860px) {
+  .home-head h1 {
+    font-size: 1.4rem;
+  }
+
+  .knock-checklist__item {
+    padding-block: 5px;
+  }
+
+  .knock-checklist__item small {
+    line-height: 1.3;
+  }
+
+  .permit-preview-row {
+    padding-block: 2px;
+  }
+
+  .ov-head {
+    margin-block: -4px;
+  }
+}

@@ -14,7 +14,7 @@ import { utilityStatusForHome, buildYearNote, tierForDecile, type PriorityTierKe
 import { PermitPath, type PermitPathKind, type PermitPathStatsRow, type PermitRulesCitation } from "../../../components/PermitPath";
 import { GridValue } from "../../../components/GridValue";
 import { COUNTY_CANDIDATES, CAD_NAME } from "../../../lib/counties";
-import { CAD_SHORT } from "../../../lib/homeRowFormat";
+import { CAD_SHORT, streetLine, titleCaseAddress } from "../../../lib/homeRowFormat";
 import { HomeTabs, JumpToTab } from "../../../components/HomeTabs";
 import { CaseForKnock } from "../../../components/CaseForKnock";
 
@@ -894,8 +894,10 @@ export default async function HomeDetailPage({
     ? { quote: permitRuleRow.quote, sourceUrl: permitRuleRow.source_url }
     : null;
 
-  const address = [home.situs_num, home.situs_street].filter(Boolean).join(" ");
-  const cityZip = [home.situs_city, home.situs_zip].filter(Boolean).join(" ");
+  // Title case, the same as the ranking rows (CAD rolls arrive uppercase;
+  // the raw value stays in the data and the export).
+  const address = streetLine(home.situs_num, home.situs_street);
+  const cityZip = [titleCaseAddress(home.situs_city), home.situs_zip].filter(Boolean).join(" ");
   const stateCode = home.imprv_state_cd ?? home.land_state_cd;
   const parcelSourceId = home.source_ids?.[0];
 
@@ -1284,7 +1286,7 @@ export default async function HomeDetailPage({
         <span>{address || home.prop_id}</span>
       </nav>
 
-      <Panel style={{ padding: "var(--space-2) var(--space-4)" }}>
+      <Panel className="home-head" style={{ padding: "var(--space-2) var(--space-4)" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "var(--space-6)" }}>
           <div>
             <h1
@@ -1297,9 +1299,13 @@ export default async function HomeDetailPage({
             >
               {address || home.prop_id}
             </h1>
-            {cityZip ? <p style={{ color: "var(--theme-ink-muted)", margin: "var(--space-1) 0" }}>{cityZip}</p> : null}
-            <div style={{ fontFamily: "var(--type-data-font-family)", fontSize: "var(--type-data-font-size)", color: "var(--theme-ink-muted)" }}>
-              {CAD_NAME[home.county_fips ?? ""] ?? `${countyName} CAD`} property {home.prop_id}
+            <div className="home-head__meta">
+              {cityZip ? <span>{cityZip}</span> : null}
+              <span>
+                {CAD_NAME[home.county_fips ?? ""] ?? `${countyName} CAD`} property {home.prop_id}
+              </span>
+              {home.is_single_family ? <span className="chip">Single-family home</span> : null}
+              {home.is_homestead ? <span className="chip">Owner-occupied (homestead)</span> : null}
             </div>
           </div>
           <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "var(--space-1)", textAlign: "right" }}>
@@ -1314,10 +1320,6 @@ export default async function HomeDetailPage({
           </div>
         </div>
 
-        <div style={{ display: "flex", gap: "var(--space-2)", flexWrap: "wrap", marginTop: "var(--space-2)" }}>
-          {home.is_single_family ? <span className="chip">Single-family home</span> : null}
-          {home.is_homestead ? <span className="chip">Owner-occupied (homestead)</span> : null}
-        </div>
       </Panel>
 
       <Suspense fallback={null}>
