@@ -40,7 +40,7 @@ from typing import Any, Literal
 import psycopg
 
 from pipelines.core import config, runs
-from pipelines.sources import scoring_refresh
+from sources import scoring_refresh  # sibling module under pipelines/sources (registry convention, see parcels.py)
 
 SOURCE = "refresh_scores"
 
