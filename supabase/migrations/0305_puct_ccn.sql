@@ -43,25 +43,58 @@
 --      HIFLD-based resolution untouched.
 --
 -- Validation basis (read-only, against live core.home_spatial.pt +
--- core.parcels.situs_city, all 531,988 Williamson+Travis homes, this
--- prep task -- see the scratchpad validation report for full output):
---   * 0% of homes fall outside every PUCT CCN polygon (vs. HIFLD's
---     'no_territory_match' for 68,448 Travis homes) -- CCN coverage is
---     complete for both counties.
---   * Only 5.1% of homes (Williamson 6.2%, Travis 4.7%) fall inside
---     MORE than one CCN polygon -- multiply-certificated areas are real
---     (mostly small border towns: Jarrell 86%, Bartlett 99%, Elgin 70%)
---     but far less pervasive than HIFLD's "every Williamson home matches
---     5 utilities" problem.
+-- core.parcels.situs_city, this prep task -- see the scratchpad
+-- validation report for full output). NOTE (corrected after an advisor
+-- review caught two bugs in the first pass -- see git history on this
+-- file): the first run's sjoin(how="left") counted every UNMATCHED home
+-- as "1 match", so it under-reported zero-match to 0%; the numbers
+-- below are from the fixed script.
+--   * core.home_spatial has 158,475 Williamson rows, ALL with a pt.
+--     Travis has 441,961 rows but only 373,513 with a non-null pt --
+--     68,448 Travis homes have NO point at all and cannot be tested
+--     against ANY polygon source, HIFLD or CCN; that gap is a
+--     home_spatial/geometry issue, not something this migration
+--     addresses.
+--   * Of the 531,988 homes WITH a point: 0.2% (1,324) fall outside
+--     every PUCT CCN polygon (Williamson 0.6%/954, Travis 0.1%/370) --
+--     small but nonzero, unlike this session's first (buggy) claim of
+--     0%. 5.1% (27,288: Williamson 6.2%/9,754, Travis 4.7%/17,534) fall
+--     inside MORE than one CCN polygon -- multiply-certificated areas
+--     are real (small border towns: Jarrell 86%, Bartlett 99%, Elgin
+--     70%) but far less pervasive than HIFLD's "every Williamson home
+--     matches 5 utilities" problem.
+--   * Applying the PICK RULE proposed below (in-memory only, never
+--     written to the DB) to Williamson's 158,475 homes: 61,302 (38.7%)
+--     would resolve Base-served (all Oncor), 88,506 (55.8%) would
+--     resolve not-Base-served (PEC/Bluebonnet/coop), 7,713 (4.9%) stay
+--     null as multiply_certificated (disagreeing holders), 954 (0.6%)
+--     stay null as no_ccn_match. TODAY every one of these 158,475 homes
+--     is null with territory_null_reason='utility_not_confirmed' -- the
+--     rule would newly confirm Base-served status for 61,302 Williamson
+--     homes that currently show as unconfirmed.
+--   * Travis, same rule: 266,104 (71.2%) Base-served, 98,479 (26.4%)
+--     not, 8,560 (2.3%) multiply_certificated, 370 (0.1%) no_ccn_match.
+--   * Travis-only: comparing the EXISTING (already live)
+--     resolved_territory_eia_id (from core.territories_sub/HIFLD)
+--     against what the CCN layer alone would say: 323,118 homes agree,
+--     but 50,025 homes (13.4% of the 373,513 with a point) DISAGREE --
+--     HIFLD's polygon and PUCT's CCN polygon pick a different utility
+--     for the same home. This is the same class of problem
+--     territory_overrides.py's Austin Energy override already fixed
+--     for one utility; CCN disagreement is broader and is exactly why
+--     this migration proposes switching Travis's resolution basis too,
+--     not just Williamson's.
 --   * Leander: 100.0% (25,521/25,522) Pedernales Electric Cooperative
 --     only -- confirms the user's claim.
 --   * Round Rock: 90% Oncor only; Hutto: 100% Oncor only -- confirms the
 --     user's claim (Oncor is Base-served, per data/raw/base_service_
 --     areas/pricing.md).
---   * Georgetown: 42% Pedernales / 37% Georgetown Utility Systems (a
---     MUNI, maps to the existing 'City of Georgetown' eia_id 7129,
---     mapped='no') / 13% Oncor.
---   * Lakeway: 62% Pedernales / 37% Austin Energy; Bee Cave: 99% Austin
+--   * Georgetown: 45% Pedernales / 44% Georgetown Utility Systems (a
+--     MUNI, matched by NAME to the existing 'City of Georgetown' row,
+--     eia_id 7129, mapped='no' -- see the crosswalk seed comment below,
+--     this specific match is NOT independently confirmed and is flagged
+--     for the user) / 19% Oncor.
+--   * Lakeway: 63% Pedernales / 38% Austin Energy; Bee Cave: 99% Austin
 --     Energy -- confirms the user's PEC-vs-Austin-Energy claim near
 --     Lakeway/Bee Cave.
 -- ===========================================================================
@@ -117,27 +150,41 @@ grant select on core.electric_ccn to zeus_web_ro;
 -- (data/raw/base_service_areas/pricing.md).
 -- ---------------------------------------------------------------------------
 create table if not exists core.electric_ccn_crosswalk (
-    ccn_company_name   text primary key,   -- core.electric_ccn.company_name, verbatim
-    eia_utility_number text,               -- null if genuinely unmapped (see below)
-    note                text,
-    created_at          timestamptz not null default now()
+    ccn_company_name    text primary key,   -- core.electric_ccn.company_name, verbatim
+    eia_utility_number  text,                -- null if genuinely unmapped (see below)
+    crosswalk_source_id uuid references ops.source_manifest (id),
+    note                 text,
+    created_at           timestamptz not null default now()
 );
+
+comment on column core.electric_ccn_crosswalk.crosswalk_source_id is
+    'The ops.source_manifest row of the core.utility_crosswalk/core.territories '
+    'row this eia_utility_number was COPIED from (never invented here) -- '
+    'traceability per CLAUDE.md''s real-data rule.';
 
 alter table core.electric_ccn_crosswalk enable row level security;
 revoke all on core.electric_ccn_crosswalk from public, anon, authenticated;
 grant select on core.electric_ccn_crosswalk to zeus_web_ro;
 
--- Verified mappings (eia_utility_number confirmed live against
--- core.utility_crosswalk / core.territories in this prep task):
-insert into core.electric_ccn_crosswalk (ccn_company_name, eia_utility_number, note) values
-    ('Austin Energy',                            '1015',  'Base-served (core.utility_crosswalk.mapped=yes)'),
-    ('Oncor Electric Delivery Company LLC',       '44372', 'Base-served (core.utility_crosswalk.mapped=yes)'),
-    ('Pedernales Electric Cooperative, Inc.',     '14626', 'NOT Base-served (mapped=no)'),
-    ('Bluebonnet Electric Cooperative, Inc.',     '1892',  'NOT Base-served (mapped=no)'),
-    ('Bartlett Electric Cooperative, Inc.',       '1273',  'NOT Base-served (mapped=no)'),
-    ('Bartlett City of',                          '1287',  'NOT Base-served (mapped=no); core.utility_crosswalk base_name=''City of Bartlett'''),
-    ('Georgetown Utility Systems',                '7129',  'NOT Base-served (mapped=no); core.utility_crosswalk base_name=''City of Georgetown'' -- NAME MATCH ASSUMED (city-owned utility dept for the same city), not independently confirmed against a PUCT CCN-number cross-check -- flag for user'),
-    ('CenterPoint Energy Houston Electric, LLC',  '8901',  'Base-served (mapped=yes); Harris County only, not in Williamson/Travis validation scope')
+-- Verified mappings: eia_utility_number confirmed live against
+-- core.utility_crosswalk / core.territories in this prep task, and
+-- crosswalk_source_id copied from THAT SAME already-loaded row (not a
+-- new value invented by this migration) -- run this after
+-- core.utility_crosswalk is loaded, in the same transaction as this
+-- migration if possible, so the subselects below resolve.
+insert into core.electric_ccn_crosswalk (ccn_company_name, eia_utility_number, crosswalk_source_id, note)
+select v.ccn_company_name, v.eia_utility_number, cw.source_id, v.note
+from (values
+    ('Austin Energy',                           '1015',  'Base-served (core.utility_crosswalk.mapped=yes)'),
+    ('Oncor Electric Delivery Company LLC',      '44372', 'Base-served (core.utility_crosswalk.mapped=yes)'),
+    ('Pedernales Electric Cooperative, Inc.',    '14626', 'NOT Base-served (mapped=no)'),
+    ('Bluebonnet Electric Cooperative, Inc.',    '1892',  'NOT Base-served (mapped=no)'),
+    ('Bartlett Electric Cooperative, Inc.',      '1273',  'NOT Base-served (mapped=no)'),
+    ('Bartlett City of',                         '1287',  'NOT Base-served (mapped=no); core.utility_crosswalk base_name=''City of Bartlett'''),
+    ('Georgetown Utility Systems',               '7129',  'NOT Base-served (mapped=no); core.utility_crosswalk base_name=''City of Georgetown'' -- NAME MATCH ASSUMED (city-owned utility dept for the same city), not independently confirmed against a PUCT CCN-number cross-check -- flag for user'),
+    ('CenterPoint Energy Houston Electric, LLC', '8901',  'Base-served (mapped=yes); Harris County only, not in Williamson/Travis validation scope')
+) as v (ccn_company_name, eia_utility_number, note)
+join core.utility_crosswalk cw on cw.eia_utility_number = v.eia_utility_number
 on conflict (ccn_company_name) do nothing;
 
 -- Holders present in the PUCT CCN layers (statewide, 146 distinct
@@ -235,22 +282,34 @@ on conflict (ccn_company_name) do nothing;
 --   )
 --
 -- Apply steps (once the user confirms the pick rule above), estimated:
+--   0. This branch (worktree-agent-ad1861480a870dd31) must be merged
+--      into main first: pipelines/sources/puct_ccn.py hard-codes
+--      RAW_DIR to the MAIN checkout's data/raw/puct_ccn/ (same
+--      convention as territories.py's RAW_DIR), and the raw files are
+--      Git LFS pointers in this commit (verified: `git lfs ls-files`
+--      shows all 3 .geojson files as LFS objects) -- after merging,
+--      run `git lfs pull` in the main checkout so the pointers resolve
+--      to real bytes before puct_ccn.py's sha256 check can pass.
 --   1. Apply this migration (0305_puct_ccn.sql) -- DDL only, no data,
 --      seconds, via psql against POSTGRES_URL_NON_POOLING (session
 --      pooler, per platform convention for migrations).
---   2. Run `python3 -m pipelines.run puct_ccn --backfill` (once
---      pipelines/sources/puct_ccn.py's `run()` is un-blocked from its
---      current refusal-to-run guard) -- 3 files, 148 features total,
---      well under a minute.
+--   2. Run `python3 -m pipelines.run puct_ccn --backfill` -- discovery
+--      is automatic (pipelines.core.registry globs pipelines/sources/
+--      *.py by filename, no manual registration step) once this
+--      module's __main__ refusal-to-run guard is removed by whichever
+--      ticket picks this up; 3 files, 148 features total, well under a
+--      minute.
 --   3. Land the home_spatial.py CTE change (separate ticket, `owns`
 --      pipelines/sources/home_spatial.py) implementing the sketch above.
 --   4. Re-run `python3 -m pipelines.run home_spatial --county 48491`
 --      and `--county 48453` (per-county, resumable, per
 --      0304_spatial_precompute.sql's design) -- 158,475 + 373,513 =
---      531,988 rows; M3-P6's own benchmarks project territory
---      point-in-polygon at ~70s per 1.2M homes, so well under a minute
---      each; total realistic wall time under 5 minutes for both
---      counties given input_hash-gated incremental behavior.
+--      531,988 rows. checks/M3-P6.md's own measured guidance (not this
+--      migration's guess) is "budget a few minutes per county" for a
+--      full county pass with the subdivided tables already in place, so
+--      plan on roughly 5-10 minutes total for both counties, not the
+--      ~70s/1.2M-homes territory-only micro-benchmark alone (that
+--      number excludes block-group/flood work and the per-row write).
 --   5. `python3 -m pipelines.run refresh_scores` (or whatever wraps
 --      core.refresh_all_scores()) to propagate into
 --      core.mv_home_signals -- see checks/M3-P6.md for that step's own

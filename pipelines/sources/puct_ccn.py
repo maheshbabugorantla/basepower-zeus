@@ -268,54 +268,100 @@ def read_records(path: Path | str, *, layer_type: str) -> tuple[int, list[dict[s
 
 
 # --------------------------------------------------------------------------
-# Load core.electric_ccn
+# Load core.electric_ccn -- COPY into an unlogged staging table (plain
+# geometry-free columns, geojson kept as text), THEN one INSERT ... SELECT
+# that runs ST_Subdivide/ST_MakeValid/ST_CollectionExtract server-side.
+#
+# ST_Subdivide is a set-returning function (SRF): Postgres rejects an SRF
+# inside a VALUES row (`set-returning functions are not allowed in
+# VALUES`), so it CANNOT sit inline in a multi-row INSERT ... VALUES the
+# way ST_GeomFromWKB does in territories.py's _insert_batch. It IS legal
+# in the SELECT list of an INSERT ... SELECT, which is why this module
+# stages first and subdivides in that second statement instead.
+#
+# Idempotency: this is delete-by-source_id + insert, not upsert-by-key --
+# core.electric_ccn has no natural business key across a full reload (a
+# subdivided row's identity is a (company, geom-piece) pair with no
+# stable id from PUCT), so a re-run for the SAME source_id (same file,
+# same sha256, same manifest row) deletes and reinserts that source's
+# rows rather than ever appending duplicates.
 # --------------------------------------------------------------------------
 
 
-def _insert_batch(cur, batch: list[dict[str, Any]], manifest_id: str) -> None:
-    """One multi-row INSERT per chunk (not executemany -- see
-    tiger_bg.py's _insert_batch docstring for why psycopg3's
-    executemany + pipeline mode is avoided here for large-geometry
-    chunks over the session pooler)."""
-    row_sql = (
-        "(%s, %s, %s, %s, "
-        "extensions.ST_Subdivide("
-        "  extensions.ST_CollectionExtract("
-        "    extensions.ST_MakeValid("
-        "      extensions.ST_SetSRID(extensions.ST_GeomFromGeoJSON(%s), %s)"
-        "    ), 3"
-        "  ), 256"
-        "), %s)"
-    )
-    values_sql = ", ".join(row_sql for _ in batch)
-    params: list[Any] = []
-    for rec in batch:
-        params.extend(
-            [
-                rec["company_name"],
-                rec["company_type"],
-                rec["ccn_no"],
-                rec["ccn_layer_type"],
-                rec["geojson"],
-                DST_SRID,
-                manifest_id,
-            ]
+def _ensure_staging_table(conn) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            create temporary table if not exists puct_ccn_staging (
+                company_name text,
+                company_type text,
+                ccn_no text,
+                ccn_layer_type text,
+                geojson text,
+                source_id uuid
+            ) on commit drop
+            """
         )
-    cur.execute(
-        f"""
-        insert into core.electric_ccn
-            (company_name, company_type, ccn_no, ccn_layer_type, geom, source_id)
-        values {values_sql}
-        """,
-        params,
-    )
 
 
-def run(*, runner: Runner = "cli") -> dict[str, Any]:
+def _copy_records(conn, records: list[dict[str, Any]], manifest_id: str) -> None:
+    with conn.cursor() as cur:
+        with cur.copy(
+            "copy puct_ccn_staging (company_name, company_type, ccn_no, ccn_layer_type, geojson, source_id) "
+            "from stdin"
+        ) as copy:
+            for rec in records:
+                copy.write_row(
+                    (
+                        rec["company_name"],
+                        rec["company_type"],
+                        rec["ccn_no"],
+                        rec["ccn_layer_type"],
+                        rec["geojson"],
+                        manifest_id,
+                    )
+                )
+
+
+def _load_from_staging(conn, manifest_id: str) -> None:
+    with conn.cursor() as cur:
+        # Delete this source's existing rows first (re-run safety), then
+        # insert fresh -- both in the SAME transaction as the COPY above
+        # (db.connect's context manager commits once at the end, rolls
+        # back on any error, so a failure here never leaves a half
+        # deleted-but-not-reinserted state).
+        cur.execute("delete from core.electric_ccn where source_id = %s", (manifest_id,))
+        cur.execute(
+            """
+            insert into core.electric_ccn
+                (company_name, company_type, ccn_no, ccn_layer_type, geom, source_id)
+            select
+                company_name, company_type, ccn_no, ccn_layer_type,
+                extensions.ST_Subdivide(
+                    extensions.ST_CollectionExtract(
+                        extensions.ST_MakeValid(
+                            extensions.ST_SetSRID(extensions.ST_GeomFromGeoJSON(geojson), %s)
+                        ), 3
+                    ), 256
+                ) as geom,
+                source_id
+            from puct_ccn_staging
+            where source_id = %s
+            """,
+            (DST_SRID, manifest_id),
+        )
+
+
+def run(*, runner: Runner = "cli", backfill: bool = False, cursor: dict[str, Any] | None = None) -> dict[str, Any]:
     """Load all three PUCT layers into core.electric_ccn. NEVER RUN in
     this prep task -- hard rule was no DB writes. Left here as the
-    thinnest slice that would fill 0305_puct_ccn.sql's contract_out,
-    for whichever ticket picks this up next."""
+    thinnest slice that would fill 0305_puct_ccn.sql's contract_out, for
+    whichever ticket picks this up next. Matches the pipelines.core.
+    registry source-module contract (runner/backfill/cursor kwargs) so
+    `python -m pipelines.run puct_ccn --backfill` can call it -- there
+    are only 148 features total across 3 small files, so `backfill` is
+    accepted for contract compliance but this module always loads
+    everything in one pass; there is no incremental/cursor mode."""
     urls = _source_urls()
     total_rows_in = 0
     total_rows_loaded = 0
@@ -326,13 +372,16 @@ def run(*, runner: Runner = "cli") -> dict[str, Any]:
         total_rows_in += rows_in
 
         with db.connect(pooled=False) as conn:
+            _ensure_staging_table(conn)
+            _copy_records(conn, records, man["id"])
+            _load_from_staging(conn, man["id"])
             with conn.cursor() as cur:
-                for i in range(0, len(records), INSERT_CHUNK):
-                    _insert_batch(cur, records[i : i + INSERT_CHUNK], man["id"])
+                cur.execute("select count(*) from core.electric_ccn where source_id = %s", (man["id"],))
+                loaded = cur.fetchone()[0]
             conn.commit()
 
-        _set_manifest_rows(man["id"], len(records))
-        total_rows_loaded += len(records)
+        _set_manifest_rows(man["id"], loaded)
+        total_rows_loaded += loaded
 
     return {"rows_in": total_rows_in, "rows_loaded": total_rows_loaded}
 
