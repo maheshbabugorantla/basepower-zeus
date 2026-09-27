@@ -2361,3 +2361,39 @@ button:focus-visible,
     margin-block: -4px;
   }
 }
+
+
+/* Sources table: the file's own name under its publisher, so files from the
+ * same dataset (per county, per load zone, per release) read as distinct. */
+.source-file {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px var(--space-2);
+  margin-top: 2px;
+  max-width: 38ch;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--theme-ink-muted);
+}
+
+.source-file__name {
+  font-family: var(--type-data-font-family);
+  overflow-wrap: anywhere;
+}
+
+.source-file__detail {
+  font-weight: 500;
+  color: var(--theme-ink);
+}
+
+.source-file__detail::before {
+  content: "· ";
+  font-weight: 400;
+  color: var(--theme-ink-muted);
+}
+
+.source-file__note {
+  flex-basis: 100%;
+  font-style: italic;
+}

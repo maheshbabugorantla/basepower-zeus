@@ -101,7 +101,7 @@ export function StormRecordPanel({ counties }: { counties: StormRecordCounty[] }
       <div className="storm-grid" role="table" aria-label="Storm record by county">
         <div className="storm-grid__row storm-grid__row--head" role="row">
           <div role="columnheader">County</div>
-          <div role="columnheader">Longest major outage since 2024</div>
+          <div role="columnheader">Longest major outage in 2025</div>
           <div role="columnheader">Customers out at its peak</div>
           <div role="columnheader">Beryl peak (July 2024)</div>
         </div>

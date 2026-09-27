@@ -9,7 +9,7 @@ import type { IntroFacts, IntroFunnelStage, IntroStorm } from "../../../lib/intr
 // when it is about to play, so returning visitors never request it.
 //
 //   storm:  api.outage_metrics_county (EAGLE-I), the county's longest major
-//           outage since 2024 -- the same rows the Overview's storm record uses.
+//           outage in 2025 (the 2025 EAGLE-I file) -- the same rows the Overview's storm record uses.
 //   funnel: api.parcel_gate_counts + api.gate_counts -- the same counts as the
 //           Overview's ranking-readiness row. A stage the county's loader never
 //           counted separately (a roll pre-filtered to single-family homesteads)

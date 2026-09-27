@@ -236,7 +236,7 @@ export default function IntroReel({ onDone }: IntroReelProps) {
         factsLocal = fcts;
         setFacts(fcts);
         lines = stormPhrases(fcts?.storm ?? null);
-        sub = lines.length && fcts?.storm ? `${fcts.storm.countyName} County's longest outage since 2024 · EAGLE-I` : null;
+        sub = lines.length && fcts?.storm ? `${fcts.storm.countyName} County's longest outage in 2025 · EAGLE-I` : null;
         raf = requestAnimationFrame(frame);
       })
       .catch(() => finish("error"));

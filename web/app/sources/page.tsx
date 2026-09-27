@@ -16,6 +16,7 @@ import { getModelCard } from "../../lib/modelCard.server";
 import { getQualityPanelData } from "../../lib/qualityPanel.server";
 import { allTierMeta, REASON_PHRASES } from "../../lib/priorityTier";
 import { DEFAULT_COUNTY } from "../../lib/counties";
+import { describeSources } from "../../lib/sourceLabels";
 
 // M0-W2: "the demo's proof that every number is real." Lists every
 // api.sources row (M0-S1) — every ops.source_manifest row joined to its
@@ -40,10 +41,22 @@ interface SourceRow {
 
 const DATASET_NAMES: Record<string, string> = {
   acs: "Census ACS 2024: age and home heating by neighborhood",
+  acs_income_age: "Census ACS 2024: household income and age by neighborhood",
+  county_loadzone: "Counties matched to ERCOT load zones",
+  ercot_spp: "ERCOT settlement prices by load zone, Sep 2025 to Sep 2026",
+  hcad_code_description: "Harris CAD 2026 code descriptions",
+  hcad_geometry: "Harris County parcel outlines",
+  hcad_jur_exempt: "Harris CAD 2026 exemptions (homestead, over-65)",
+  hcad_real_acct: "Harris CAD 2026 property accounts",
+  permit_rules: "Battery permit rules by jurisdiction",
+  puct_ccn_coop_dist: "PUCT service areas: electric cooperatives",
+  puct_ccn_iou: "PUCT service areas: investor-owned utilities",
+  puct_ccn_muni: "PUCT service areas: city-owned utilities",
+  wcad_export: "Williamson CAD appraisal data",
   austin_energy_service_area: "Austin Energy service area (City of Austin)",
   austin_permits: "City of Austin building permits",
   base_service_areas: "Base Power pricing page (served utilities)",
-  eaglei: "EAGLE-I power outages by county, 2025",
+  eaglei: "EAGLE-I power outages by county",
   eaglei_mcc: "EAGLE-I customers per county",
   eia861_reliability: "EIA-861 utility reliability (outage minutes)",
   empower: "HHS emPOWER: power-dependent Medicare devices by ZIP",
@@ -98,6 +111,10 @@ export default async function SourcesPage() {
     getModelCard(),
     getQualityPanelData(DEFAULT_COUNTY.fips),
   ]);
+
+  // What sets each file apart from others of the same dataset (county, load
+  // zone, dataset id, release), read from its own source url.
+  const labels = describeSources(rows);
 
   return (
     <div style={{ display: "grid", gap: "var(--space-6)" }}>
@@ -250,7 +267,7 @@ export default async function SourcesPage() {
               <DataTableHead>
                 <DataTableRow>
                   <DataTableHeaderCell>Dataset</DataTableHeaderCell>
-                  <DataTableHeaderCell>Published by</DataTableHeaderCell>
+                  <DataTableHeaderCell>Published by · file</DataTableHeaderCell>
                   <DataTableHeaderCell>Fetched</DataTableHeaderCell>
                   <DataTableHeaderCell>Size</DataTableHeaderCell>
                   <DataTableHeaderCell>Rows loaded</DataTableHeaderCell>
@@ -273,6 +290,23 @@ export default async function SourcesPage() {
                       <a href={row.url} target="_blank" rel="noreferrer noopener" title={row.url}>
                         {hostOf(row.url)}
                       </a>
+                      {(() => {
+                        const label = labels.get(row.source_id);
+                        if (!label) return null;
+                        return (
+                          <div className="source-file" title={row.url}>
+                            <span className="source-file__name">{label.file}</span>
+                            {label.detail.map((d) => (
+                              <span key={d} className="source-file__detail">
+                                {d}
+                              </span>
+                            ))}
+                            {label.earlierCopy ? (
+                              <span className="source-file__note">Earlier download of the same file; the later one is used</span>
+                            ) : null}
+                          </div>
+                        );
+                      })()}
                     </DataTableCell>
                     <DataTableCell>
                       <span style={{ fontFamily: "var(--type-data-font-family)", whiteSpace: "nowrap" }}>
