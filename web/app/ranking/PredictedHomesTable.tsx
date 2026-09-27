@@ -12,6 +12,7 @@ import {
 } from "../../components/ui/DataTable";
 import { MissingState } from "../../components/ui/MissingState";
 import { PropensityBadge } from "../../components/PropensityBadge";
+import { utilityStatusForHome } from "../../lib/priorityTier";
 import type { PredictedHomeRow } from "../api/top-homes/route";
 
 // M4-W2: the default ranking view -- one row per home, ordered by
@@ -65,13 +66,15 @@ export function PredictedHomesTable({
         <colgroup>
           <col style={{ width: "40px" }} />
           <col />
-          <col style={{ width: "280px" }} />
+          <col style={{ width: "220px" }} />
+          <col style={{ width: "160px" }} />
         </colgroup>
         <DataTableHead>
           <DataTableRow>
             <DataTableHeaderCell>#</DataTableHeaderCell>
             <DataTableHeaderCell>Home</DataTableHeaderCell>
-            <DataTableHeaderCell>Likelihood of adding backup</DataTableHeaderCell>
+            <DataTableHeaderCell>Priority &amp; why</DataTableHeaderCell>
+            <DataTableHeaderCell>Utility</DataTableHeaderCell>
           </DataTableRow>
         </DataTableHead>
         <DataTableBody>
@@ -79,6 +82,11 @@ export function PredictedHomesTable({
             const addressLine = formatAddressLine(row);
             const title = [addressLine, row.situsZip].filter(Boolean).join(" ") || row.propId;
             const isHovered = hoveredPropId === row.propId;
+            const utilityStatus = utilityStatusForHome({
+              gateReason: row.gateReason,
+              territoryNullReason: row.territoryNullReason,
+            });
+            const hasBackup = row.coverageBucket === "base_customer" || row.coverageBucket === "other_backup";
             return (
               <DataTableRow
                 key={row.propId}
@@ -96,17 +104,31 @@ export function PredictedHomesTable({
                   <Link href={`/home/${row.propId}`} className="top-homes-address" title={title}>
                     {addressLine || row.propId}
                   </Link>
-                  {row.situsZip ? <div className="top-homes-zip">{row.situsZip}</div> : null}
+                  <div className="top-homes-zip">
+                    {[row.situsZip, row.yrBuilt ? `built ${row.yrBuilt}` : null].filter(Boolean).join(" · ")}
+                  </div>
+                  {hasBackup ? (
+                    <div style={{ fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)" }}>
+                      Already has backup
+                    </div>
+                  ) : null}
                 </DataTableCell>
                 <DataTableCell>
                   <PropensityBadge
                     pInstall12m={row.pInstall12m}
                     relativeToCounty={row.relativeToCounty}
+                    decile={row.decile}
                     countyName={countyName}
                     extrapolatedFrom={row.extrapolatedFrom}
                     reasons={row.reasons}
+                    maxReasons={2}
                     showReasons
                   />
+                </DataTableCell>
+                <DataTableCell>
+                  <span data-testid="utility-status" data-status={utilityStatus.key}>
+                    {utilityStatus.label}
+                  </span>
                 </DataTableCell>
               </DataTableRow>
             );

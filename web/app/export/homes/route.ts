@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { query } from "../../../lib/db";
 import { COUNTY_CANDIDATES, DEFAULT_COUNTY } from "../../../lib/counties";
+import { decileRangeForTier, tierForDecile, type PriorityTierKey } from "../../../lib/priorityTier";
 import {
   CSV_CAP,
   csvFilename,
@@ -107,6 +108,7 @@ interface PredictedDbRow {
   situs_zip: string | null;
   p_install_12m: string;
   relative_to_county: string | number | null;
+  decile: number | null;
   reasons: PropensityReason[] | null;
   extrapolated_from: string | null;
   distributor_name: string | null;
@@ -156,8 +158,7 @@ const HEADER = [
   "city",
   "zip",
   "county",
-  "likelihood_p_install_12m",
-  "times_county_average",
+  "priority_tier",
   "top_reasons",
   "score_weighted_mode",
   "outage_basis",
@@ -183,6 +184,10 @@ export async function GET(request: NextRequest) {
   const blockGroupGeoid = params.get("bg");
   const situsCity = params.get("city");
   const situsZip = params.get("zip");
+  const rawTier = params.get("tier");
+  const tier: PriorityTierKey | "all" =
+    rawTier === "top" || rawTier === "high" || rawTier === "medium" || rawTier === "low" ? rawTier : "all";
+  const [minDecile, maxDecile] = decileRangeForTier(tier);
 
   const today = isoDate(new Date());
   const filename = csvFilename(county.name, `ranked-homes-${mode}`, today);
@@ -236,7 +241,7 @@ export async function GET(request: NextRequest) {
           while (emittedRows < CSV_CAP) {
             const rows: PredictedDbRow[] = await query<PredictedDbRow>(
               `select hp.prop_id, pc.situs_num, pc.situs_street, pc.situs_city, pc.situs_zip,
-                      hp.p_install_12m::text as p_install_12m, hp.relative_to_county, hp.reasons, hp.extrapolated_from,
+                      hp.p_install_12m::text as p_install_12m, hp.relative_to_county, hp.decile, hp.reasons, hp.extrapolated_from,
                       s.distributor_name, s.territory_eia_id, s.territory_basis, s.territory_null_reason,
                       s.outage_minutes, s.outage_basis,
                       s.source_ids, hp.source_ids as model_source_ids
@@ -251,6 +256,8 @@ export async function GET(request: NextRequest) {
                  and ($7::text is null or s.block_group_geoid = $7)
                  and ($8::text is null or coalesce(pc.situs_city, '') = $8)
                  and ($9::text is null or coalesce(pc.situs_zip, '') = $9)
+                 and ($10::int is null or hp.decile >= $10::int)
+                 and ($11::int is null or hp.decile <= $11::int)
                  and (
                    $4::numeric is null
                    or hp.p_install_12m < $4::numeric
@@ -258,7 +265,7 @@ export async function GET(request: NextRequest) {
                  )
                order by hp.p_install_12m desc, hp.prop_id asc
                limit $6`,
-              [county.fips, excludeBackup, hideOldHomes, afterP, afterPropId, PAGE_SIZE, blockGroupGeoid, situsCity, situsZip]
+              [county.fips, excludeBackup, hideOldHomes, afterP, afterPropId, PAGE_SIZE, blockGroupGeoid, situsCity, situsZip, minDecile, maxDecile]
             );
             if (rows.length === 0) break;
 
@@ -277,8 +284,7 @@ export async function GET(request: NextRequest) {
                     row.situs_city,
                     row.situs_zip,
                     county.name,
-                    formatNumber(row.p_install_12m, 4),
-                    row.relative_to_county !== null ? `${Number(row.relative_to_county).toFixed(1)}x` : "",
+                    tierForDecile(row.decile).label,
                     row.reasons ? formatPredictedReasons(row.reasons) : "",
                     "",
                     row.outage_basis ?? "",
@@ -335,7 +341,6 @@ export async function GET(request: NextRequest) {
                     row.situs_city,
                     row.situs_zip,
                     county.name,
-                    "",
                     "",
                     row.reasons ? formatWeightedReasons(row.reasons) : "",
                     formatNumber(row.score, 4),

@@ -11,17 +11,13 @@ import { ScoreExplainer } from "../../../components/ScoreExplainer";
 import { PropensityBadge, type PropensityReason } from "../../../components/PropensityBadge";
 import { PermitPath, type PermitPathKind, type PermitPathStatsRow, type PermitRulesCitation } from "../../../components/PermitPath";
 import { GridValue } from "../../../components/GridValue";
-import { COUNTY_CANDIDATES } from "../../../lib/counties";
+import { COUNTY_CANDIDATES, CAD_NAME } from "../../../lib/counties";
 
 // M3-W1: which appraisal district this home's parcel roll comes from,
 // per county (Travis CAD / Harris CAD (HCAD) / Williamson CAD (WCAD)) --
 // never a hardcoded "Travis CAD" regardless of which county the parcel
-// actually sits in.
-const CAD_NAME: Record<string, string> = {
-  "48453": "Travis CAD",
-  "48201": "Harris CAD (HCAD)",
-  "48491": "Williamson CAD (WCAD)",
-};
+// actually sits in. Moved to lib/counties.ts (CAD_NAME) so
+// EligibilityFunnel's caller can use the identical map (T7 fix).
 import {
   DataTable,
   DataTableBody,
@@ -115,6 +111,7 @@ interface TopHomeRankRow {
 interface HomePropensityDbRow {
   p_install_12m: string | number;
   relative_to_county: string | number | null;
+  decile: number | null;
   reasons: PropensityReason[];
   extrapolated_from: string | null;
 }
@@ -122,7 +119,7 @@ interface HomePropensityDbRow {
 async function getHomePropensity(propId: string): Promise<HomePropensityDbRow | null> {
   try {
     const rows = await query<HomePropensityDbRow>(
-      `select p_install_12m, relative_to_county, reasons, extrapolated_from
+      `select p_install_12m, relative_to_county, decile, reasons, extrapolated_from
        from api.home_propensity
        where prop_id = $1`,
       [propId]
@@ -815,7 +812,11 @@ export default async function HomeDetailPage({
   return (
     <div style={{ display: "grid", gap: "var(--space-6)" }}>
       <nav aria-label="Breadcrumb" className="breadcrumb">
-        <Link href="/ranking">Ranking</Link>
+        {/* T4 fix: a home's OWN county (home.county_fips), not whatever
+            county happened to be selected on the page that linked here --
+            a Williamson home must send "Back to lead list" back to
+            Williamson, never silently to Travis. */}
+        <Link href={home.county_fips ? `/ranking?county=${home.county_fips}` : "/ranking"}>{countyName} lead list</Link>
         <span className="breadcrumb__separator" aria-hidden="true">
           /
         </span>
@@ -842,8 +843,11 @@ export default async function HomeDetailPage({
           </div>
           <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "var(--space-1)", textAlign: "right" }}>
             {homePropensity ? null : (
-              <a href="/ranking" style={{ fontSize: "var(--type-label-font-size)", maxWidth: "220px" }}>
-                See where it ranks
+              <a
+                href={home.county_fips ? `/ranking?county=${home.county_fips}` : "/ranking"}
+                style={{ fontSize: "var(--type-label-font-size)", maxWidth: "220px" }}
+              >
+                See {countyName}&rsquo;s lead list
               </a>
             )}
           </div>
@@ -875,6 +879,7 @@ export default async function HomeDetailPage({
           <PropensityBadge
             pInstall12m={Number(homePropensity.p_install_12m)}
             relativeToCounty={homePropensity.relative_to_county === null ? null : Number(homePropensity.relative_to_county)}
+            decile={homePropensity.decile}
             countyName={countyName}
             extrapolatedFrom={homePropensity.extrapolated_from}
             reasons={homePropensity.reasons}

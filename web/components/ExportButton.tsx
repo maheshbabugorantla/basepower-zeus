@@ -19,6 +19,15 @@ export function ExportButton() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
 
+  // T4/T8 fix: a home-detail page (/home/[prop_id]) has no "selected
+  // county" concept (see TopBar's CountySwitcherInner) and isn't a
+  // ranked list -- exporting "the ranked homes CSV" from here used to
+  // silently export whatever county happened to be left in the url
+  // (defaulting to Travis), which could easily be a different county
+  // than the one home actually being viewed. Unavailable here, same as
+  // the county switcher.
+  if (pathname?.startsWith("/home/")) return null;
+
   const isCoverage = pathname?.startsWith("/ranking/coverage") ?? false;
   const target = isCoverage ? "/export/coverage" : "/export/homes";
   const href = `${target}?${searchParams.toString()}`;

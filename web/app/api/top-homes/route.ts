@@ -181,6 +181,8 @@ interface RankedRequestBody {
   pageSize?: unknown;
   hideOldHomes?: unknown;
   excludeBackup?: unknown;
+  minDecile?: unknown;
+  maxDecile?: unknown;
 }
 
 // ---------------------------------------------------------------------------
@@ -215,17 +217,25 @@ export interface PredictedHomeRow {
   /** Exact-precision text of p_install_12m, for the next page's keyset cursor only -- never for display (Number() on it would round the boundary value and could repeat/skip a row). */
   pInstall12mCursor: string;
   relativeToCounty: number | null;
+  decile: number | null;
   reasons: PropensityReason[];
   extrapolatedFrom: string | null;
   yrBuilt: number | null;
   lon: number | null;
   lat: number | null;
+  /** core.mv_home_signals.gate_reason -- null/'passed'/'utility_not_confirmed' for a ranked row. */
+  gateReason: string | null;
+  /** core.mv_home_signals.territory_null_reason -- non-null means utility service is still fail-open/unconfirmed. */
+  territoryNullReason: string | null;
+  /** core.home_coverage.bucket -- 'base_customer'/'other_backup' when this home already has backup. */
+  coverageBucket: string | null;
 }
 
 interface PredictedHomeDbRow {
   prop_id: string;
   p_install_12m: string;
   relative_to_county: string | number | null;
+  decile: number | null;
   reasons: PropensityReason[] | null;
   extrapolated_from: string | null;
   geo_id: string | null;
@@ -239,6 +249,9 @@ interface PredictedHomeDbRow {
   yr_built: number | null;
   lon: string | number | null;
   lat: string | number | null;
+  gate_reason: string | null;
+  territory_null_reason: string | null;
+  coverage_bucket: string | null;
 }
 
 function mapPredictedRow(row: PredictedHomeDbRow): PredictedHomeRow {
@@ -254,11 +267,15 @@ function mapPredictedRow(row: PredictedHomeDbRow): PredictedHomeRow {
     pInstall12m: Number(row.p_install_12m),
     pInstall12mCursor: row.p_install_12m,
     relativeToCounty: toNumberOrNull(row.relative_to_county),
+    decile: row.decile,
     reasons: row.reasons ?? [],
     extrapolatedFrom: row.extrapolated_from,
     yrBuilt: row.yr_built,
     lon: toNumberOrNull(row.lon),
     lat: toNumberOrNull(row.lat),
+    gateReason: row.gate_reason,
+    territoryNullReason: row.territory_null_reason,
+    coverageBucket: row.coverage_bucket,
   };
 }
 
@@ -281,6 +298,10 @@ export async function fetchPredictedHomes(params: {
   withTotal?: boolean;
   hideOldHomes?: boolean;
   excludeBackup?: boolean;
+  /** core.home_propensity.decile lower/upper bound (inclusive), for the
+   * lead-list's "Priority tier" filter -- both null means every tier. */
+  minDecile?: number | null;
+  maxDecile?: number | null;
 }): Promise<{ rows: PredictedHomeRow[]; total: number | null }> {
   const {
     countyFips,
@@ -293,6 +314,8 @@ export async function fetchPredictedHomes(params: {
     withTotal = false,
     hideOldHomes = false,
     excludeBackup = true,
+    minDecile = null,
+    maxDecile = null,
   } = params;
 
   // Coordinator perf fix: core.home_propensity carries its own county_fips
@@ -338,32 +361,37 @@ export async function fetchPredictedHomes(params: {
     if (hideOldHomes) clauses.push(`(s.yr_built is null or s.yr_built >= ${HIDE_OLD_HOMES_CUTOFF_YEAR})`);
     if (situsCity !== null) clauses.push(situsCity === "" ? "pc.situs_city is null" : "pc.situs_city = $3");
     if (situsZip !== null) clauses.push(situsZip === "" ? "pc.situs_zip is null" : "pc.situs_zip = $4");
+    clauses.push("($5::int is null or hp.decile >= $5::int)");
+    clauses.push("($6::int is null or hp.decile <= $6::int)");
     return clauses.join("\n      and ");
   }
 
   const baseParams: unknown[] = [countyFips];
   // Positional params are fixed slots ($1 county, $2 block group, $3
-  // city, $4 zip) regardless of which predicates are active, so the
-  // cursor/limit params below always start at $5 -- simpler than
-  // renumbering per filter combination.
+  // city, $4 zip, $5 min decile, $6 max decile) regardless of which
+  // predicates are active, so the cursor/limit params below always start
+  // at $7 -- simpler than renumbering per filter combination.
   baseParams[1] = blockGroupGeoid;
   baseParams[2] = situsCity;
   baseParams[3] = situsZip;
+  baseParams[4] = minDecile;
+  baseParams[5] = maxDecile;
 
   const pageSql = `
-    select hp.prop_id, hp.p_install_12m::text as p_install_12m, hp.relative_to_county, hp.reasons, hp.extrapolated_from,
+    select hp.prop_id, hp.p_install_12m::text as p_install_12m, hp.relative_to_county, hp.decile, hp.reasons, hp.extrapolated_from,
            pc.geo_id, pc.situs_num, pc.situs_street, pc.situs_city, pc.situs_zip, pc.market_value,
-           s.block_group_geoid, s.county_fips, s.yr_built,
+           s.block_group_geoid, s.county_fips, s.yr_built, s.gate_reason, s.territory_null_reason,
+           hc.bucket as coverage_bucket,
            extensions.ST_X(pg.centroid) as lon, extensions.ST_Y(pg.centroid) as lat
     ${buildFrom({ forPage: true })}
     where ${buildWhere()}
       and (
-        $5::numeric is null
-        or hp.p_install_12m < $5::numeric
-        or (hp.p_install_12m = $5::numeric and hp.prop_id > $6::text)
+        $7::numeric is null
+        or hp.p_install_12m < $7::numeric
+        or (hp.p_install_12m = $7::numeric and hp.prop_id > $8::text)
       )
     order by hp.p_install_12m desc, hp.prop_id asc
-    limit $7
+    limit $9
   `;
 
   const countSql = `select count(*) as total ${buildFrom({ forPage: false })} where ${buildWhere()}`;
@@ -491,6 +519,8 @@ export async function POST(request: Request) {
   // same as api.homes_ranked_weighted's own p_exclude_backup default;
   // only an explicit `false` turns it off.
   const excludeBackup = body.excludeBackup !== false;
+  const minDecile = typeof body.minDecile === "number" && Number.isFinite(body.minDecile) ? body.minDecile : null;
+  const maxDecile = typeof body.maxDecile === "number" && Number.isFinite(body.maxDecile) ? body.maxDecile : null;
 
   // M4-W2: the ranking UI's default is predicted, but every pre-existing
   // caller of this route (RankingBoard's own weighted-mode fetch, and
@@ -512,6 +542,8 @@ export async function POST(request: Request) {
       withTotal,
       hideOldHomes,
       excludeBackup,
+      minDecile,
+      maxDecile,
     });
     return NextResponse.json(
       { mode: "predicted", rows, total },

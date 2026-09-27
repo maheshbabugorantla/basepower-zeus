@@ -87,13 +87,21 @@ describe.skipIf(!process.env.POSTGRES_URL_READONLY)("CSV export -- byte-identica
   it(
     "ranked-homes CSV rank order matches the live DB's own predicted order",
     async () => {
+      // T1/redesign: the CSV no longer carries the raw likelihood number
+      // (column 5 is now priority_tier, a plain label -- reps never see
+      // the multiple/probability). Order is still hp.p_install_12m desc
+      // under the hood; the coarser, still-verifiable invariant from the
+      // CSV alone is that priority_tier never regresses to a HIGHER
+      // (less urgent) tier as rank increases.
       const req = makeRequest("/export/homes", { county: TRAVIS_COUNTY_FIPS, mode: "predicted" });
       const body = await getHomesCsv(req).then(readAll);
       const lines = body.split("\r\n").filter(Boolean).slice(2); // skip comment + header
       expect(lines.length).toBeGreaterThan(1);
-      const likelihoods = lines.map((line) => Number(line.split(",")[5]));
-      for (let i = 1; i < likelihoods.length; i++) {
-        expect(likelihoods[i - 1]).toBeGreaterThanOrEqual(likelihoods[i]);
+      const TIER_RANK: Record<string, number> = { "Top priority": 0, High: 1, Medium: 2, Low: 3, "Not scored": 4 };
+      const tierRanks = lines.map((line) => TIER_RANK[line.split(",")[5]] ?? -1);
+      for (const rank of tierRanks) expect(rank).toBeGreaterThanOrEqual(0);
+      for (let i = 1; i < tierRanks.length; i++) {
+        expect(tierRanks[i - 1]).toBeLessThanOrEqual(tierRanks[i]);
       }
     },
     60000

@@ -62,7 +62,8 @@ function Note({ children }: { children: React.ReactNode }) {
   );
 }
 
-export function QualityPanel({ data }: { data: QualityPanelData }) {
+export function QualityPanel({ data, countyName = "Travis" }: { data: QualityPanelData; countyName?: string }) {
+  const isAustinTrainingCounty = countyName === "Travis";
   return (
     <Panel>
       <h2
@@ -97,7 +98,15 @@ export function QualityPanel({ data }: { data: QualityPanelData }) {
         {data.joinRate !== null ? (
           <Note>
             {data.matchedToParcels.toLocaleString()} of {data.permitsWithTcadId.toLocaleString()} Austin permits
-            were tied to a Travis County home. Unmatched permits simply don&rsquo;t count toward any home.
+            were tied to a {countyName} County home. Unmatched permits simply don&rsquo;t count toward any home.
+          </Note>
+        ) : null}
+
+        {!isAustinTrainingCounty ? (
+          <Note>
+            This model was trained and evaluated on Austin (Travis County) permits only. Predictions for{" "}
+            {countyName} County homes are transferred from that same model, not locally validated against{" "}
+            {countyName} County installs.
           </Note>
         ) : null}
 
@@ -128,8 +137,8 @@ export function QualityPanel({ data }: { data: QualityPanelData }) {
         />
         {data.gateCounts !== null ? (
           <Note>
-            Out of {data.gateCounts.totalParcels.toLocaleString()} Travis County parcels in the 2026 appraisal
-            roll. Apartments, land and commercial parcels are left out.
+            Out of {data.gateCounts.totalParcels.toLocaleString()} {countyName} County parcels in the county
+            appraisal district&rsquo;s roll. Apartments, land and commercial parcels are left out.
           </Note>
         ) : null}
       </StatList>

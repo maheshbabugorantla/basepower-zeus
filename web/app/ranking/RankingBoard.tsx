@@ -2,6 +2,7 @@
 
 import type { MouseEvent as ReactMouseEvent, ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { BlockGroupMap, type MapDot } from "../../components/BlockGroupMap";
 import { TopHomesTable, TopHomesPagination, type TopHomeRow } from "../../components/TopHomesTable";
 import { WeightSliders, equalWeights } from "../../components/WeightSliders";
@@ -10,8 +11,8 @@ import { Panel } from "../../components/ui/Panel";
 import { MissingState } from "../../components/ui/MissingState";
 import type { SignalKey, PredictedHomeRow } from "../api/top-homes/route";
 import { PredictedHomesTable } from "./PredictedHomesTable";
-import { PredictionProof, type ModelCardData } from "../../components/PredictionProof";
 import { bucketBy, filterRows, countyTotals, type GeoRollupRow } from "../../lib/geoRollup";
+import { decileRangeForTier, tierMeta, PRIORITY_TIER_ORDER, type PriorityTierKey } from "../../lib/priorityTier";
 
 // M4-W2: predicted (api.home_propensity.p_install_12m) is the ranking
 // DEFAULT; "Team-weighted score" is the alternative, unchanged (M2-W1's)
@@ -93,7 +94,9 @@ async function fetchPredictedPage(params: {
   withTotal: boolean;
   hideOldHomes?: boolean;
   excludeBackup?: boolean;
+  tier?: PriorityTierKey | "all";
 }): Promise<{ rows: PredictedHomeRow[]; total: number | null }> {
+  const [minDecile, maxDecile] = decileRangeForTier(params.tier ?? "all");
   const response = await fetch("/api/top-homes", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -109,6 +112,8 @@ async function fetchPredictedPage(params: {
       pageSize: params.pageSize ?? DEFAULT_PAGE_SIZE,
       hideOldHomes: params.hideOldHomes ?? false,
       excludeBackup: params.excludeBackup ?? true,
+      minDecile,
+      maxDecile,
     }),
   });
   if (!response.ok) throw new Error(`Ranking request failed (HTTP ${response.status})`);
@@ -191,7 +196,6 @@ export function RankingBoard({
   defaultWeights = null,
   predictedRows: initialPredictedRows,
   predictedTotal: initialPredictedTotal,
-  modelCard = null,
   countyName = "Travis",
   countyFips = TRAVIS_COUNTY_FIPS,
   geoRollup = [],
@@ -202,6 +206,7 @@ export function RankingBoard({
   initialBlockGroupGeoid = null,
   initialHideOldHomes = false,
   initialHideExistingBackup = true,
+  initialTier = "all",
 }: {
   rows: TopHomeRow[];
   /** Real gate-passed county home count (api.homes_ranked_weighted_count), server-rendered. */
@@ -214,7 +219,6 @@ export function RankingBoard({
   predictedRows: PredictedHomeRow[];
   predictedTotal: number | null;
   /** api.model_card, server-rendered for the "How we know it works" panel. */
-  modelCard?: ModelCardData | null;
   countyName?: string;
   /** M3-W1: the county the ranking/map/table are scoped to — follows
    * the top-bar county switcher via app/ranking/page.tsx's `?county=`. */
@@ -233,6 +237,8 @@ export function RankingBoard({
   initialBlockGroupGeoid?: string | null;
   initialHideOldHomes?: boolean;
   initialHideExistingBackup?: boolean;
+  /** Lead-list "Priority" filter -- decile range under the hood (lib/priorityTier). */
+  initialTier?: PriorityTierKey | "all";
 }) {
   // M4-W2: predicted is the default ranking mode; "weighted" is the
   // team-adjustment alternative (unchanged M2-W1 behavior).
@@ -248,6 +254,11 @@ export function RankingBoard({
   // is excluded from outreach ranking by default; toggle restores them).
   // Wired straight through to api.homes_ranked_weighted's p_exclude_backup.
   const [hideExistingBackup, setHideExistingBackup] = useState(initialHideExistingBackup);
+  // Priority tier filter -- "all" means every tier; otherwise a
+  // decileRangeForTier(tier) range is sent to /api/top-homes. Only
+  // affects predicted mode (the model's own decile); has no effect in
+  // team-weighted mode, which has no decile.
+  const [tierFilter, setTierFilter] = useState<PriorityTierKey | "all">(initialTier);
 
   // M-drilldown (item 3): city/ZIP filter state -- null = "All", ""
   // (empty string) = the "no value on file" bucket, same convention as
@@ -408,6 +419,7 @@ export function RankingBoard({
             withTotal: true,
             hideOldHomes,
             excludeBackup: hideExistingBackup,
+            tier: tierFilter,
           }),
           selectedGeoid
             ? fetchPredictedPage({
@@ -420,6 +432,7 @@ export function RankingBoard({
                 withTotal: false,
                 hideOldHomes,
                 excludeBackup: hideExistingBackup,
+                tier: tierFilter,
               })
             : Promise.resolve({ rows: [] as PredictedHomeRow[], total: null }),
         ]);
@@ -437,7 +450,7 @@ export function RankingBoard({
     }, DEBOUNCE_MS);
 
     return () => clearTimeout(debounceTimer);
-  }, [mode, selectedGeoid, selectedCity, selectedZip, hideOldHomes, hideExistingBackup]);
+  }, [mode, selectedGeoid, selectedCity, selectedZip, hideOldHomes, hideExistingBackup, tierFilter]);
 
   useEffect(() => {
     return () => {
@@ -459,6 +472,7 @@ export function RankingBoard({
         withTotal: false,
         hideOldHomes,
         excludeBackup: hideExistingBackup,
+        tier: tierFilter,
       });
       if (mySeq !== predictedSeqRef.current) return;
       setPredictedRows(page.rows);
@@ -600,6 +614,8 @@ export function RankingBoard({
       else params.delete("zip");
       if (selectedGeoid !== null) params.set("bg", selectedGeoid);
       else params.delete("bg");
+      if (tierFilter !== "all") params.set("tier", tierFilter);
+      else params.delete("tier");
       const next = `${window.location.pathname}?${params.toString()}`;
       if (`${window.location.pathname}${window.location.search}` !== next) {
         window.history.replaceState(window.history.state, "", next);
@@ -607,7 +623,7 @@ export function RankingBoard({
     }, DEBOUNCE_MS);
     return () => clearTimeout(syncTimer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, weights, hideExistingBackup, hideOldHomes, selectedCity, selectedZip, selectedGeoid]);
+  }, [mode, weights, hideExistingBackup, hideOldHomes, selectedCity, selectedZip, selectedGeoid, tierFilter]);
 
   const countyTop10 = countyTotals(geoRollup).top10Count;
 
@@ -652,18 +668,27 @@ export function RankingBoard({
     <div className="ranking-board">
       <div className="ranking-board__rail">
         {leftRail}
-        <Panel>
-          <h2
+        {/* Ranking is ordered by the model's likelihood by default (T-review
+            item: "not on the default path"). Manager-only choices --
+            switching to a team-weighted score, and the sliders that drive
+            it -- live behind this disclosure so a rep opening this page
+            never has to look at them. Closed by default. */}
+        <Panel as="details" data-testid="adjust-priorities-disclosure">
+          <summary
             style={{
+              cursor: "pointer",
               fontFamily: "var(--type-heading-font-family)",
               fontSize: "var(--type-heading-font-size)",
               fontWeight: "var(--type-heading-font-weight)",
-              margin: "0 0 var(--space-2) 0",
             }}
           >
-            Rank homes by
-          </h2>
-          <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-2)" }}>
+            Adjust priorities (team choice)
+          </summary>
+          <p style={{ margin: "var(--space-2) 0 var(--space-3) 0", fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)" }}>
+            The list below is ordered by the model&rsquo;s likelihood of adding backup by default. Switch to a
+            team-weighted score only if your team wants to rank by its own signal mix instead.
+          </p>
+          <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-2)", marginBottom: "var(--space-4)" }}>
             <label style={{ display: "flex", alignItems: "flex-start", gap: "var(--space-2)" }}>
               <input
                 type="radio"
@@ -673,9 +698,9 @@ export function RankingBoard({
                 data-testid="ranking-mode-predicted"
               />
               <span>
-                <strong>Most likely to add backup</strong> (predicted)
+                <strong>Most likely to add backup</strong> (default)
                 <div style={{ fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)" }}>
-                  A model trained on real installs -- see &ldquo;How we know it works&rdquo; below.
+                  A model trained on real installs — see &ldquo;How leads are prioritized&rdquo; for the accuracy check.
                 </div>
               </span>
             </label>
@@ -695,37 +720,12 @@ export function RankingBoard({
               </span>
             </label>
           </div>
-        </Panel>
-        <Panel data-testid="prediction-proof-panel">
-          <h2
-            style={{
-              fontFamily: "var(--type-heading-font-family)",
-              fontSize: "var(--type-heading-font-size)",
-              fontWeight: "var(--type-heading-font-weight)",
-              margin: "0 0 var(--space-2) 0",
-            }}
-          >
-            How we know it works
-          </h2>
-          <PredictionProof modelCard={modelCard} />
-        </Panel>
-        {/* M4-W2: WeightSliders' own "Weights" heading is owned by a
-            different ticket (M2-W1) and isn't editable here, so the
-            "Team adjustment (optional)" label wraps it as an outer
-            heading instead of replacing the inner one -- reported as a
-            deviation. Moving any slider switches to Team-weighted mode,
-            since a slider has no effect while predicted mode is active. */}
-        <div>
-          <h2
-            style={{
-              fontFamily: "var(--type-heading-font-family)",
-              fontSize: "var(--type-heading-font-size)",
-              fontWeight: "var(--type-heading-font-weight)",
-              margin: "0 0 var(--space-2) 0",
-            }}
-          >
-            Team adjustment (optional)
-          </h2>
+          {/* M4-W2: WeightSliders' own "Weights" heading is owned by a
+              different ticket (M2-W1) and isn't editable here, so the
+              "Team adjustment (optional)" label wraps it as an outer
+              heading instead of replacing the inner one -- reported as a
+              deviation. Moving any slider switches to Team-weighted mode,
+              since a slider has no effect while predicted mode is active. */}
           <WeightSliders
             weights={weights}
             onChange={(next) => {
@@ -735,7 +735,10 @@ export function RankingBoard({
             onReset={() => setWeights(equalWeights())}
             defaultWeights={defaultWeights}
           />
-        </div>
+        </Panel>
+        <p style={{ margin: 0, fontSize: "var(--type-label-font-size)" }}>
+          <Link href="/sources#how-leads-are-prioritized">How leads are prioritized &amp; the model&rsquo;s accuracy check →</Link>
+        </p>
         <Panel>
           <label style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", fontSize: "var(--type-body-font-size)" }}>
             <input
@@ -1035,7 +1038,7 @@ export function RankingBoard({
             Close
           </button>
         </div>
-        <ScoreExplainer propId={explainPropId} weights={weights} />
+        <ScoreExplainer propId={explainPropId} weights={weights} countyName={countyName} />
       </Panel>
     ) : null}
     </div>

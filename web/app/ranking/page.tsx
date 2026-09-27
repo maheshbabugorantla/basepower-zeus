@@ -6,10 +6,10 @@ import { EligibilityFunnel, type FunnelStep } from "../../components/Eligibility
 import { GateCounts, type GateCountRow } from "../../components/GateCounts";
 import type { TopHomeRow } from "../../components/TopHomesTable";
 import { fetchRankedHomes, fetchPredictedHomes, SIGNAL_KEYS, type SignalKey, type PredictedHomeRow } from "../api/top-homes/route";
-import type { ModelCardData } from "../../components/PredictionProof";
 import { getCountiesWithScoredHomes } from "../../lib/counties.server";
-import { resolveCounty } from "../../lib/counties";
+import { resolveCounty, CAD_NAME } from "../../lib/counties";
 import type { GeoRollupRow } from "../../lib/geoRollup";
+import { decileRangeForTier, type PriorityTierKey } from "../../lib/priorityTier";
 
 // M1-W1: MapLibre choropleth of Travis block groups (api.blockgroup_scores,
 // via the app/ranking/blockgroups route handler) + top-50 table
@@ -145,8 +145,16 @@ async function getFunnelSteps(countyFips: string): Promise<FunnelStep[]> {
 // scoring all ~155k homes) -- see fetchPredictedHomes' own comment.
 async function getPredictedHomes(
   countyFips: string,
-  filters: { city?: string | null; zip?: string | null; blockGroupGeoid?: string | null; hideOldHomes?: boolean; excludeBackup?: boolean } = {}
+  filters: {
+    city?: string | null;
+    zip?: string | null;
+    blockGroupGeoid?: string | null;
+    hideOldHomes?: boolean;
+    excludeBackup?: boolean;
+    tier?: PriorityTierKey | "all";
+  } = {}
 ): Promise<{ rows: PredictedHomeRow[]; total: number | null }> {
+  const [minDecile, maxDecile] = decileRangeForTier(filters.tier ?? "all");
   return fetchPredictedHomes({
     countyFips,
     situsCity: filters.city ?? null,
@@ -154,59 +162,10 @@ async function getPredictedHomes(
     blockGroupGeoid: filters.blockGroupGeoid ?? null,
     hideOldHomes: filters.hideOldHomes ?? false,
     excludeBackup: filters.excludeBackup ?? true,
+    minDecile,
+    maxDecile,
     withTotal: true,
   });
-}
-
-interface ModelCardDbRow {
-  model_version: string;
-  algorithm: string;
-  auc_oot: string | number | null;
-  pr_auc_oot: string | number | null;
-  top_decile_lift_oot: string | number | null;
-  calibration: { decile: number; n: number; predicted_mean_p: number; observed_rate: number }[] | null;
-  n_test: number | null;
-  n_positive_test: number | null;
-  notes: string | null;
-}
-
-function toNum(value: string | number | null): number | null {
-  return value === null ? null : Number(value);
-}
-
-/** api.model_card -- the single row the "How we know it works" panel reads every number from. */
-async function getModelCard(): Promise<ModelCardData | null> {
-  try {
-    const rows = await query<ModelCardDbRow>(
-      `select model_version, algorithm, auc_oot, pr_auc_oot, top_decile_lift_oot, calibration, n_test, n_positive_test, notes
-       from api.model_card
-       order by trained_through desc, model_version desc
-       limit 1`
-    );
-    const row = rows[0];
-    if (!row) return null;
-    return {
-      modelVersion: row.model_version,
-      algorithm: row.algorithm,
-      aucOot: toNum(row.auc_oot),
-      prAucOot: toNum(row.pr_auc_oot),
-      topDecileLiftOot: toNum(row.top_decile_lift_oot),
-      calibration: row.calibration
-        ? row.calibration.map((c) => ({
-            decile: c.decile,
-            n: c.n,
-            predictedMeanP: c.predicted_mean_p,
-            observedRate: c.observed_rate,
-          }))
-        : null,
-      nTest: row.n_test,
-      nPositiveTest: row.n_positive_test,
-      notes: row.notes,
-    };
-  } catch (err) {
-    console.error("ranking: failed to load api.model_card", err);
-    return null;
-  }
 }
 
 async function getTopHomes(weights: Record<SignalKey, number>): Promise<{ rows: TopHomeRow[]; total: number }> {
@@ -352,6 +311,9 @@ export default async function RankingPage({
   const initialBlockGroupGeoid = firstParam(rawParams.bg) ?? null;
   const initialHideOldHomes = firstParam(rawParams.pre2000) === "hide";
   const initialHideExistingBackup = firstParam(rawParams.backup) !== "show";
+  const rawTier = firstParam(rawParams.tier);
+  const initialTier: PriorityTierKey | "all" =
+    rawTier === "top" || rawTier === "high" || rawTier === "medium" || rawTier === "low" ? rawTier : "all";
 
   const defaultWeights = await getDefaultWeights();
   const urlWeights: Record<SignalKey, number> = { ...defaultWeights };
@@ -372,8 +334,8 @@ export default async function RankingPage({
   // home) is only fetched server-side when the URL actually asks for it
   // -- otherwise RankingBoard's own client effect fetches it the first
   // time a visitor switches to it, exactly as before this ticket.
-  const [predictedHomes, weightedHomes, modelCard, qualityData, funnelSteps, gateCounts, geoRollup] = await Promise.all([
-    getPredictedHomes(county.fips, { city: initialCity, zip: initialZip, blockGroupGeoid: initialBlockGroupGeoid, hideOldHomes: initialHideOldHomes, excludeBackup: initialHideExistingBackup }),
+  const [predictedHomes, weightedHomes, qualityData, funnelSteps, gateCounts, geoRollup] = await Promise.all([
+    getPredictedHomes(county.fips, { city: initialCity, zip: initialZip, blockGroupGeoid: initialBlockGroupGeoid, hideOldHomes: initialHideOldHomes, excludeBackup: initialHideExistingBackup, tier: initialTier }),
     initialMode === "weighted"
       ? fetchRankedHomes({
           weights: initialWeights,
@@ -386,13 +348,17 @@ export default async function RankingPage({
           withTotal: true,
         })
       : Promise.resolve({ rows: [] as TopHomeRow[], total: 0 }),
-    getModelCard(),
     getQualityPanelData(county.fips),
     getFunnelSteps(county.fips),
     getGateCounts(county.fips),
     getGeoRollup(county.fips),
   ]);
   const { rows: predictedRows, total: predictedTotal } = predictedHomes;
+  // Design-inspiration header ("Now ranking: County · N homes · Base
+  // serves M"): both counts come from the same gate-count rows the left
+  // rail's own GateCounts panel reads, never a second query.
+  const gateTotalHomes = gateCounts.reduce((sum, r) => sum + r.homeCount, 0);
+  const gateServableHomes = gateCounts.find((r) => r.reason === "passed")?.homeCount ?? 0;
 
   // Perf follow-up (0303b): api.gate_counts / api.parcel_gate_counts /
   // api.gate_counts_by_market now all carry county_fips, so every count
@@ -400,9 +366,9 @@ export default async function RankingPage({
   // across every loaded county" caveat.
   const leftRail = (
     <>
-      <EligibilityFunnel steps={funnelSteps} />
+      <EligibilityFunnel steps={funnelSteps} appraisalDistrictName={CAD_NAME[county.fips] ?? `${county.name} Central Appraisal District`} />
       <GateCounts rows={gateCounts} countyFips={county.fips} />
-      <QualityPanel data={qualityData} />
+      <QualityPanel data={qualityData} countyName={county.name} />
     </>
   );
 
@@ -417,11 +383,18 @@ export default async function RankingPage({
             margin: 0,
           }}
         >
-          Where should Base knock next?
+          Lead list
         </h1>
+        {/* Design-inspiration header: the scope in one line, then the
+            whole method in one sentence -- no dashboard of panels above
+            the fold, no probability/multiple anywhere in it. */}
+        <p style={{ margin: "var(--space-1) 0 0 0", fontFamily: "var(--type-data-font-family)" }}>
+          Now ranking: {county.name} County · {gateTotalHomes.toLocaleString()} homes · Base serves{" "}
+          {gateServableHomes.toLocaleString()}
+        </p>
         <p style={{ color: "var(--theme-ink-muted)", margin: "var(--space-1) 0 0 0", maxWidth: "80ch" }}>
-          Ranking owner-occupied single-family homes inside {county.name} County on outage
-          exposure, grid value, installability and household fit.
+          Priority = a model trained on past backup-battery and generator permits; each home&rsquo;s reasons are its
+          strongest signals. <Link href="/sources#how-leads-are-prioritized">How this works →</Link>
         </p>
         <p style={{ margin: "var(--space-1) 0 0 0" }}>
           <Link href={`/ranking/coverage?county=${county.fips}`}>
@@ -437,7 +410,6 @@ export default async function RankingPage({
         defaultWeights={defaultWeights}
         predictedRows={predictedRows}
         predictedTotal={predictedTotal}
-        modelCard={modelCard}
         countyName={county.name}
         countyFips={county.fips}
         geoRollup={geoRollup}
@@ -448,6 +420,7 @@ export default async function RankingPage({
         initialBlockGroupGeoid={initialBlockGroupGeoid}
         initialHideOldHomes={initialHideOldHomes}
         initialHideExistingBackup={initialHideExistingBackup}
+        initialTier={initialTier}
       />
     </div>
   );

@@ -31,6 +31,17 @@ export const COUNTY_MAP_CENTER: Record<string, { center: [number, number]; zoom:
   "48491": { center: [-97.6772, 30.6333], zoom: 10 }, // Williamson (Georgetown)
 };
 
+/** Plain appraisal-district name per county -- T7 fix: several panels
+ * (EligibilityFunnel's footer, the home-detail page's property line)
+ * used to hardcode "Travis Central Appraisal District"/"Travis CAD"
+ * regardless of which county the parcel actually sits in. One shared
+ * map so every caller says the right district. */
+export const CAD_NAME: Record<string, string> = {
+  "48453": "Travis Central Appraisal District",
+  "48201": "Harris County Appraisal District (HCAD)",
+  "48491": "Williamson Central Appraisal District (WCAD)",
+};
+
 /** Resolve a `?county=` search param against the counties that actually
  * have scored homes — an unknown/missing/not-yet-loaded value silently
  * falls back to Travis rather than 404ing or showing an empty page. */

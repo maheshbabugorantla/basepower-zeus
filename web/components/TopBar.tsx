@@ -28,22 +28,38 @@ import type { CountyOption } from "../lib/counties";
 function CountySwitcherInner({ counties }: { counties: CountyOption[] }) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const activeFips = searchParams.get("county") ?? counties[0]?.fips ?? "48453";
+  // T4 fix: /home/[prop_id] has no ?county= concept at all -- that page
+  // is keyed by prop_id, and a home's county comes from ITS OWN record,
+  // never the search params. The switcher used to rewrite ?county= on
+  // the current /home/W... url, which changed nothing about which
+  // property showed (still the same Travis home) while ExportButton (it
+  // DOES read ?county=) started building a Williamson export link --
+  // "changed export geography but kept the Travis property." On a home
+  // page the switcher instead navigates AWAY to that county's own lead
+  // list, and never claims a home page is "in" any county.
+  const onHomeDetail = pathname?.startsWith("/home/") ?? false;
+  const activeFips = onHomeDetail ? null : searchParams.get("county") ?? counties[0]?.fips ?? "48453";
 
   return (
     <div role="group" aria-label="County" className="county-switcher">
-      <span className="county-switcher__label">County</span>
+      <span className="county-switcher__label">{onHomeDetail ? "Go to county" : "County"}</span>
       {counties.map((county) => {
-        const params = new URLSearchParams(searchParams.toString());
-        params.set("county", county.fips);
-        // M-urlstate (item 4): a different county may not even contain the
-        // previously-selected city/ZIP/block group (or the weighted-mode
-        // filters that go with them), so switching counties clears the
-        // drill-down state rather than carrying stale filters over.
-        params.delete("city");
-        params.delete("zip");
-        params.delete("bg");
-        const href = `${pathname}?${params.toString()}`;
+        let href: string;
+        if (onHomeDetail) {
+          href = `/ranking?county=${county.fips}`;
+        } else {
+          const params = new URLSearchParams(searchParams.toString());
+          params.set("county", county.fips);
+          // M-urlstate (item 4): a different county may not even contain
+          // the previously-selected city/ZIP/block group (or the
+          // weighted-mode filters that go with them), so switching
+          // counties clears the drill-down state rather than carrying
+          // stale filters over.
+          params.delete("city");
+          params.delete("zip");
+          params.delete("bg");
+          href = `${pathname}?${params.toString()}`;
+        }
         const isActive = county.fips === activeFips;
         return (
           <Link
