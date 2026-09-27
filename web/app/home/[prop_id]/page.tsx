@@ -14,6 +14,7 @@ import { utilityStatusForHome, buildYearNote, tierForDecile, type PriorityTierKe
 import { PermitPath, type PermitPathKind, type PermitPathStatsRow, type PermitRulesCitation } from "../../../components/PermitPath";
 import { GridValue } from "../../../components/GridValue";
 import { COUNTY_CANDIDATES, CAD_NAME } from "../../../lib/counties";
+import { CAD_SHORT } from "../../../lib/homeRowFormat";
 import { HomeTabs, JumpToTab } from "../../../components/HomeTabs";
 import { CaseForKnock } from "../../../components/CaseForKnock";
 
@@ -917,13 +918,9 @@ export default async function HomeDetailPage({
     territoryNullReason: homeSignals?.territory_null_reason ?? null,
   });
   const priorityTier = tierForDecile(homePropensity?.decile ?? null);
-  // Real dataset names behind the signals CaseForKnock's sentence
-  // templates actually use (backup_intent/installability/home_permits ->
-  // Austin permits; home_value/parcel facts -> the county CAD; income_100k/
-  // age_35_64 -> ACS; outage -> EIA-861) -- a fixed list of the datasets
-  // this app's data model ties to those signals, not a per-home dynamic
-  // lookup (a known simplification, not an invented source).
-  const caseSourceNames = ["Austin permits", `${countyName} CAD`, "ACS 2024", "EIA-861"];
+  // The case sentence's sources note is built inside CaseForKnock from the
+  // signals it actually shows (lib/homeRowFormat.ts signalSource), with
+  // this home's own county appraisal district.
 
   const recentPermits = [...home.permits]
     .sort((a, b) => (b.issue_date ?? "").localeCompare(a.issue_date ?? ""))
@@ -1083,7 +1080,7 @@ export default async function HomeDetailPage({
           <CaseForKnock
             propId={home.prop_id}
             weights={EQUAL_WEIGHTS}
-            sourceNames={caseSourceNames}
+            cadShort={CAD_SHORT[home.county_fips ?? ""]}
             maxMeters={6}
             includeMissingMeter
           />

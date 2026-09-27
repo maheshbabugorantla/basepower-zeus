@@ -604,7 +604,7 @@
 
 .count-badge {
   background-color: var(--color-brand-subtle);
-  color: var(--theme-brand-accent-text);
+  color: var(--color-brand-strong);
   border-radius: var(--rounded-sm);
   padding: 0 6px;
   font-family: var(--type-data-font-family);
@@ -664,6 +664,8 @@
 
 .case-sentence__figure {
   font-weight: 600;
+  /* the highlight is always pale lime, so its text is always dark ink */
+  color: var(--color-ink);
   background-color: var(--color-brand-subtle);
   border-radius: 2px;
   padding: 0 3px;
