@@ -70,6 +70,25 @@ export const UNSCORED_FILTER = ["==", ["get", "score"], null] as unknown as Expr
 
 const HAS_FEATURE_STATE_SCORE = ["!=", ["feature-state", "score"], null] as unknown as ExpressionSpecification;
 
+/** Recursively walks any GeoJSON geometry's coordinate array (Polygon,
+ * MultiPolygon, or a nested array of either), extending [minLon, minLat,
+ * maxLon, maxLat] in place. No turf dependency -- this repo's other map
+ * code doesn't pull one in either, and a plain min/max walk is all a
+ * fitBounds box needs. */
+function extendBbox(bbox: [number, number, number, number], coords: unknown): void {
+  if (!Array.isArray(coords)) return;
+  if (typeof coords[0] === "number" && typeof coords[1] === "number") {
+    const lon = coords[0] as number;
+    const lat = coords[1] as number;
+    if (lon < bbox[0]) bbox[0] = lon;
+    if (lat < bbox[1]) bbox[1] = lat;
+    if (lon > bbox[2]) bbox[2] = lon;
+    if (lat > bbox[3]) bbox[3] = lat;
+    return;
+  }
+  for (const c of coords) extendBbox(bbox, c);
+}
+
 function buildHatchPattern(): ImageData {
   const size = 8;
   const canvas = document.createElement("canvas");
@@ -126,6 +145,11 @@ export interface BlockGroupMapProps {
   onDotHover?: (propId: string | null) => void;
   /** CSS height; defaults to filling its container (Main.dc.html's single-screen layout). */
   height?: string;
+  /** M-drilldown (revised): the block groups the current city/ZIP/
+   * neighborhood selection covers (from api.home_geo_rollup, RankingBoard's
+   * own fitToGeoids) -- the map fits its viewport to their combined
+   * bounds. null/[] resets to the county's default center/zoom. */
+  fitToGeoids?: string[] | null;
 }
 
 const SOURCE_ID = "blockgroups";
@@ -149,6 +173,7 @@ export function BlockGroupMap({
   hoveredPropId = null,
   onDotHover,
   height = "100%",
+  fitToGeoids = null,
 }: BlockGroupMapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
@@ -368,6 +393,69 @@ export function BlockGroupMap({
     if (map.isStyleLoaded()) apply();
     else map.once("load", apply);
   }, [selectedGeoid]);
+
+  // ---------------------------------------------------------------------
+  // M-drilldown (revised): fit the viewport to the selected area's block
+  // groups. Runs off the already-loaded SOURCE_ID GeoJSON source (no
+  // second fetch) -- querySourceFeatures needs the source parsed, so this
+  // waits for `ready` (set once on map "load") and retries via
+  // "sourcedata" if the tile/feature index isn't populated yet on the
+  // first try (same wait pattern the collectGeoids effect above uses).
+  // ---------------------------------------------------------------------
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready) return;
+
+    if (!fitToGeoids || fitToGeoids.length === 0) {
+      const mapCenter = COUNTY_MAP_CENTER[countyFips] ?? COUNTY_MAP_CENTER["48453"];
+      map.easeTo({ center: mapCenter.center, zoom: mapCenter.zoom });
+      return;
+    }
+
+    const wanted = new Set(fitToGeoids);
+    let cancelled = false;
+
+    // `map` is narrowed non-null above, but TS doesn't carry that through
+    // a nested function declaration's closure -- `m` is the same value,
+    // just captured through a binding TS keeps typed non-null throughout.
+    const m: MapLibreMap = map;
+
+    function tryFit() {
+      if (cancelled) return;
+      let features: ReturnType<MapLibreMap["querySourceFeatures"]>;
+      try {
+        features = m.querySourceFeatures(SOURCE_ID, {
+          filter: ["in", ["get", "geoid"], ["literal", Array.from(wanted)]] as unknown as ExpressionSpecification,
+        });
+      } catch {
+        return; // source not parsed yet -- the sourcedata listener below retries
+      }
+      if (features.length === 0) return;
+      const bbox: [number, number, number, number] = [Infinity, Infinity, -Infinity, -Infinity];
+      for (const f of features) {
+        if (f.geometry && "coordinates" in f.geometry) extendBbox(bbox, f.geometry.coordinates);
+      }
+      if (!Number.isFinite(bbox[0])) return;
+      m.fitBounds(
+        [
+          [bbox[0], bbox[1]],
+          [bbox[2], bbox[3]],
+        ],
+        { padding: 48, maxZoom: 15, duration: 500 }
+      );
+    }
+
+    tryFit();
+    const onSourceData = (e: { sourceId?: string; dataType?: string }) => {
+      if (e.sourceId === SOURCE_ID && m.isSourceLoaded(SOURCE_ID)) tryFit();
+    };
+    m.on("sourcedata", onSourceData as Parameters<MapLibreMap["on"]>[1]);
+    return () => {
+      cancelled = true;
+      m.off("sourcedata", onSourceData as Parameters<MapLibreMap["off"]>[1]);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready, countyFips, JSON.stringify(fitToGeoids)]);
 
   // ---------------------------------------------------------------------
   // Dots — every gate-passed home in the selected block group, colored by

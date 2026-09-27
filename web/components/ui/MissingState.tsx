@@ -54,6 +54,11 @@ const REASON_TEXT: Record<string, string> = {
   suppressed_1_to_10: "Hidden by the source for privacy (1 to 10 people)",
   territories_not_loaded: "Utility service areas not loaded yet",
   territory_not_base_served: "In a utility Base doesn't serve",
+  // M-utility-gate (0303): every HIFLD territory polygon overlaps for
+  // this county, so which utility serves this home can't be confirmed
+  // from the polygon alone -- still ranked/scored, just not counted as
+  // Base-servable until confirmed at the address.
+  utility_not_confirmed: "Utility not confirmed — check the address with the utility",
   utility_not_in_retail_market_file: "This utility isn't in the market list yet",
   zip_not_in_empower: "This ZIP isn't in the Medicare device data",
 };

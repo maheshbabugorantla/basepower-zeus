@@ -36,6 +36,13 @@ function CountySwitcherInner({ counties }: { counties: CountyOption[] }) {
       {counties.map((county) => {
         const params = new URLSearchParams(searchParams.toString());
         params.set("county", county.fips);
+        // M-urlstate (item 4): a different county may not even contain the
+        // previously-selected city/ZIP/block group (or the weighted-mode
+        // filters that go with them), so switching counties clears the
+        // drill-down state rather than carrying stale filters over.
+        params.delete("city");
+        params.delete("zip");
+        params.delete("bg");
         const href = `${pathname}?${params.toString()}`;
         const isActive = county.fips === activeFips;
         return (

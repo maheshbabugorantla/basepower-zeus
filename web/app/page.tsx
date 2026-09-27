@@ -12,7 +12,7 @@ import { StatRow, StatList } from "../components/ui/StatRow";
 import { PermitTimelinePanel, type PermitQuarterRow } from "../components/PermitTimelinePanel";
 import { PredictionProof, type ModelCardData } from "../components/PredictionProof";
 import { getCountiesWithScoredHomes } from "../lib/counties.server";
-import { COUNTY_CANDIDATES } from "../lib/counties";
+import { COUNTY_CANDIDATES, resolveCounty } from "../lib/counties";
 import { StormRecordPanel, type StormRecordCounty } from "../components/StormRecordPanel";
 
 // M0-W1: server component. `force-dynamic` is required, not decorative —
@@ -82,10 +82,15 @@ async function getDistributorReliability(
 ): Promise<DistributorReliabilityRow[]> {
   try {
     const rows = await query<DistributorReliabilityDbRow>(
+      // Perf follow-up: was a live `select distinct county_fips,
+      // territory_eia_id from core.mv_home_signals` (measured 1.4s x21 on
+      // zeus_web_ro -- a full scan+distinct over every gated home).
+      // api.county_territories (0303b) is the same distinct pair,
+      // precomputed once per refresh.
       `with present as (
-         select distinct county_fips, territory_eia_id
-         from core.mv_home_signals
-         where county_fips = any($1::text[]) and territory_eia_id is not null
+         select county_fips, territory_eia_id
+         from api.county_territories
+         where county_fips = any($1::text[])
        )
        select
          cw.base_name,
@@ -327,18 +332,20 @@ interface GateCounts {
   source: (Omit<ProvenancePopoverProps, "children" | "id">) | null;
 }
 
-async function getGateCounts(): Promise<GateCounts | null> {
+async function getGateCounts(countyFips: string): Promise<GateCounts | null> {
   try {
     const rows = await query<GateCountsRow>(
       `select
          pgc.total_parcels,
          pgc.single_family_count,
          pgc.homestead_count,
-         (select sum(home_count) from api.gate_counts) as gated_count,
+         (select sum(home_count) from api.gate_counts where county_fips = $1) as gated_count,
          s.source, s.url, s.retrieved_at, s.sha256, s.storage_key, s.runner,
          s.latest_run_id, s.latest_run_rows_in, s.latest_run_rows_loaded
        from api.parcel_gate_counts pgc
-       left join api.sources s on s.source_id = pgc.source_ids[1]`
+       left join api.sources s on s.source_id = pgc.source_ids[1]
+       where pgc.county_fips = $1`,
+      [countyFips]
     );
     const row = rows[0];
     if (!row) return null;
@@ -377,15 +384,30 @@ async function getGateCounts(): Promise<GateCounts | null> {
   }
 }
 
-async function getTopHomesCount(): Promise<number | null> {
+interface TopHomesCount {
+  passedCount: number | null;
+  /** M-utility-gate: homes that ARE ranked/scored but not yet confirmed
+   * Base-servable (Williamson today) -- read separately so the Overview
+   * can say why the count is 0/low instead of the generic "ranking not
+   * available" (which would wrongly imply the pipeline hasn't run). */
+  utilityNotConfirmedCount: number | null;
+}
+
+async function getTopHomesCount(countyFips: string): Promise<TopHomesCount> {
   try {
-    const rows = await query<{ n: string | number | null }>(
-      `select home_count as n from api.gate_counts where reason = 'passed'`
+    const rows = await query<{ reason: string; n: string | number | null }>(
+      `select reason, home_count as n from api.gate_counts
+       where county_fips = $1 and reason in ('passed', 'utility_not_confirmed')`,
+      [countyFips]
     );
-    return rows[0] && rows[0].n !== null ? Number(rows[0].n) : null;
+    const byReason = new Map(rows.map((r) => [r.reason, r.n === null ? null : Number(r.n)]));
+    return {
+      passedCount: byReason.get("passed") ?? null,
+      utilityNotConfirmedCount: byReason.get("utility_not_confirmed") ?? null,
+    };
   } catch (err) {
     console.error("page: failed to load ranked home count", err);
-    return null;
+    return { passedCount: null, utilityNotConfirmedCount: null };
   }
 }
 
@@ -499,15 +521,26 @@ async function getSourcesLoadedCount(): Promise<number | null> {
   }
 }
 
-export default async function HomePage() {
-  const scoredCounties = await getCountiesWithScoredHomes();
+export default async function HomePage({
+  // Optional (default {}) so existing tests that render HomePage() with
+  // no args (pre-dating this county-scoping change) keep compiling and
+  // get Travis/the first available county, exactly as before.
+  searchParams = Promise.resolve({}),
+}: {
+  searchParams?: Promise<{ county?: string }>;
+} = {}) {
+  const [{ county: requestedCounty }, scoredCounties] = await Promise.all([
+    searchParams,
+    getCountiesWithScoredHomes(),
+  ]);
+  const county = resolveCounty(requestedCounty, scoredCounties);
   const scoredCountyFips = scoredCounties.map((c) => c.fips);
   const [distributors, countyContext, gateCounts, topHomesCount, sourcesLoadedCount, permitTimeline, modelCard, stormRecords] =
     await Promise.all([
       getDistributorReliability(scoredCountyFips),
       getCountyOutageContext(),
-      getGateCounts(),
-      getTopHomesCount(),
+      getGateCounts(county.fips),
+      getTopHomesCount(county.fips),
       getSourcesLoadedCount(),
       getPermitTimelineByQuarter(),
       getModelCard(),
@@ -532,7 +565,8 @@ export default async function HomePage() {
         <p style={{ color: "var(--theme-ink-muted)", margin: 0, maxWidth: "70ch" }}>
           Real public data on Texas homes ({scoredCounties.map((c) => c.name).join(", ")}{" "}
           {scoredCounties.length > 1 ? "Counties" : "County"} so far), gated to owner-occupied
-          single-family parcels, scored for Base Power outreach.
+          single-family parcels, scored for Base Power outreach. Ranking readiness below is for{" "}
+          {county.name} County.
         </p>
       </div>
 
@@ -573,14 +607,8 @@ export default async function HomePage() {
             marginTop: 0,
           }}
         >
-          Ranking readiness
+          Ranking readiness -- {county.name} County
         </h2>
-        {scoredCounties.length > 1 ? (
-          <p style={{ margin: "0 0 var(--space-2) 0", fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)" }}>
-            Combined across every loaded county ({scoredCounties.map((c) => c.name).join(", ")}) -- not yet split by
-            county.
-          </p>
-        ) : null}
         {gateCounts === null ? (
           <MissingState variant="not-loaded" reason="County parcel records not loaded yet" />
         ) : (
@@ -618,9 +646,24 @@ export default async function HomePage() {
             <StatRow
               id="overview-top-homes"
               label="Homes ranked (Base can serve them)"
-              value={topHomesCount === null ? null : topHomesCount.toLocaleString()}
+              // A real 0-with-utility-not-confirmed-homes county
+              // (Williamson) renders the explanatory MissingState below
+              // instead of a bare "0 homes" -- that reads as "ranking
+              // hasn't run" when actually every home there IS ranked,
+              // just not yet confirmed Base-servable.
+              value={
+                topHomesCount.passedCount === 0 && (topHomesCount.utilityNotConfirmedCount ?? 0) > 0
+                  ? null
+                  : topHomesCount.passedCount === null
+                    ? null
+                    : topHomesCount.passedCount.toLocaleString()
+              }
               unit="homes"
-              missingReason="Ranking not available right now"
+              missingReason={
+                topHomesCount.passedCount === 0 && (topHomesCount.utilityNotConfirmedCount ?? 0) > 0
+                  ? `${(topHomesCount.utilityNotConfirmedCount ?? 0).toLocaleString()} homes are ranked but not yet confirmed Base-servable -- check the address with the utility`
+                  : "Ranking not available right now"
+              }
               linkHref="/ranking"
               linkLabel="See table & map"
             />

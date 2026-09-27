@@ -9,6 +9,7 @@ import { fetchRankedHomes, fetchPredictedHomes, SIGNAL_KEYS, type SignalKey, typ
 import type { ModelCardData } from "../../components/PredictionProof";
 import { getCountiesWithScoredHomes } from "../../lib/counties.server";
 import { resolveCounty } from "../../lib/counties";
+import type { GeoRollupRow } from "../../lib/geoRollup";
 
 // M1-W1: MapLibre choropleth of Travis block groups (api.blockgroup_scores,
 // via the app/ranking/blockgroups route handler) + top-50 table
@@ -101,7 +102,7 @@ interface GateCountsRow {
   home_count: string | number;
 }
 
-async function getFunnelSteps(): Promise<FunnelStep[]> {
+async function getFunnelSteps(countyFips: string): Promise<FunnelStep[]> {
   // M2-W1 perf fix: this used to run a live `select count(*) ... FILTER
   // (...) from core.parcels` (a full 441,961-row scan) plus a second
   // `count(*) from core.mv_home_block_group` on every /ranking request —
@@ -113,10 +114,15 @@ async function getFunnelSteps(): Promise<FunnelStep[]> {
   // core.mv_home_signals) for the last — sum(home_count) across every
   // reason is exactly the single-family + homestead + parcel-geometry
   // population, since core.mv_home_signals has one row per home in that
-  // population regardless of the M2 territory-gate outcome.
+  // population regardless of the M2 territory-gate outcome. Both views
+  // now carry county_fips (0303b), so this scopes to the selected county
+  // instead of a combined total across every loaded county.
   const [pgcRows, gateRows] = await Promise.all([
-    query<ParcelGateCountsRow>(`select total_parcels, single_family_count from api.parcel_gate_counts`),
-    query<GateCountsRow>(`select reason, home_count from api.gate_counts`),
+    query<ParcelGateCountsRow>(
+      `select total_parcels, single_family_count from api.parcel_gate_counts where county_fips = $1`,
+      [countyFips]
+    ),
+    query<GateCountsRow>(`select reason, home_count from api.gate_counts where county_fips = $1`, [countyFips]),
   ]);
   const pgc = pgcRows[0];
   if (!pgc) return [];
@@ -137,8 +143,19 @@ async function getFunnelSteps(): Promise<FunnelStep[]> {
 // hydration. Reads only api.home_propensity (core.home_propensity, PK
 // joins), never api.homes_ranked_weighted_count (measured ~1.85s on prod
 // scoring all ~155k homes) -- see fetchPredictedHomes' own comment.
-async function getPredictedHomes(countyFips: string): Promise<{ rows: PredictedHomeRow[]; total: number | null }> {
-  return fetchPredictedHomes({ countyFips, withTotal: true });
+async function getPredictedHomes(
+  countyFips: string,
+  filters: { city?: string | null; zip?: string | null; blockGroupGeoid?: string | null; hideOldHomes?: boolean; excludeBackup?: boolean } = {}
+): Promise<{ rows: PredictedHomeRow[]; total: number | null }> {
+  return fetchPredictedHomes({
+    countyFips,
+    situsCity: filters.city ?? null,
+    situsZip: filters.zip ?? null,
+    blockGroupGeoid: filters.blockGroupGeoid ?? null,
+    hideOldHomes: filters.hideOldHomes ?? false,
+    excludeBackup: filters.excludeBackup ?? true,
+    withTotal: true,
+  });
 }
 
 interface ModelCardDbRow {
@@ -211,10 +228,11 @@ async function getTopHomes(weights: Record<SignalKey, number>): Promise<{ rows: 
 // kept only because RankingBoard's props require *some* initial value
 // and other tickets may wire it back in.
 
-async function getGateCounts(): Promise<GateCountRow[]> {
+async function getGateCounts(countyFips: string): Promise<GateCountRow[]> {
   try {
     const rows = await query<{ reason: string; home_count: string | number }>(
-      `select reason, home_count from api.gate_counts order by home_count desc`
+      `select reason, home_count from api.gate_counts where county_fips = $1 order by home_count desc`,
+      [countyFips]
     );
     return rows.map((row) => ({ reason: row.reason, homeCount: Number(row.home_count) }));
   } catch (err) {
@@ -223,7 +241,7 @@ async function getGateCounts(): Promise<GateCountRow[]> {
   }
 }
 
-async function getQualityPanelData(): Promise<QualityPanelData> {
+async function getQualityPanelData(countyFips: string): Promise<QualityPanelData> {
   const [joinRateRows, precisionRows, gateRows] = await Promise.all([
     query<JoinRateRow>(
       `select permits_with_tcad_id, matched_to_parcels, join_rate, join_rate_null_reason
@@ -235,7 +253,8 @@ async function getQualityPanelData(): Promise<QualityPanelData> {
     ),
     query<ParcelGateCountsRow>(
       `select total_parcels, single_family_count, not_single_family_count, homestead_count, not_homestead_count
-       from api.parcel_gate_counts`
+       from api.parcel_gate_counts where county_fips = $1`,
+      [countyFips]
     ),
   ]);
 
@@ -267,52 +286,122 @@ async function getQualityPanelData(): Promise<QualityPanelData> {
   };
 }
 
+interface GeoRollupDbRow {
+  county_fips: string;
+  situs_city: string | null;
+  situs_zip: string | null;
+  block_group_geoid: string;
+  home_count: string | number;
+  avg_p: string | number | null;
+  max_p: string | number | null;
+  top10_count: string | number;
+}
+
+/** M-drilldown: api.home_geo_rollup (core.mv_home_geo_rollup, 0303) --
+ * one precomputed row per (city, ZIP, block group) in the county, read
+ * once per /ranking request and cascaded client-side into the City ->
+ * ZIP -> Neighborhood dropdowns (see lib/geoRollup.ts). Predicted-mode
+ * only -- weighted mode has no per-bucket average to show (a weighted
+ * score is a live per-request computation), so RankingBoard only reads
+ * this array when its ranking mode is "predicted". */
+async function getGeoRollup(countyFips: string): Promise<GeoRollupRow[]> {
+  try {
+    const rows = await query<GeoRollupDbRow>(
+      `select county_fips, situs_city, situs_zip, block_group_geoid, home_count, avg_p, max_p, top10_count
+       from api.home_geo_rollup
+       where county_fips = $1`,
+      [countyFips]
+    );
+    return rows.map((r) => ({
+      countyFips: r.county_fips,
+      situsCity: r.situs_city,
+      situsZip: r.situs_zip,
+      blockGroupGeoid: r.block_group_geoid,
+      homeCount: Number(r.home_count),
+      avgP: r.avg_p === null ? null : Number(r.avg_p),
+      maxP: r.max_p === null ? null : Number(r.max_p),
+      top10Count: Number(r.top10_count),
+    }));
+  } catch (err) {
+    console.error("ranking: failed to load api.home_geo_rollup", err);
+    return [];
+  }
+}
+
+// M-urlstate (item 4): the ranking screen's mode/weights/backup/pre2000/
+// county/city/zip/bg all live in the URL (RankingBoard syncs them via
+// window.history.replaceState) so a reload -- or the CSV export, which
+// forwards the current url's params -- reproduces exactly what's on
+// screen. This reads the same params on first paint so the server render
+// already matches instead of always defaulting to predicted/no-filter.
+function firstParam(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
+}
+
 export default async function RankingPage({
   searchParams,
 }: {
-  searchParams: Promise<{ county?: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  const [{ county: requestedCounty }, availableCounties] = await Promise.all([
-    searchParams,
-    getCountiesWithScoredHomes(),
-  ]);
-  const county = resolveCounty(requestedCounty, availableCounties);
+  const [rawParams, availableCounties] = await Promise.all([searchParams, getCountiesWithScoredHomes()]);
+  const county = resolveCounty(rawParams.county, availableCounties);
+
+  const initialMode: "predicted" | "weighted" = firstParam(rawParams.mode) === "weighted" ? "weighted" : "predicted";
+  const initialCity = firstParam(rawParams.city) ?? null;
+  const initialZip = firstParam(rawParams.zip) ?? null;
+  const initialBlockGroupGeoid = firstParam(rawParams.bg) ?? null;
+  const initialHideOldHomes = firstParam(rawParams.pre2000) === "hide";
+  const initialHideExistingBackup = firstParam(rawParams.backup) !== "show";
 
   const defaultWeights = await getDefaultWeights();
-  // M4-W2 perf: the first paint is predicted mode (the ranking default),
-  // so this no longer eagerly calls api.homes_ranked_weighted_count
-  // (~1.85s on prod, scoring every gated home) for a table that may never
-  // be shown. Team-weighted mode's rows/total are fetched client-side,
-  // the first time a visitor actually switches to it (RankingBoard's own
-  // effect) -- the empty arrays below are only the state until then.
-  const [predictedHomes, modelCard, qualityData, funnelSteps, gateCounts] = await Promise.all([
-    getPredictedHomes(county.fips),
+  const urlWeights: Record<SignalKey, number> = { ...defaultWeights };
+  let anyWeightOnUrl = false;
+  for (const key of SIGNAL_KEYS) {
+    const raw = firstParam(rawParams[`w_${key}`]);
+    const n = raw !== undefined ? Number(raw) : NaN;
+    if (Number.isFinite(n) && n >= 0) {
+      urlWeights[key] = n;
+      anyWeightOnUrl = true;
+    }
+  }
+  const initialWeights = anyWeightOnUrl ? urlWeights : defaultWeights;
+
+  // M4-W2 perf: predicted mode is cheap (api.home_propensity, PK joins),
+  // so it's always fetched for the first paint. Weighted mode
+  // (api.homes_ranked_weighted[_count], ~1.6-1.85s scoring every gated
+  // home) is only fetched server-side when the URL actually asks for it
+  // -- otherwise RankingBoard's own client effect fetches it the first
+  // time a visitor switches to it, exactly as before this ticket.
+  const [predictedHomes, weightedHomes, modelCard, qualityData, funnelSteps, gateCounts, geoRollup] = await Promise.all([
+    getPredictedHomes(county.fips, { city: initialCity, zip: initialZip, blockGroupGeoid: initialBlockGroupGeoid, hideOldHomes: initialHideOldHomes, excludeBackup: initialHideExistingBackup }),
+    initialMode === "weighted"
+      ? fetchRankedHomes({
+          weights: initialWeights,
+          countyFips: county.fips,
+          blockGroupGeoid: initialBlockGroupGeoid,
+          situsCity: initialCity,
+          situsZip: initialZip,
+          hideOldHomes: initialHideOldHomes,
+          excludeBackup: initialHideExistingBackup,
+          withTotal: true,
+        })
+      : Promise.resolve({ rows: [] as TopHomeRow[], total: 0 }),
     getModelCard(),
-    getQualityPanelData(),
-    getFunnelSteps(),
-    getGateCounts(),
+    getQualityPanelData(county.fips),
+    getFunnelSteps(county.fips),
+    getGateCounts(county.fips),
+    getGeoRollup(county.fips),
   ]);
   const { rows: predictedRows, total: predictedTotal } = predictedHomes;
 
-  // BUG fix (visible on prod once Harris/Williamson loaded): api.gate_counts
-  // and api.parcel_gate_counts (core.mv_gate_counts / core.mv_parcel_gate_counts,
-  // 0203_perf_precompute.sql / 0209_gate_counts_by_located_county.sql) have
-  // no county_fips column -- they are single combined totals across every
-  // loaded county, not just the selected one. Filtering them by county here
-  // would require a request-time scan of core.parcels/core.mv_home_signals
-  // (the exact cost those precomputed views exist to avoid), so instead of
-  // silently mislabeling a combined total as county.name's own count, this
-  // says so plainly until a per-county rollup lands (SQL change reported
-  // separately, not applied by this ticket -- it owns web/ only).
-  const countPanelNote =
-    availableCounties.length > 1
-      ? `Combined across every loaded county (${availableCounties.map((c) => c.name).join(", ")}) -- not yet split by county.`
-      : undefined;
-
+  // Perf follow-up (0303b): api.gate_counts / api.parcel_gate_counts /
+  // api.gate_counts_by_market now all carry county_fips, so every count
+  // panel below is scoped to the selected county -- no more "combined
+  // across every loaded county" caveat.
   const leftRail = (
     <>
-      <EligibilityFunnel steps={funnelSteps} note={countPanelNote} />
-      <GateCounts rows={gateCounts} note={countPanelNote} />
+      <EligibilityFunnel steps={funnelSteps} />
+      <GateCounts rows={gateCounts} countyFips={county.fips} />
       <QualityPanel data={qualityData} />
     </>
   );
@@ -342,8 +431,8 @@ export default async function RankingPage({
       </div>
       <RankingBoard
         key={county.fips}
-        rows={[]}
-        initialTotal={0}
+        rows={weightedHomes.rows}
+        initialTotal={weightedHomes.total ?? 0}
         leftRail={leftRail}
         defaultWeights={defaultWeights}
         predictedRows={predictedRows}
@@ -351,6 +440,14 @@ export default async function RankingPage({
         modelCard={modelCard}
         countyName={county.name}
         countyFips={county.fips}
+        geoRollup={geoRollup}
+        initialMode={initialMode}
+        initialWeights={initialWeights}
+        initialCity={initialCity}
+        initialZip={initialZip}
+        initialBlockGroupGeoid={initialBlockGroupGeoid}
+        initialHideOldHomes={initialHideOldHomes}
+        initialHideExistingBackup={initialHideExistingBackup}
       />
     </div>
   );
