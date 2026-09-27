@@ -57,24 +57,17 @@ function runBoot(opts: { search: string; stored: string | null | "throw"; reduce
 }
 
 describe("INTRO_BOOT_SCRIPT agrees with decideIntro", () => {
-  const cases: Array<{ search: string; stored: string | null | "throw"; reduced: boolean }> = [
-    { search: "", stored: null, reduced: false },
-    { search: "", stored: "1", reduced: false },
-    { search: "?intro=0", stored: null, reduced: false },
-    { search: "?intro", stored: "1", reduced: false },
-    { search: "", stored: null, reduced: true },
-    { search: "", stored: "throw", reduced: false },
-  ];
-  for (const c of cases) {
-    it(`covers the page only when the reel will play (${JSON.stringify(c)})`, () => {
-      const expected = decideIntro({
-        search: c.search,
-        stored: c.stored === "throw" ? undefined : c.stored,
-        reducedMotion: c.reduced,
-      }).play;
-      expect(runBoot(c)).toBe(expected);
-    });
-  }
+  // every combination of the three inputs the rules read
+  const searches = ["", "?intro=0", "?intro"];
+  const storedValues: Array<string | null | "throw"> = [null, "1", "throw"];
+  for (const search of searches)
+    for (const stored of storedValues)
+      for (const reduced of [false, true]) {
+        it(`covers the page only when the reel will play (search=${search || "none"}, stored=${stored}, reduced=${reduced})`, () => {
+          const expected = decideIntro({ search, stored: stored === "throw" ? undefined : stored, reducedMotion: reduced }).play;
+          expect(runBoot({ search, stored, reduced })).toBe(expected);
+        });
+      }
 });
 
 describe("timeline", () => {

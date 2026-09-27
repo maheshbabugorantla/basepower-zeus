@@ -23,7 +23,15 @@ export interface IntroGateProps {
 
 export function IntroGate({ landing = "/ranking", navigate = true, force = false }: IntroGateProps) {
   const [playing, setPlaying] = useState(false);
-  const router = useRouter();
+  // Outside a mounted app router (e.g. a layout rendered to static markup in
+  // tests) useRouter throws; the gate then has nothing to do, since the reel
+  // only ever plays in the browser after hydration.
+  let router: ReturnType<typeof useRouter> | null = null;
+  try {
+    router = useRouter();
+  } catch {
+    router = null;
+  }
   const pathname = usePathname();
 
   useEffect(() => {
@@ -44,7 +52,7 @@ export function IntroGate({ landing = "/ranking", navigate = true, force = false
     // page, so the live page is loaded and settled before the reel reveals it.
     // Replacing (not pushing) also drops ?intro, so a reload does not replay.
     if (navigate && (window.location.pathname !== landing || window.location.search !== "")) {
-      router.replace(landing);
+      router?.replace(landing);
     }
     // decided once per page load
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -54,7 +62,7 @@ export function IntroGate({ landing = "/ranking", navigate = true, force = false
     delete document.documentElement.dataset.zeusIntro;
     releaseIntroCover();
     setPlaying(false);
-    if (navigate && window.location.pathname !== landing) router.replace(landing);
+    if (navigate && window.location.pathname !== landing) router?.replace(landing);
     document.getElementById("main")?.focus({ preventScroll: true });
   }
 

@@ -33,6 +33,14 @@ describe("RootLayout — default theme", () => {
     // matchMedia/prefers-color-scheme.
     expect(html).toContain("zeus-theme");
     expect(html).not.toContain("prefers-color-scheme");
-    expect(html).not.toContain("matchMedia");
+    // The theme script itself never reads matchMedia. (The first-visit
+    // intro reel's own boot script, lib/introBootScript.ts, does read
+    // prefers-reduced-motion so the reel never plays for visitors who asked
+    // for less motion -- it never touches data-theme.)
+    const scripts = Array.from(html.matchAll(/<script>([\s\S]*?)<\/script>/g), (m) => m[1]);
+    const themeScript = scripts.find((s) => s.includes("zeus-theme"));
+    expect(themeScript).toBeDefined();
+    expect(themeScript).not.toContain("matchMedia");
+    for (const s of scripts.filter((x) => x !== themeScript)) expect(s).not.toContain("data-theme");
   });
 });
