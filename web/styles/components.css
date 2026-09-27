@@ -376,32 +376,38 @@
 /* Ranking board layout (Main.dc.html: rail + map + table, one screen)    */
 /* ---------------------------------------------------------------------- */
 
-/* Redesign (Mock A, 2026-09-27): the ranking page's own <main> content
- * area is exactly the workspace -- no page scroll at >=1280px. `main`
- * (app/layout.tsx) keeps its normal space-6 padding on every OTHER
- * route; this page alone pulls it back out with negative margins so the
- * board can claim the full space-6-trimmed viewport, then re-applies the
- * same padding as its own so nothing touches the window edge. */
-.ranking-page {
-  /* 65px measured top-bar height (padding + content) + the space-6
-   * padding this page pulls back out below (48px). Adjusted from the
-   * measured innerHeight/scrollHeight during redesign QA. */
-  height: calc(100dvh - 65px - (var(--space-6) * 2));
-  margin: calc(var(--space-6) * -1);
-  padding: var(--space-6);
-  min-height: 560px;
+/* Ranking workspace (Mock A): at desktop widths the map and the rail fill
+ * everything under the top bar, edge to edge, with no page scroll -- the
+ * rail list is the only thing that scrolls. body/main become a flex column
+ * only on this page (:has), so every other route keeps normal flow. */
+@media (min-width: 1280px) {
+  body:has(.ranking-page) {
+    height: 100dvh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  body:has(.ranking-page) > main {
+    flex: 1 1 auto;
+    min-height: 0;
+    /* layout.tsx sets main's padding inline; the workspace is full-bleed */
+    padding: 0 !important;
+  }
+
+  .ranking-page {
+    height: 100%;
+    min-height: 0;
+  }
 }
 
 .ranking-board {
+  --rail-w: clamp(440px, 28vw, 680px);
   display: grid;
-  /* Redesign (Mock A): two columns -- map everywhere else, a fixed
-     470px rail on the right (the mock's own number). The rail owns its
-     own internal scroll; this grid itself never scrolls at >=1280px. */
-  grid-template-columns: minmax(0, 1fr) 470px;
-  gap: var(--space-4);
+  grid-template-columns: minmax(0, 1fr) var(--rail-w);
   align-items: stretch;
   height: 100%;
-  min-height: 560px;
+  min-height: 0;
 }
 
 .ranking-board__rail {
@@ -409,7 +415,7 @@
   flex-direction: column;
   min-height: 0;
   background-color: var(--theme-surface);
-  border-radius: var(--component-panel-rounded);
+  border-left: 1px solid var(--theme-divider);
   overflow: hidden;
 }
 
@@ -428,21 +434,41 @@
 
 .ranking-rail__question {
   font-family: var(--type-heading-font-family);
-  font-size: var(--type-heading-font-size);
+  font-size: 1.0625rem;
+  line-height: 1.3;
   font-weight: var(--type-heading-font-weight);
   margin: 0;
   text-wrap: balance;
 }
 
 .ranking-rail__status {
+  font-family: var(--type-label-font-family);
   font-size: var(--type-label-font-size);
+  line-height: 1.45;
   color: var(--theme-ink-muted);
-  font-family: var(--type-data-font-family);
+  font-variant-numeric: tabular-nums;
+}
+
+.ranking-rail__how {
+  color: var(--theme-brand-accent-text);
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.ranking-rail__how:hover,
+.ranking-rail__how:focus-visible {
+  text-decoration: underline;
 }
 
 .ranking-rail__controls {
   display: flex;
   gap: var(--space-2);
+}
+
+.ranking-rail__controls .btn {
+  flex: none;
+  white-space: nowrap;
 }
 
 .ranking-rail__search {
@@ -480,6 +506,11 @@
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
+}
+
+.ranking-rail__pager {
+  padding: 0 var(--space-4) var(--space-3);
+  border-top: 1px solid var(--theme-divider);
 }
 
 .ranking-rail__list:focus-visible {
@@ -573,7 +604,7 @@
 
 .count-badge {
   background-color: var(--color-brand-subtle);
-  color: var(--theme-brand-accent-text);
+  color: var(--color-brand-strong);
   border-radius: var(--rounded-sm);
   padding: 0 6px;
   font-family: var(--type-data-font-family);
@@ -611,9 +642,7 @@
   cursor: pointer;
 }
 
-.predicted-homes-table__row--expanded {
-  background-color: var(--color-brand-subtle);
-}
+/* (row expansion tint lives on .home-row--expanded below) */
 
 .case-for-knock {
   display: flex;
@@ -635,6 +664,8 @@
 
 .case-sentence__figure {
   font-weight: 600;
+  /* the highlight is always pale lime, so its text is always dark ink */
+  color: var(--color-ink);
   background-color: var(--color-brand-subtle);
   border-radius: 2px;
   padding: 0 3px;
@@ -1203,8 +1234,11 @@
 @media (max-width: 1279px) {
   .ranking-page {
     height: auto;
-    margin: 0;
-    padding: 0;
+  }
+
+  .ranking-board__rail {
+    border-left: none;
+    border-top: 1px solid var(--theme-divider);
   }
 
   .ranking-board {
@@ -1800,4 +1834,377 @@ button:focus-visible,
   .zeus-arcs {
     display: none;
   }
+}
+
+
+/* ---------------------------------------------------------------------- */
+/* Ranked-home rows (components/HomeRow.tsx), shared by both ranking modes */
+/* ---------------------------------------------------------------------- */
+
+.visually-hidden {
+  position: absolute !important;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.home-row {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  column-gap: var(--space-3);
+  align-items: start;
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--theme-divider);
+  cursor: pointer;
+  transition: background-color var(--motion-duration) var(--motion-ease);
+}
+
+.home-row:hover,
+.home-row[data-hovered] {
+  background-color: var(--theme-canvas);
+}
+
+.home-row--expanded,
+.home-row--expanded:hover,
+.home-row--expanded[data-hovered] {
+  background-color: color-mix(in srgb, var(--theme-brand-accent-text) 8%, var(--theme-surface));
+}
+
+.home-row:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: -2px;
+}
+
+.home-row__rankcell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding-top: 1px;
+}
+
+.home-row__rank {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background-color: var(--color-brand-strong);
+  color: #ffffff;
+  font-family: var(--type-label-font-family);
+  font-size: 11px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.home-row--expanded .home-row__rank {
+  box-shadow: 0 0 0 3px var(--color-brand);
+}
+
+.home-row__main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.home-row__address {
+  font-family: var(--type-body-font-family);
+  font-size: var(--type-body-font-size);
+  font-weight: 600;
+  color: var(--theme-ink);
+  text-decoration: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 22px;
+}
+
+.home-row__address:hover,
+.home-row__address:focus-visible {
+  text-decoration: underline;
+}
+
+.home-row__meta,
+.home-row__note {
+  font-size: var(--type-label-font-size);
+  color: var(--theme-ink-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+}
+
+.home-row__chips {
+  grid-column: 2 / -1;
+  display: flex;
+  flex-wrap: nowrap;
+  gap: var(--space-1);
+  margin-top: var(--space-1);
+  min-width: 0;
+  overflow: hidden;
+}
+
+.home-row__chips .chip {
+  flex: 0 1 auto;
+  min-width: 0;
+  padding: 1px 8px;
+  font-size: 11.5px;
+}
+
+.home-row__chips .chip__label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.home-row__side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  padding-top: 3px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.home-row__utility {
+  font-size: 11.5px;
+  color: var(--theme-ink-muted);
+}
+
+.home-row__score {
+  font-family: var(--type-data-font-family);
+  font-size: var(--type-label-font-size);
+}
+
+.home-row__expand {
+  grid-column: 2 / -1;
+  margin-top: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  cursor: auto;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Map overlays: pins, legend card, selected-home card                     */
+/* ---------------------------------------------------------------------- */
+
+.map-pin {
+  min-width: 22px;
+  height: 22px;
+  padding: 0 5px;
+  border-radius: 11px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--type-label-font-family);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.map-pin--filled {
+  background: var(--color-brand-strong);
+  color: #ffffff;
+  border: 2px solid #ffffff;
+}
+
+.map-pin--outlined {
+  background: #ffffff;
+  color: var(--color-brand-strong);
+  border: 2px solid var(--color-brand-strong);
+}
+
+.map-pin--group {
+  background: #ffffff;
+  color: var(--color-brand-strong);
+  border: 2px solid var(--color-brand-strong);
+  padding: 0 7px;
+}
+
+.map-pin--selected {
+  min-width: 30px;
+  height: 30px;
+  border-radius: 15px;
+  font-size: 13px;
+  background: var(--color-brand-strong);
+  color: #ffffff;
+  border: 3px solid #ffffff;
+  box-shadow: 0 0 0 4px var(--color-brand), 0 2px 6px rgba(0, 0, 0, 0.35);
+  z-index: 3;
+}
+
+.map-card {
+  position: absolute;
+  z-index: 2;
+  background-color: var(--theme-surface);
+  color: var(--theme-ink);
+  border-radius: var(--rounded-md);
+  box-shadow: var(--shadow-float);
+  font-family: var(--type-body-font-family);
+}
+
+.map-card--legend {
+  left: var(--space-4);
+  top: var(--space-4);
+  width: 256px;
+  padding: var(--space-3) var(--space-4);
+  font-size: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.map-card__title {
+  font-size: var(--type-label-font-size);
+  font-weight: 600;
+}
+
+.map-card__explain {
+  color: var(--theme-ink-muted);
+  line-height: 1.35;
+}
+
+.map-legend__ramp {
+  height: 8px;
+  border-radius: 2px;
+  margin-top: 2px;
+}
+
+.map-legend__ends {
+  display: flex;
+  justify-content: space-between;
+  color: var(--theme-ink-muted);
+  font-size: 11px;
+}
+
+.map-legend__key {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--theme-ink);
+}
+
+.map-legend__hatch {
+  width: 16px;
+  height: 11px;
+  flex: none;
+  border: 1px solid var(--color-divider);
+  background-image: repeating-linear-gradient(45deg, var(--color-not-loaded-bg) 0 3px, var(--color-surface-sunken) 3px 6px);
+}
+
+.map-legend__pin {
+  width: 12px;
+  height: 12px;
+  flex: none;
+  margin: 0 2px;
+  border-radius: 50%;
+  background: var(--color-brand-strong);
+  box-shadow: 0 0 0 2px #ffffff, 0 0 0 3px rgba(0, 0, 0, 0.2);
+}
+
+.map-legend__dot {
+  width: 10px;
+  height: 10px;
+  flex: none;
+  margin: 0 3px;
+  border-radius: 50%;
+  border: 2px solid #ffffff;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.25);
+}
+
+.map-legend__outline {
+  width: 16px;
+  height: 0;
+  flex: none;
+  border-top: 3px solid var(--color-brand-strong);
+}
+
+.map-card--home {
+  left: var(--space-4);
+  bottom: var(--space-4);
+  width: 340px;
+  max-width: calc(100% - 2 * var(--space-4));
+  padding: var(--space-3) var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.map-card__kicker {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--theme-ink-muted);
+}
+
+.map-card__row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.map-card__address {
+  font-size: 17px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.map-card__tier {
+  flex: none;
+  font-size: var(--type-label-font-size);
+  font-weight: 600;
+  color: var(--theme-brand-accent-text);
+  white-space: nowrap;
+}
+
+.map-card__meta {
+  font-size: 12px;
+  color: var(--theme-ink-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+}
+
+.map-card__link {
+  margin-top: var(--space-2);
+  display: flex;
+  justify-content: space-between;
+  font-size: var(--type-label-font-size);
+  font-weight: 600;
+  color: var(--theme-brand-accent-text);
+  text-decoration: none;
+}
+
+.map-card__link:hover,
+.map-card__link:focus-visible {
+  text-decoration: underline;
+}
+
+/* Three meters side by side inside a rail row (compact case). */
+.home-row__expand .case-meters {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.case-meter__value {
+  line-height: 1.35;
 }

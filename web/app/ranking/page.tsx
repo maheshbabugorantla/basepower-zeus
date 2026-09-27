@@ -283,14 +283,14 @@ export default async function RankingPage({
     gateServableHomes === 0 ? (
       <>
         {gateTotalHomes.toLocaleString()} eligible homes · Base can&rsquo;t confirm service for any home here yet ·{" "}
-        <Link href="/sources#how-leads-are-prioritized">how the ranking works →</Link>
+        <Link href="/sources#how-leads-are-prioritized" className="ranking-rail__how">How the ranking works ↗</Link>
       </>
     ) : (
       <>
         {gateTotalHomes.toLocaleString()} eligible homes · Base serves {gateServableHomes.toLocaleString()}
         {gateNeedsVerificationHomes > 0 ? ` · ${gateNeedsVerificationHomes.toLocaleString()} need a utility check` : ""}
         {gateNotServedHomes > 0 ? ` · ${gateNotServedHomes.toLocaleString()} not served` : ""} ·{" "}
-        <Link href="/sources#how-leads-are-prioritized">how the ranking works →</Link>
+        <Link href="/sources#how-leads-are-prioritized" className="ranking-rail__how">How the ranking works ↗</Link>
       </>
     );
 

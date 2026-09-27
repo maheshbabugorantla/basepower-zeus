@@ -103,3 +103,54 @@ describe("buildCaseSentenceParts", () => {
     expect(parts).toEqual([]);
   });
 });
+
+// Meter captions, checked against the real breakdown values of home 122302
+// (3901 Watersedge, Travis) that the redesign critique quoted.
+import { meterCaption, formatDollarsShort } from "../../lib/caseSentence";
+
+describe("meterCaption", () => {
+  it("captions each signal in rep-facing words with its real value", () => {
+    expect(meterCaption("outage", 181.98)).toBe("About 3 hours without power a year");
+    expect(meterCaption("backup_intent", 87.08)).toBe("About 9 in 100 nearby homes added backup");
+    expect(meterCaption("income_100k", 83.0)).toBe("83 % of households earn $100k+");
+    expect(meterCaption("age65", 28.35)).toBe("28 % of neighbors are 65+");
+    expect(meterCaption("installability", 2024)).toBe("Built 2024");
+    expect(meterCaption("home_value", 12100000)).toBe("$12.1M appraisal");
+    expect(meterCaption("flood", 0)).toBe("Outside FEMA high-risk zone");
+  });
+
+  it("never shows model vocabulary or a bare flag", () => {
+    for (const [k, v] of [["outage", 181.98], ["backup_intent", 87.08], ["flood", 0], ["home_permits", 0], ["owner_65", 0], ["installability", 2024]] as const) {
+      const c = meterCaption(k, v) ?? "";
+      expect(c).not.toMatch(/\b(flag|anchor|term)\b/i);
+      expect(c).not.toMatch(/^\s*[01]\s*$/);
+    }
+  });
+
+  it("returns null for a missing value rather than inventing one", () => {
+    expect(meterCaption("outage", null)).toBeNull();
+  });
+
+  it("shortens dollars", () => {
+    expect(formatDollarsShort(12100000)).toBe("$12.1M");
+  });
+});
+
+// Real rows seen on /ranking: 2109 River Oaks Blvd (Harris, HCAD appraisal
+// $13,378,483) and 4904 Beverly Skyline (Travis, built 1958).
+describe("county-aware and honest templates", () => {
+  const sig = (key: string, rawValue: number, term: number): CaseSignalInput => ({
+    key, label: key, rawValue, rawUnit: "", term, anchorValue: null, anchorBasis: null, available: true,
+  });
+
+  it("names the home's own appraisal district", () => {
+    const parts = buildCaseSentenceParts([sig("home_value", 13378483, 1)], 4, { cadShort: "HCAD" });
+    expect(parts[0].text).toBe("HCAD appraises this home at **$13,378,483**.");
+    expect(parts[0].text).not.toMatch(/Travis/);
+  });
+
+  it("does not call a pre-2000 build straightforward to install", () => {
+    const parts = buildCaseSentenceParts([sig("installability", 1958, 1)], 4);
+    expect(parts[0].text).toBe("This home was **built in 1958**.");
+  });
+});

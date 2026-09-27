@@ -1,19 +1,13 @@
 "use client";
 
-import { Fragment, useEffect, useRef } from "react";
+import { useEffect, useRef } from "react";
 
 import Link from "next/link";
-import {
-  DataTable,
-  DataTableBody,
-  DataTableCell,
-  DataTableHead,
-  DataTableHeaderCell,
-  DataTableRow,
-} from "./ui/DataTable";
 import { MissingState } from "./ui/MissingState";
 import { Chip, type SignalName } from "./ui/Chip";
 import { CaseForKnock } from "./CaseForKnock";
+import { HomeRow } from "./HomeRow";
+import { homeMetaLine, streetLine } from "../lib/homeRowFormat";
 import type { SignalKey } from "../app/api/top-homes/route";
 
 // M2-W1: ranked-homes table from api.homes_ranked_weighted (score v1,
@@ -114,12 +108,6 @@ export const REASON_META: Record<string, { label: string; signal: SignalName }> 
   permit_risk: { label: "Permit friction", signal: "install" },
 };
 
-function formatAddressLine(row: TopHomeRow): string {
-  const parts = [row.situsNum, row.situsStreet].filter(Boolean).join(" ");
-  const city = row.situsCity ?? "";
-  return [parts, city].filter((s) => s && s.trim() !== "").join(", ");
-}
-
 export interface TopHomesTableProps {
   rows: TopHomeRow[];
   /** 1-based rank of rows[0] on the current page (county pages: 1, 51, 101, ...;
@@ -140,6 +128,8 @@ export interface TopHomesTableProps {
   onToggleExpand?: (propId: string) => void;
   weights?: Record<SignalKey, number>;
   onLocateOnMap?: (row: TopHomeRow) => void;
+  /** Short appraisal-district name for this county's source note ("Travis CAD"). */
+  cadShort?: string;
 }
 
 export function TopHomesTable({
@@ -153,6 +143,7 @@ export function TopHomesTable({
   onToggleExpand,
   weights,
   onLocateOnMap,
+  cadShort,
 }: TopHomesTableProps) {
   // DataTableRow (web/components/ui/DataTable.tsx, not owned by this
   // ticket) is a plain function component with no `ref` in its prop
@@ -168,11 +159,15 @@ export function TopHomesTable({
     el?.scrollIntoView({ block: "nearest" });
   }, [scrollToPropId]);
 
+  // Rank 1 opens expanded on first load; only a user's own expansion
+  // should scroll the list and move focus.
+  const initialExpandedRef = useRef(expandedPropId);
   useEffect(() => {
-    if (!expandedPropId) return;
+    if (!expandedPropId || expandedPropId === initialExpandedRef.current) return;
+    initialExpandedRef.current = null;
     const el = containerRef.current?.querySelector<HTMLElement>(`[data-prop-id="${expandedPropId}"]`);
     el?.scrollIntoView({ block: "nearest" });
-    el?.focus?.();
+    el?.focus?.({ preventScroll: true });
   }, [expandedPropId]);
 
   if (rows.length === 0) {
@@ -185,120 +180,73 @@ export function TopHomesTable({
   }
 
   return (
-    <div ref={containerRef}>
-    <DataTable className="data-table--top-homes" style={{ tableLayout: "fixed" }}>
-      <colgroup>
-        <col style={{ width: "40px" }} />
-        <col />
-        <col style={{ width: "88px" }} />
-        <col style={{ width: "180px" }} />
-      </colgroup>
-      <DataTableHead>
-        <DataTableRow>
-          <DataTableHeaderCell>#</DataTableHeaderCell>
-          <DataTableHeaderCell>Home</DataTableHeaderCell>
-          <DataTableHeaderCell>Score</DataTableHeaderCell>
-          <DataTableHeaderCell>Top signals</DataTableHeaderCell>
-        </DataTableRow>
-      </DataTableHead>
-      <DataTableBody>
-        {rows.map((row, index) => {
-          const addressLine = formatAddressLine(row);
-          const title = [addressLine, row.situsZip].filter(Boolean).join(" ") || row.propId;
-          const delta = rankDeltas?.get(row.propId);
-          const isHovered = hoveredPropId === row.propId;
-          const isExpanded = expandedPropId === row.propId;
-          return (
-            <Fragment key={row.propId}>
-            <DataTableRow
-              className="data-table__row--hoverable"
-              tabIndex={-1}
-              data-hovered={isHovered || undefined}
-              data-testid="top-homes-row"
-              data-prop-id={row.propId}
-              onMouseEnter={() => onHoverRow?.(row)}
-              onMouseLeave={() => onHoverRow?.(null)}
-              onClick={(e) => {
-                if ((e.target as HTMLElement).closest("a")) return;
-                onToggleExpand?.(row.propId);
-              }}
-              style={{ cursor: onToggleExpand ? "pointer" : undefined }}
-            >
-              <DataTableCell>
-                <span style={{ display: "inline-flex", alignItems: "center", gap: "var(--space-1)" }}>
-                  <span style={{ color: "var(--theme-ink-muted)" }}>{rangeStart + index}</span>
-                  {delta && delta !== 0 ? (
-                    <span
-                      className={delta > 0 ? "rank-delta rank-delta--up" : "rank-delta rank-delta--down"}
-                      aria-label={delta > 0 ? `Moved up ${delta}` : `Moved down ${Math.abs(delta)}`}
-                    >
-                      {delta > 0 ? "↑" : "↓"}
-                      {Math.abs(delta)}
-                    </span>
-                  ) : null}
-                </span>
-              </DataTableCell>
-              <DataTableCell>
-                <Link href={`/home/${row.propId}`} className="top-homes-address" title={title}>
-                  {addressLine || row.propId}
-                </Link>
-                {row.situsZip ? <div className="top-homes-zip">{row.situsZip}</div> : null}
-              </DataTableCell>
-              <DataTableCell>
-                {row.score === null ? (
-                  <MissingState variant="not-loaded" reason="No signal has a nonzero weight for this home" />
-                ) : (
-                  <div className="top-homes-score">
+    <div ref={containerRef} className="predicted-homes-table" role="table" aria-label="Homes ranked by the team's priorities">
+      <div role="row" className="visually-hidden">
+        <span role="columnheader">Rank</span>
+        <span role="columnheader">Home</span>
+        <span role="columnheader">Team priority score</span>
+      </div>
+      {rows.map((row, index) => {
+        const delta = rankDeltas?.get(row.propId);
+        return (
+          <HomeRow
+            key={row.propId}
+            testId="top-homes-row"
+            propId={row.propId}
+            rank={rangeStart + index}
+            rankDelta={delta && delta !== 0 ? delta : undefined}
+            street={streetLine(row.situsNum, row.situsStreet)}
+            meta={homeMetaLine({ city: row.situsCity, zip: row.situsZip, yrBuilt: row.yrBuilt, utility: row.distributorName })}
+            hovered={hoveredPropId === row.propId}
+            expanded={expandedPropId === row.propId}
+            onHover={(on) => onHoverRow?.(on ? row : null)}
+            onToggle={() => onToggleExpand?.(row.propId)}
+            side={
+              row.score === null ? (
+                <MissingState variant="not-loaded" reason="No signal has a nonzero weight for this home" />
+              ) : (
+                <>
+                  <span className="top-homes-score" title="Team priority score, 0 to 1, from the weights your team set">
                     <span className="top-homes-score__bar-track">
-                      <span
-                        className="top-homes-score__bar-fill"
-                        style={{ width: `${Math.max(0, Math.min(1, row.score)) * 100}%` }}
-                      />
+                      <span className="top-homes-score__bar-fill" style={{ width: `${Math.max(0, Math.min(1, row.score)) * 100}%` }} />
                     </span>
-                    <span style={{ fontFamily: "var(--type-data-font-family)" }}>{row.score.toFixed(3)}</span>
-                  </div>
-                )}
-              </DataTableCell>
-              <DataTableCell>
-                {row.reasons.length === 0 ? (
-                  <MissingState variant="not-loaded" reason="No weighted signal available for this home" />
-                ) : (
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--space-1)" }}>
-                    {row.reasons.map((reason) => {
-                      const meta = REASON_META[reason];
-                      if (!meta) return null;
-                      return <Chip key={reason} label={meta.label} signal={meta.signal} />;
-                    })}
-                  </div>
-                )}
-              </DataTableCell>
-            </DataTableRow>
-            {isExpanded ? (
-              <DataTableRow key={`${row.propId}-expand`} data-testid="top-homes-row-expand">
-                <DataTableCell colSpan={4} onClick={(e) => e.stopPropagation()}>
-                  <div className="row-expand">
-                    <CaseForKnock
-                      propId={row.propId}
-                      weights={weights ?? ({} as Record<SignalKey, number>)}
-                      sourceNames={["Austin permits", "Travis CAD", "ACS 2024", "EIA-861"]}
-                      compact
-                    />
-                    <div className="row-expand__actions">
-                      <Link href={`/home/${row.propId}`}>Open full record →</Link>
-                      <button type="button" className="row-expand__link" onClick={() => onLocateOnMap?.(row)}>
-                        Locate on map
-                      </button>
-                      <Link href={`/home/${row.propId}?tab=signals`}>All 12 signals</Link>
-                    </div>
-                  </div>
-                </DataTableCell>
-              </DataTableRow>
-            ) : null}
-            </Fragment>
-          );
-        })}
-      </DataTableBody>
-    </DataTable>
+                    <span className="home-row__score">{row.score.toFixed(2)}</span>
+                  </span>
+                  <span className="home-row__utility">team score</span>
+                </>
+              )
+            }
+            chips={
+              row.reasons.length === 0 ? (
+                <MissingState variant="not-loaded" reason="No weighted signal available for this home" />
+              ) : (
+                row.reasons.slice(0, 2).map((reason) => {
+                  const meta = REASON_META[reason];
+                  if (!meta) return null;
+                  return <Chip key={reason} label={meta.label} signal={meta.signal} />;
+                })
+              )
+            }
+            expandContent={
+              <>
+                <CaseForKnock
+                  propId={row.propId}
+                  weights={weights ?? ({} as Record<SignalKey, number>)}
+                  cadShort={cadShort}
+                  compact
+                />
+                <div className="row-expand__actions">
+                  <Link href={`/home/${row.propId}`}>Open full record →</Link>
+                  <button type="button" className="row-expand__link" onClick={() => onLocateOnMap?.(row)}>
+                    Locate on map
+                  </button>
+                  <Link href={`/home/${row.propId}?tab=signals`}>All 12 signals</Link>
+                </div>
+              </>
+            }
+          />
+        );
+      })}
     </div>
   );
 }

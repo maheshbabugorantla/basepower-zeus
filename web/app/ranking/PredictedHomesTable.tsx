@@ -2,6 +2,8 @@
 
 import { useEffect, useRef } from "react";
 import Link from "next/link";
+import { HomeRow } from "../../components/HomeRow";
+import { homeMetaLine, reasonSignal, streetLine } from "../../lib/homeRowFormat";
 import { MissingState } from "../../components/ui/MissingState";
 import { PriorityTierBadge } from "../../components/ui/PriorityTierBadge";
 import { Chip } from "../../components/ui/Chip";
@@ -30,14 +32,6 @@ import type { PredictedHomeRow } from "../api/top-homes/route";
 // terms, no LLM/synthetic data) instead of a route change -- the deep
 // link (/home/[prop_id]) stays for "Open full record."
 
-function formatAddressLine(row: PredictedHomeRow): string {
-  const parts = [row.situsNum, row.situsStreet].filter(Boolean).join(" ");
-  const city = row.situsCity ?? "";
-  return [parts, city].filter((s) => s && s.trim() !== "").join(", ");
-}
-
-const ROW_GRID_TEMPLATE = "20px minmax(0, 1fr)";
-
 export interface PredictedHomesTableProps {
   rows: PredictedHomeRow[];
   /** Kept for callers that still pass it (unused in this render -- PropensityBadge no longer shows a county-relative figure). */
@@ -50,6 +44,8 @@ export interface PredictedHomesTableProps {
   expandedPropId?: string | null;
   onToggleExpand?: (propId: string) => void;
   onLocateOnMap?: (row: PredictedHomeRow) => void;
+  /** Short appraisal-district name for this county's source note ("Travis CAD"). */
+  cadShort?: string;
 }
 
 export function PredictedHomesTable({
@@ -61,6 +57,7 @@ export function PredictedHomesTable({
   expandedPropId = null,
   onToggleExpand,
   onLocateOnMap,
+  cadShort,
 }: PredictedHomesTableProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
 
@@ -70,11 +67,15 @@ export function PredictedHomesTable({
     el?.scrollIntoView({ block: "nearest" });
   }, [scrollToPropId]);
 
+  // Rank 1 opens expanded on first load; only a user's own expansion
+  // should scroll the list and move focus, never the page's first paint.
+  const initialExpandedRef = useRef(expandedPropId);
   useEffect(() => {
-    if (!expandedPropId) return;
+    if (!expandedPropId || expandedPropId === initialExpandedRef.current) return;
+    initialExpandedRef.current = null;
     const el = containerRef.current?.querySelector<HTMLElement>(`[data-prop-id="${expandedPropId}"]`);
     el?.scrollIntoView({ block: "nearest" });
-    el?.focus?.();
+    el?.focus?.({ preventScroll: true });
   }, [expandedPropId]);
 
   if (rows.length === 0) {
@@ -82,108 +83,70 @@ export function PredictedHomesTable({
   }
 
   return (
-    <div ref={containerRef} className="predicted-homes-table" role="table" aria-label="Homes ranked by priority">
-      <div
-        role="row"
-        className="predicted-homes-table__row predicted-homes-table__row--head"
-        style={{ gridTemplateColumns: ROW_GRID_TEMPLATE }}
-      >
-        <span role="columnheader">#</span>
-        <span role="columnheader">Home / priority / utility</span>
+    <div ref={containerRef} className="predicted-homes-table" role="table" aria-label="Homes ranked by likelihood of adding backup">
+      <div role="row" className="visually-hidden">
+        <span role="columnheader">Rank</span>
+        <span role="columnheader">Home</span>
+        <span role="columnheader">Priority and utility</span>
       </div>
       {rows.map((row, index) => {
-        const addressLine = formatAddressLine(row);
-        const title = [addressLine, row.situsZip].filter(Boolean).join(" ") || row.propId;
-        const isHovered = hoveredPropId === row.propId;
-        const isExpanded = expandedPropId === row.propId;
         const utilityStatus = utilityStatusForHome({
           gateReason: row.gateReason,
           territoryNullReason: row.territoryNullReason,
         });
         const hasBackup = row.coverageBucket === "base_customer" || row.coverageBucket === "other_backup";
-        // Layout-review fix: no census-tract jargon ("Tract 1.02") --
-        // this app has no real named-neighborhood data source yet, so
-        // that slot is simply omitted rather than filled with a
-        // block-group id dressed up as one.
-        const metaLine = [row.situsZip, row.yrBuilt ? `built ${row.yrBuilt}` : null].filter(Boolean).join(" · ");
         const shownReasons = row.reasons
           .filter((r) => r.direction === "raises" && isEligibleReason(r.feature))
           .slice(0, 2);
-
         return (
-          <div
+          <HomeRow
             key={row.propId}
-            role="row"
-            tabIndex={-1}
-            className={
-              "predicted-homes-table__row predicted-homes-table__row--body" +
-              (isExpanded ? " predicted-homes-table__row--expanded" : "")
-            }
-            style={{ gridTemplateColumns: ROW_GRID_TEMPLATE }}
-            data-hovered={isHovered || undefined}
-            data-testid="predicted-homes-row"
-            data-prop-id={row.propId}
-            onMouseEnter={() => onHoverRow?.(row)}
-            onMouseLeave={() => onHoverRow?.(null)}
-            onClick={(e) => {
-              if ((e.target as HTMLElement).closest("a")) return;
-              onToggleExpand?.(row.propId);
-            }}
-          >
-            <span role="cell" style={{ color: "var(--theme-ink-muted)", paddingTop: "2px" }}>
-              {rangeStart + index}
-            </span>
-            <span role="cell" className="predicted-homes-table__home-cell">
-              <Link href={`/home/${row.propId}`} className="top-homes-address" title={title}>
-                {addressLine || row.propId}
-              </Link>
-              <div className="top-homes-zip">{metaLine || " "}</div>
-              {hasBackup ? (
-                <div style={{ fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)" }}>
-                  Already has backup
-                </div>
-              ) : null}
-              <div className="predicted-homes-table__priority-cell">
+            testId="predicted-homes-row"
+            propId={row.propId}
+            rank={rangeStart + index}
+            street={streetLine(row.situsNum, row.situsStreet)}
+            meta={homeMetaLine({ city: row.situsCity, zip: row.situsZip, yrBuilt: row.yrBuilt, utility: row.distributorName })}
+            note={hasBackup ? "Already has backup" : null}
+            hovered={hoveredPropId === row.propId}
+            expanded={expandedPropId === row.propId}
+            onHover={(on) => onHoverRow?.(on ? row : null)}
+            onToggle={() => onToggleExpand?.(row.propId)}
+            side={
+              <>
                 {row.decile === null ? (
                   <MissingState variant="not-loaded" reason="Not scored yet" />
                 ) : (
                   <PriorityTierBadge decile={row.decile} compact />
                 )}
-                <span data-testid="utility-status" data-status={utilityStatus.key} className="predicted-homes-table__utility">
+                <span data-testid="utility-status" data-status={utilityStatus.key} className="home-row__utility">
                   {utilityStatus.label}
                 </span>
-              </div>
-              {shownReasons.length > 0 ? (
-                <span className="predicted-homes-table__reasons">
-                  {shownReasons.map((reason, i) => (
+              </>
+            }
+            chips={
+              shownReasons.length > 0
+                ? shownReasons.map((reason, i) => (
                     <Chip
                       key={`${reason.feature}-${i}`}
-                      signal="install"
+                      signal={reasonSignal(reason.feature)}
                       label={reasonPhraseForContext(reason.feature, utilityStatus.key)}
                     />
-                  ))}
-                </span>
-              ) : null}
-
-              {isExpanded ? (
-                <div className="row-expand" onClick={(e) => e.stopPropagation()}>
-                  <CaseForKnock
-                    propId={row.propId}
-                    weights={equalWeights()}
-                    sourceNames={["Austin permits", "Travis CAD", "ACS 2024", "EIA-861"]}
-                    compact
-                  />
-                  <div className="row-expand__actions">
-                    <Link href={`/home/${row.propId}`}>Open full record →</Link>
-                    <button type="button" className="row-expand__link" onClick={() => onLocateOnMap?.(row)}>
-                      Locate on map
-                    </button>
-                    <Link href={`/home/${row.propId}?tab=signals`}>All 12 signals</Link>
-                  </div>
+                  ))
+                : null
+            }
+            expandContent={
+              <>
+                <CaseForKnock propId={row.propId} weights={equalWeights()} cadShort={cadShort} compact />
+                <div className="row-expand__actions">
+                  <Link href={`/home/${row.propId}`}>Open full record →</Link>
+                  <button type="button" className="row-expand__link" onClick={() => onLocateOnMap?.(row)}>
+                    Locate on map
+                  </button>
+                  <Link href={`/home/${row.propId}?tab=signals`}>All 12 signals</Link>
                 </div>
-              ) : null}
-            </span>
-          </div>
+              </>
+            }
+          />
         );
       })}
     </div>
