@@ -170,29 +170,6 @@ with base as (
     join core.home_spatial hs on hs.prop_id = hbg.prop_id
     join core.parcels p on p.prop_id = hbg.prop_id
 ),
-reliability as (
-    select b.prop_id,
-           (select r.saidi_incl_major from core.utility_reliability r
-            where r.eia_id = b.territory_eia_id and r.saidi_incl_major is not null
-            order by r.year desc limit 1) as distributor_saidi
-    from base b
-),
-outage as (
-    select b.prop_id,
-           coalesce(r.distributor_saidi, cp.proxy_minutes) as outage_minutes
-    from base b
-    left join reliability r on r.prop_id = b.prop_id
-    left join _scoring_county_proxy cp on cp.county_fips = b.county_fips
-),
-empower as (
-    select b.prop_id,
-           case when ez.zip_code is not null and not ez.power_dependent_devices_dme_suppressed
-                     and ez.medicare_benes > 0 and ez.power_dependent_devices_dme is not null
-                then ez.power_dependent_devices_dme / ez.medicare_benes else null end as empower_rate
-    from base b
-    left join core.parcels p on p.prop_id = b.prop_id
-    left join core.empower_zip ez on ez.zip_code = left(trim(p.situs_zip), 5)
-),
 acs as (
     select b.prop_id,
            case when a.geoid is not null and a.pop_total > 0 and a.pop_65_plus is not null
@@ -212,31 +189,76 @@ backup as (
     left join _scoring_bg_permit_counts pc on pc.block_group_geoid = hc.block_group_geoid
     left join _scoring_home_backup_permits hbp on hbp.prop_id = hc.prop_id
 )
-select b.prop_id, b.gate_reason, b.market_value,
-       o.outage_minutes, e.empower_rate, a.acs_pct_65_plus, bk.backup_intent_rate
+select b.prop_id, b.gate_reason, b.market_value, b.block_group_geoid,
+       a.acs_pct_65_plus, bk.backup_intent_rate
 from base b
-left join outage o on o.prop_id = b.prop_id
-left join empower e on e.prop_id = b.prop_id
 left join acs a on a.prop_id = b.prop_id
 left join backup bk on bk.prop_id = b.prop_id;
 """
 
+# Bug fix (coordinator parity check against live core.mv_home_signals_
+# pre_batched / core.mv_home_terms_pre_batched, 2026-09-26/27): 139,881
+# of 1,195,203 rows differed. Root cause, confirmed read-only against
+# the live DB: outage_anchor and empower_anchor were computed here from
+# a PER-HOME derived value (outage_minutes = coalesce(distributor_saidi,
+# county eaglei proxy); empower_rate joined per home via zip), which is
+# NOT what 0304b2's own `anchors` CTE computes. 0304b2 computes both
+# directly from the SOURCE tables, one row per utility / per ZIP, never
+# per home:
+#   - outage_anchor: percentile_cont(0.9) of core.utility_reliability.
+#     saidi_incl_major for the latest year with non-null values -- no
+#     per-home blending with the county eaglei proxy at all (the
+#     per-home outage_minutes/outage_term computed in the batch query
+#     still uses the proxy fallback; only the ANCHOR never did).
+#   - empower_anchor: percentile_cont(0.9) of core.empower_zip's
+#     power_dependent_devices_dme/medicare_benes, one row per ZIP,
+#     filtered by not-suppressed and medicare_benes>0 -- never joined
+#     out to homes first (a ZIP with many homes was counted many times
+#     under the per-home version, skewing the percentile toward it).
+# Measured: correct outage_anchor=739.272 vs the buggy per-home value=
+# 193.194; correct empower_anchor=0.0646974063400576 vs buggy=
+# 0.0406198638177976. Both buggy anchors were smaller, which is exactly
+# why terms were pinned to the least(1.0, ...) cap for more homes than
+# the live table shows (Harris sample: outage_term 0.26133->1.0 since
+# 0.26133*739.272/193.194 = 1.0 exactly; empower_term 0.45082->0.71804
+# since 0.45082*0.0646974/0.0406199 = 0.71827, matching within
+# rounding). age65_anchor, backup_anchor and the two home_value anchors
+# were already correct (all four are genuinely per-home/per-block-group
+# in 0304b2 too) and are unchanged below.
+#
+# Anchors are materialized into a one-row temp table (not returned as
+# Python floats bound as query parameters) so every batch's SQL reads
+# the exact same on-disk numeric value via a cross join -- a Python
+# float round-trip through psycopg parameter binding is a second place
+# floating-point representation could drift between runs, which would
+# make an otherwise-unchanged home's term differ in a low decimal digit
+# on every re-run (each run's `IS DISTINCT FROM` would then see a
+# "change" and rewrite the row -- exactly the dead-tuple cost batching
+# by keyset was meant to avoid).
 ANCHOR_SCALARS_SQL = """
+drop table if exists _scoring_anchors;
+create temp table _scoring_anchors as
 select
-    (select percentile_cont(0.9) within group (order by outage_minutes)
-     from _scoring_anchor_inputs where outage_minutes is not null) as outage_anchor,
-    (select percentile_cont(0.9) within group (order by empower_rate)
-     from _scoring_anchor_inputs where empower_rate is not null) as empower_anchor,
+    (select percentile_cont(0.9) within group (order by saidi_incl_major)
+     from core.utility_reliability
+     where year = (select max(year) from core.utility_reliability where saidi_incl_major is not null)
+       and saidi_incl_major is not null) as outage_anchor,
+    (select percentile_cont(0.9) within group (order by (power_dependent_devices_dme::numeric / medicare_benes))
+     from core.empower_zip
+     where not power_dependent_devices_dme_suppressed and medicare_benes > 0
+       and power_dependent_devices_dme is not null) as empower_anchor,
     (select percentile_cont(0.9) within group (order by acs_pct_65_plus)
      from (select distinct block_group_geoid, acs_pct_65_plus from _scoring_anchor_inputs
-           join core.home_spatial hs using (prop_id) where acs_pct_65_plus is not null) t) as age65_anchor,
+           where acs_pct_65_plus is not null) t) as age65_anchor,
     (select percentile_cont(0.9) within group (order by backup_intent_rate)
      from _scoring_anchor_inputs where gate_reason is null and backup_intent_rate is not null) as backup_anchor,
     (select percentile_cont(0.1) within group (order by ln(market_value))
      from _scoring_anchor_inputs where gate_reason is null and market_value > 0) as home_value_anchor_low,
     (select percentile_cont(0.9) within group (order by ln(market_value))
-     from _scoring_anchor_inputs where gate_reason is null and market_value > 0) as home_value_anchor_high
+     from _scoring_anchor_inputs where gate_reason is null and market_value > 0) as home_value_anchor_high;
 """
+
+READ_ANCHORS_SQL = "select outage_anchor, empower_anchor, age65_anchor, backup_anchor, home_value_anchor_low, home_value_anchor_high from _scoring_anchors"
 
 
 @dataclass
@@ -255,13 +277,35 @@ class Anchors:
 # range and reading the precomputed small tables + this run's fixed
 # anchor scalars (bound as parameters, not recomputed per batch).
 # ---------------------------------------------------------------------------
+KEYS_BATCH_SQL = """
+select prop_id
+from core.mv_home_block_group
+where prop_id > %(after)s
+order by prop_id
+limit %(batch_size)s
+"""
+
+# Bug fix (coordinator report): the `keys` CTE below used to select from
+# core.home_spatial (every parcel in the county, ~1.4M rows, including
+# ones that are not single-family/homestead and never make it into
+# core.mv_home_signals at all). The upsert's RETURNING only yields rows
+# that were actually inserted or that changed under DO UPDATE ... WHERE,
+# so on a home_spatial-keyed page most of a 150k window could be
+# ineligible parcels that never appear in `raw` -- the loop's `after`
+# then advanced only to the MAX of the returned (eligible, changed)
+# rows, not to the true end of the scanned window, so it could re-scan
+# the same range forever OR (if every eligible row in that first window
+# happened to change, as during the anchor-bug incident) stop after
+# exactly one batch because len(rows) came in under batch_size purely by
+# eligibility filtering, not because there was no more data. Keys are
+# now driven from core.mv_home_block_group -- the actual ELIGIBLE row
+# set core.mv_home_signals is scoped to -- and run() advances `after`
+# from KEYS_BATCH_SQL's own scan, independent of how many rows the
+# upsert actually touched (see refresh_home_signals_batched below).
 HOME_SIGNALS_BATCH_SQL = """
 with keys as (
-    select hs.prop_id
-    from core.home_spatial hs
-    where hs.prop_id > %(after)s
-    order by hs.prop_id
-    limit %(batch_size)s
+    select prop_id from core.mv_home_block_group
+    where prop_id > %(after)s and prop_id <= %(hi)s
 ),
 base as (
     select
@@ -470,7 +514,7 @@ raw as (
     left join home_permits hp2 on hp2.prop_id = b.prop_id
     left join improvements im on im.prop_id = b.prop_id
 )
-insert into core.mv_home_signals (
+insert into core.mv_home_signals as t (
     prop_id, geo_id, block_group_geoid, county_fips, situs_zip,
     gate_reason, territory_eia_id, territory_null_reason, territory_basis,
     distributor_saidi, distributor_saidi_year, distributor_saidi_early_release,
@@ -497,23 +541,23 @@ select
     raw.distributor_name, raw.distributor_saidi_null_reason,
     null::double precision,
     raw.outage_minutes, raw.outage_year, raw.outage_basis, raw.outage_source_ids, raw.outage_null_reason,
-    case when raw.outage_minutes is not null and %(outage_anchor)s > 0
-         then least(1.0, raw.outage_minutes::float8 / %(outage_anchor)s) else null end,
+    case when raw.outage_minutes is not null and anc.outage_anchor > 0
+         then least(1.0, raw.outage_minutes::float8 / anc.outage_anchor) else null end,
     raw.flood_flag, raw.flood_null_reason, null::double precision,
     case when raw.flood_flag is not null then case when raw.flood_flag then 0 else 1 end else null end,
     raw.empower_rate, raw.empower_null_reason, null::double precision,
-    case when raw.empower_rate is not null and %(empower_anchor)s > 0
-         then least(1.0, raw.empower_rate::float8 / %(empower_anchor)s) else null end,
+    case when raw.empower_rate is not null and anc.empower_anchor > 0
+         then least(1.0, raw.empower_rate::float8 / anc.empower_anchor) else null end,
     raw.acs_pct_65_plus, raw.acs_65_null_reason, null::double precision,
-    case when raw.acs_pct_65_plus is not null and %(age65_anchor)s > 0
-         then least(1.0, raw.acs_pct_65_plus::float8 / %(age65_anchor)s) else null end,
+    case when raw.acs_pct_65_plus is not null and anc.age65_anchor > 0
+         then least(1.0, raw.acs_pct_65_plus::float8 / anc.age65_anchor) else null end,
     raw.acs_pct_electric_heat, raw.acs_heat_null_reason, null::double precision, raw.acs_pct_electric_heat,
     raw.backup_intent_rate, raw.backup_intent_null_reason, null::double precision,
-    case when raw.backup_intent_rate is not null and %(backup_anchor)s > 0
-         then least(1.0, raw.backup_intent_rate::float8 / %(backup_anchor)s) else null end,
+    case when raw.backup_intent_rate is not null and anc.backup_anchor > 0
+         then least(1.0, raw.backup_intent_rate::float8 / anc.backup_anchor) else null end,
     raw.market_value,
     case when raw.market_value > 0
-         then least(1.0, greatest(0.0, (ln(raw.market_value)::float8 - %(home_value_anchor_low)s) / (%(home_value_anchor_high)s - %(home_value_anchor_low)s)))
+         then least(1.0, greatest(0.0, (ln(raw.market_value)::float8 - anc.home_value_anchor_low) / (anc.home_value_anchor_high - anc.home_value_anchor_low)))
          else null end,
     case when raw.market_value > 0 then null else 'market_value_not_loaded' end,
     raw.owner_65_flag, raw.owner_65_null_reason,
@@ -523,6 +567,7 @@ select
     raw.installability_term, raw.installability_null_reason,
     raw.source_ids
 from raw
+cross join _scoring_anchors anc
 on conflict (prop_id) do update set
     geo_id = excluded.geo_id, block_group_geoid = excluded.block_group_geoid,
     county_fips = excluded.county_fips, situs_zip = excluded.situs_zip,
@@ -550,23 +595,29 @@ on conflict (prop_id) do update set
     yr_built = excluded.yr_built, living_area = excluded.living_area, yr_built_null_reason = excluded.yr_built_null_reason,
     installability_term = excluded.installability_term, installability_null_reason = excluded.installability_null_reason,
     source_ids = excluded.source_ids
-where (
-    core.mv_home_signals.gate_reason, core.mv_home_signals.territory_eia_id, core.mv_home_signals.outage_term,
-    core.mv_home_signals.flood_term, core.mv_home_signals.empower_term, core.mv_home_signals.age65_term,
-    core.mv_home_signals.backup_intent_term, core.mv_home_signals.home_value_term,
-    core.mv_home_signals.home_permits_flag, core.mv_home_signals.installability_term
-) is distinct from (
-    excluded.gate_reason, excluded.territory_eia_id, excluded.outage_term,
-    excluded.flood_term, excluded.empower_term, excluded.age65_term,
-    excluded.backup_intent_term, excluded.home_value_term,
-    excluded.home_permits_flag, excluded.installability_term
-)
-returning core.mv_home_signals.prop_id
+-- Bug fix (coordinator report): comparing only 10 of the ~60 columns
+-- meant a change to any OTHER column (source_ids, a null_reason,
+-- distributor_name, market_value, outage_minutes/basis/year, ...)
+-- never triggered a row rewrite -- the row would look "unchanged" to
+-- this WHERE even though a real upstream value changed. Compare the
+-- FULL row instead (row-wise IS DISTINCT FROM over every column this
+-- statement writes), same pattern for core.mv_home_terms below.
+where (t.*) is distinct from (excluded.*)
+returning t.prop_id
 """
 
+# Bug fix (coordinator report): orphan cleanup used to key off
+# core.home_spatial (every parcel, ~1.4M rows across all three
+# counties, including non-single-family/non-homestead ones that were
+# NEVER inserted into core.mv_home_signals in the first place). The
+# actual row set core.mv_home_signals is scoped to is
+# core.mv_home_block_group (the eligible set) -- a parcel that loses its
+# single-family/homestead eligibility (or its block-group match) drops
+# out of mv_home_block_group but would never be caught as an orphan
+# against home_spatial, since home_spatial still has that prop_id.
 DELETE_ORPHAN_SIGNALS_SQL = """
 delete from core.mv_home_signals s
-where not exists (select 1 from core.home_spatial hs where hs.prop_id = s.prop_id)
+where not exists (select 1 from core.mv_home_block_group hbg where hbg.prop_id = s.prop_id)
 """
 
 # ---------------------------------------------------------------------------
@@ -618,7 +669,7 @@ rows as (
     left join core.home_coverage hc on hc.prop_id = s.prop_id
     where s.gate_reason is null and s.county_fips = %(county_fips)s
 )
-insert into core.mv_home_terms (
+insert into core.mv_home_terms as t (
     prop_id, county_fips, block_group_geoid, situs_city, situs_zip, backup_intent_rate,
     outage_term, flood_term, empower_term, age65_term, electric_heat_term, backup_intent_term,
     owner65_term, permits_term, installability_term, home_value_term, income100k_term, age3564_term,
@@ -635,13 +686,11 @@ on conflict (prop_id) do update set
     home_value_term = excluded.home_value_term, income100k_term = excluded.income100k_term,
     age3564_term = excluded.age3564_term, permit_path = excluded.permit_path,
     permitrisk_term = excluded.permitrisk_term, coverage_bucket = excluded.coverage_bucket
-where (
-    core.mv_home_terms.outage_term, core.mv_home_terms.flood_term, core.mv_home_terms.empower_term,
-    core.mv_home_terms.age65_term, core.mv_home_terms.home_value_term, core.mv_home_terms.coverage_bucket
-) is distinct from (
-    excluded.outage_term, excluded.flood_term, excluded.empower_term,
-    excluded.age65_term, excluded.home_value_term, excluded.coverage_bucket
-)
+-- Bug fix (coordinator report): same full-row fix as mv_home_signals
+-- above -- comparing only 6 of 21 columns silently dropped changes to
+-- income100k_term/age3564_term/permit_path/permitrisk_term/permits_term/
+-- installability_term/owner65_term/situs_city/situs_zip/etc.
+where (t.*) is distinct from (excluded.*)
 """
 
 DELETE_ORPHAN_TERMS_SQL = """
@@ -673,36 +722,41 @@ def build_small_tables(conn: psycopg.Connection) -> None:
 
 
 def compute_anchors(conn: psycopg.Connection) -> Anchors:
+    """Materializes the six anchors into _scoring_anchors (read by every
+    batch via a cross join -- see ANCHOR_SCALARS_SQL's comment) and
+    returns them as an Anchors instance purely for logging/reporting;
+    the batch SQL never receives these as Python-bound parameters."""
     with conn.cursor() as cur:
         cur.execute(THIN_ANCHOR_INPUTS_SQL)
         cur.execute(ANCHOR_SCALARS_SQL)
+        cur.execute(READ_ANCHORS_SQL)
         row = cur.fetchone()
         assert row is not None
     return Anchors(*row)
 
 
-def refresh_home_signals_batched(conn: psycopg.Connection, anchors: Anchors, batch_size: int = BATCH_SIZE) -> int:
-    """Upserts core.mv_home_signals by prop_id keyset range. Returns rows touched."""
+def refresh_home_signals_batched(conn: psycopg.Connection, batch_size: int = BATCH_SIZE) -> int:
+    """Upserts core.mv_home_signals by prop_id keyset range over
+    core.mv_home_block_group (the eligible row set, not
+    core.home_spatial -- see KEYS_BATCH_SQL's comment). `after` is
+    advanced from the KEYS_BATCH_SQL scan itself, not from the upsert's
+    RETURNING (which only yields rows the upsert actually inserted or
+    changed) -- so a batch where every row happens to be unchanged still
+    advances past it instead of looping on it or stopping early. Returns
+    the count of rows the upsert actually touched (informational)."""
     touched = 0
     after = ""
-    params = {
-        "outage_anchor": anchors.outage,
-        "empower_anchor": anchors.empower,
-        "age65_anchor": anchors.age65,
-        "backup_anchor": anchors.backup,
-        "home_value_anchor_low": anchors.home_value_low,
-        "home_value_anchor_high": anchors.home_value_high,
-        "batch_size": batch_size,
-    }
     with conn.cursor() as cur:
         while True:
-            cur.execute(HOME_SIGNALS_BATCH_SQL, {**params, "after": after})
-            rows = cur.fetchall()
-            if not rows:
+            cur.execute(KEYS_BATCH_SQL, {"after": after, "batch_size": batch_size})
+            keys = [r[0] for r in cur.fetchall()]
+            if not keys:
                 break
-            touched += len(rows)
-            after = max(r[0] for r in rows)
-            if len(rows) < batch_size:
+            hi = keys[-1]
+            cur.execute(HOME_SIGNALS_BATCH_SQL, {"after": after, "hi": hi})
+            touched += cur.rowcount
+            after = hi
+            if len(keys) < batch_size:
                 break
         cur.execute(DELETE_ORPHAN_SIGNALS_SQL)
     return touched
@@ -721,13 +775,24 @@ def get_loaded_counties(conn: psycopg.Connection) -> list[str]:
         return [r[0] for r in cur.fetchall()]
 
 
-def run(*, batch_size: int = BATCH_SIZE) -> dict[str, float]:
+def run(*, batch_size: int = BATCH_SIZE) -> dict[str, object]:
     """Full batched refresh, then core.refresh_all_scores() for the
     remainder (legacy v0 chain, gate counts, market, anchors/medians
     tables, geo rollup, county territories -- see
     0307_batched_scoring_swap.sql for what that function does now)."""
-    timings: dict[str, float] = {}
+    timings: dict[str, object] = {}
     with _connect() as conn:
+        # Bug fix (coordinator report): core.mv_home_block_group is the
+        # eligible row set every batch below keys off. It used to only
+        # get refreshed INSIDE core.refresh_all_scores(), which this
+        # run() calls LAST -- so every batch was scoped to whatever
+        # eligibility existed as of the PREVIOUS refresh cycle, one
+        # cycle stale. Refresh it first, here.
+        t0 = time.monotonic()
+        with conn.cursor() as cur:
+            cur.execute("refresh materialized view concurrently core.mv_home_block_group")
+        timings["mv_home_block_group_s"] = time.monotonic() - t0
+
         t0 = time.monotonic()
         build_small_tables(conn)
         timings["small_tables_s"] = time.monotonic() - t0
@@ -735,9 +800,10 @@ def run(*, batch_size: int = BATCH_SIZE) -> dict[str, float]:
         t0 = time.monotonic()
         anchors = compute_anchors(conn)
         timings["anchors_s"] = time.monotonic() - t0
+        timings["anchors"] = anchors
 
         t0 = time.monotonic()
-        touched = refresh_home_signals_batched(conn, anchors, batch_size)
+        touched = refresh_home_signals_batched(conn, batch_size)
         timings["mv_home_signals_s"] = time.monotonic() - t0
         timings["mv_home_signals_rows_touched"] = touched
 

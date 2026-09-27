@@ -104,6 +104,86 @@ def test_scoring_refresh_module_upserts_never_replaces():
     assert re.search(r"is distinct from", text)
 
 
+def test_upsert_where_compares_the_full_row_not_a_subset():
+    """Bug found by the coordinator's parity check: comparing only a
+    handful of columns in the ON CONFLICT ... WHERE let changes to any
+    other column (source_ids, null reasons, distributor_name, ...) go
+    unwritten. Both upserts must compare the whole row via `(t.*) is
+    distinct from (excluded.*)`, not an explicit column subset."""
+    module_path = REPO_ROOT / "pipelines/sources/scoring_refresh.py"
+    text = _read(module_path)
+    assert text.count("where (t.*) is distinct from (excluded.*)") == 2
+    assert "core.mv_home_signals.gate_reason, core.mv_home_signals.territory_eia_id" not in text
+    assert "core.mv_home_terms.outage_term, core.mv_home_terms.flood_term" not in text
+
+
+def test_batch_keyset_and_orphan_delete_use_eligible_row_set():
+    """Bug found by the coordinator's parity check: keying the batch
+    loop and the orphan delete off core.home_spatial (every parcel, not
+    just eligible ones) made the loop stop after one batch whenever a
+    batch's touched-row count came in under batch_size for any reason
+    other than running out of data (RETURNING only yields rows the
+    upsert actually inserted/changed). Both must key off
+    core.mv_home_block_group, the actual eligible row set
+    core.mv_home_signals is scoped to."""
+    module_path = REPO_ROOT / "pipelines/sources/scoring_refresh.py"
+    text = _read(module_path)
+    keys_sql_start = text.index('KEYS_BATCH_SQL = """') + len('KEYS_BATCH_SQL = """')
+    keys_sql = text[keys_sql_start:text.index('"""', keys_sql_start)]
+    assert "core.mv_home_block_group" in keys_sql
+    assert "core.home_spatial" not in keys_sql
+    orphan_sql = text[text.index("DELETE_ORPHAN_SIGNALS_SQL = "):text.index("def _connect")]
+    assert "core.mv_home_block_group" in orphan_sql
+
+
+def test_refresh_loop_advances_after_from_key_scan_not_returning():
+    """The loop must not derive `after` (or its stopping condition) from
+    the upsert's RETURNING rows -- a batch where every row is unchanged
+    still needs to advance past it. `after` must come from the same
+    keyset scan that bounds the batch."""
+    module_path = REPO_ROOT / "pipelines/sources/scoring_refresh.py"
+    text = _read(module_path)
+    fn = text[text.index("def refresh_home_signals_batched("):text.index("def refresh_home_terms_by_county(")]
+    assert "keys[-1]" in fn
+    assert "cur.rowcount" in fn
+
+
+def test_anchors_are_materialized_not_bound_as_python_parameters():
+    """Anchors must be read by every batch via a cross join to a
+    materialized temp table, not passed through as Python-bound query
+    parameters -- a float round-trip through psycopg parameter binding
+    risks a low-decimal drift between runs, which would make an
+    otherwise-unchanged row's term differ (and get rewritten) on every
+    re-run."""
+    module_path = REPO_ROOT / "pipelines/sources/scoring_refresh.py"
+    text = _read(module_path)
+    assert "cross join _scoring_anchors anc" in text
+    assert "%(outage_anchor)s" not in text
+    assert "%(empower_anchor)s" not in text
+    assert "%(home_value_anchor_low)s" not in text
+
+
+def test_outage_and_empower_anchors_read_directly_from_source_tables():
+    """The bug: outage_anchor/empower_anchor were derived per-home
+    instead of read directly from core.utility_reliability /
+    core.empower_zip, per 0304b2's own `anchors` CTE (the source of
+    truth). Verified read-only against the live DB, 2026-09-26/27:
+    correct outage_anchor=739.272 vs the buggy per-home value=193.194;
+    correct empower_anchor=0.0646974063400576 vs buggy=
+    0.0406198638177976."""
+    module_path = REPO_ROOT / "pipelines/sources/scoring_refresh.py"
+    text = _read(module_path)
+    anchor_sql_start = text.index('ANCHOR_SCALARS_SQL = """') + len('ANCHOR_SCALARS_SQL = """')
+    anchor_sql = text[anchor_sql_start:text.index('"""', anchor_sql_start)]
+    assert "from core.utility_reliability" in anchor_sql
+    assert "from core.empower_zip" in anchor_sql
+    # outage_anchor / empower_anchor themselves (up to and including
+    # their own "as ..._anchor," terminator) must not reference the
+    # per-home thin table at all.
+    outage_and_empower = anchor_sql[: anchor_sql.index("as empower_anchor,") + len("as empower_anchor,")]
+    assert "_scoring_anchor_inputs" not in outage_and_empower
+
+
 def test_scoring_refresh_computes_anchors_once_before_batching():
     """Anchors must be global (never per-county, never per-batch) --
     this project's scoring rule is anchored-absolute, never percentile,
