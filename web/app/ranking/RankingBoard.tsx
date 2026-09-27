@@ -1016,10 +1016,6 @@ export function RankingBoard({
               </button>
               {adjustOpen ? (
                 <div className="popover-panel popover-panel--wide" role="dialog" aria-label="Adjust priorities" data-testid="adjust-priorities-disclosure">
-                  <p style={{ margin: "0 0 var(--space-3) 0", fontSize: "var(--type-label-font-size)", color: "var(--theme-ink-muted)" }}>
-                    The list is ordered by &ldquo;Likely to add backup&rdquo; by default. Switch to &ldquo;Team
-                    priorities&rdquo; only if your team wants to rank by its own signal mix instead.
-                  </p>
                   <WeightSliders
                     weights={weights}
                     onChange={(next) => {
