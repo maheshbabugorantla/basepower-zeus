@@ -310,8 +310,14 @@ export function RankingBoard({
     const first = initialMode === "weighted" ? initialRows[0] : initialPredictedRows[0];
     return first?.propId ?? null;
   });
+  // Once someone closes the open row themselves, don't reopen rank 1 for
+  // them until the mode changes.
+  const userCollapsedRef = useRef(false);
   function toggleExpand(propId: string) {
-    setExpandedPropId((current) => (current === propId ? null : propId));
+    setExpandedPropId((current) => {
+      userCollapsedRef.current = current === propId;
+      return current === propId ? null : propId;
+    });
   }
 
   // "Locate on map" -- flies the map to one home's real parcel centroid.
@@ -533,8 +539,22 @@ export function RankingBoard({
     setMode(nextMode);
     setHoveredPropId(null);
     setExpandedPropId(null);
+    userCollapsedRef.current = false;
     setHighlightedIndex(null);
   }
+
+  // Both modes open rank 1 in place on their first page, the way Mock A
+  // opens "Likely to add backup": on first load, after a mode switch, and
+  // after a re-rank moves the open home off the page.
+  useEffect(() => {
+    if (userCollapsedRef.current) return;
+    const list: Array<{ propId: string }> = mode === "predicted" ? predictedRows : rows;
+    const onFirstPage = mode === "predicted" ? predictedPageIndex === 0 : pageIndex === 0;
+    if (!onFirstPage || list.length === 0) return;
+    if (expandedPropId && list.some((r) => r.propId === expandedPropId)) return;
+    setExpandedPropId(list[0].propId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, rows, predictedRows, pageIndex, predictedPageIndex]);
 
   // Keyboard: Up/Down moves the highlighted row, Enter expands it --
   // scoped to this list container (onKeyDown on the list div), never a
