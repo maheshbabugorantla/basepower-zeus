@@ -455,7 +455,14 @@ resolved as (
             when 'harris_pin' then null
             when 'ccn_counties_fail_open' then
                 case when g.county_fips = %(williamson_fips)s then 'utility_not_confirmed' else null end
-            when 'ccn_counties' then coalesce(cr.null_reason, 'no_ccn_match')
+            -- A resolved home has no null reason. The earlier
+            -- coalesce(cr.null_reason, 'no_ccn_match') stamped 'no_ccn_match'
+            -- on every resolved Travis/Williamson home too, which bucketed
+            -- them out of api.loaded_counties and took both counties off
+            -- the site on 2026-09-26.
+            when 'ccn_counties' then
+                case when cr.eia_id is not null then null
+                     else coalesce(cr.null_reason, 'no_ccn_match') end
             else null
         end as territory_null_reason,
         case rm.mode
