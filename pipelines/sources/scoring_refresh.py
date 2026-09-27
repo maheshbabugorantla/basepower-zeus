@@ -656,7 +656,14 @@ where county_fips = %(county_fips)s
 
 def _connect() -> psycopg.Connection:
     dsn = config.postgres_url_non_pooling()
-    return psycopg.connect(dsn, prepare_threshold=None, autocommit=True)
+    conn = psycopg.connect(dsn, prepare_threshold=None, autocommit=True)
+    # The closing core.refresh_all_scores() call runs several minutes; the
+    # role's default statement_timeout (2 min) cancelled it on 2026-09-26.
+    # Bounded memory per lesson 10 (Supabase Small, ~2 GB RAM).
+    conn.execute("set statement_timeout = 0")
+    conn.execute("set work_mem = '64MB'")
+    conn.execute("set max_parallel_workers_per_gather = 0")
+    return conn
 
 
 def build_small_tables(conn: psycopg.Connection) -> None:
