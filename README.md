@@ -9,7 +9,7 @@
 | Submission | |
 |---|---|
 | **Project** | Base Power Zeus: customer screening for home backup power in Texas |
-| **Demo video (2–5 min, Loom)** | _add the Loom link here_ · 55 s screen capture below and in [`docs/media/zeus-demo.mp4`](docs/media/zeus-demo.mp4) |
+| **Demo video (2–5 min)** | https://www.youtube.com/watch?v=TMHBqJ9ti8E· 55 s screen capture below and in [`docs/media/zeus-demo.mp4`](docs/media/zeus-demo.mp4) |
 | **Live app** | https://base-power-zeus.vercel.app |
 | **Repo** | https://github.com/maheshbabugorantla/basepower-zeus |
 | **Team** | [Team](#team) |
